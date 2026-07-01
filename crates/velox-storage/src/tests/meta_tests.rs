@@ -68,6 +68,17 @@ fn test_put_and_get_file_url() {
 }
 
 #[test]
+fn test_put_and_list_projects() {
+    let (_dir, store) = store();
+    assert!(store.list_projects("root/pypi").unwrap().is_empty());
+    store.put_project("root/pypi", "flask", "Flask").unwrap();
+    store.put_project("root/pypi", "django", "Django").unwrap();
+    store.put_project("other/index", "x", "X").unwrap();
+    store.put_project("root/pypi", "flask", "Flask").unwrap(); // re-observe, no duplicate
+    assert_eq!(store.list_projects("root/pypi").unwrap(), vec!["Django", "Flask"]);
+}
+
+#[test]
 fn test_cached_index_encode_decode_roundtrip() {
     assert_eq!(CachedIndex::decode(&record().encode()).unwrap(), record());
 }

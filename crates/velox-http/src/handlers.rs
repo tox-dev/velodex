@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use velox_core::pypi::{ProjectDetail, normalize_name, render_detail_html, to_json};
+use velox_core::pypi::{ProjectDetail, ProjectList, normalize_name, render_detail_html, render_index_html, to_json};
 use velox_storage::blob::Digest;
 
 use crate::cache::{self, CacheError};
@@ -30,6 +30,31 @@ fn negotiate(headers: &HeaderMap) -> Format {
         Format::Json
     } else {
         Format::Html
+    }
+}
+
+/// `GET /{user}/{index}/simple/` — the observed project list.
+pub async fn simple_index(
+    State(state): State<Arc<AppState>>,
+    Path((user, index)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    state.requests.fetch_add(1, Ordering::Relaxed);
+    if !state.matches_index(&user, &index) {
+        return (StatusCode::NOT_FOUND, "unknown index").into_response();
+    }
+    index_response(cache::project_list(&state), negotiate(&headers))
+}
+
+/// Map a project-list result to a negotiated response. Sync so every arm is directly testable.
+pub(crate) fn index_response(result: Result<ProjectList, CacheError>, format: Format) -> Response {
+    let Ok(list) = result else {
+        return (StatusCode::BAD_GATEWAY, "index error").into_response();
+    };
+    let vary = (header::VARY, "Accept");
+    match format {
+        Format::Json => ([(header::CONTENT_TYPE, MIME_JSON), vary], to_json(&list)).into_response(),
+        Format::Html => ([(header::CONTENT_TYPE, MIME_HTML), vary], render_index_html(&list)).into_response(),
     }
 }
 

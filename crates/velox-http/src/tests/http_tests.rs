@@ -383,6 +383,49 @@ async fn test_simple_detail_file_without_hash_is_not_rewritten() {
 }
 
 #[tokio::test]
+async fn test_simple_index_lists_observed_projects() {
+    let h = harness(60).await;
+    let digest = Digest::of(b"wheel");
+    mount_detail(&h.server, digest.as_str(), "http://x/flask.whl", None).await;
+    get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    let (status, headers, body) = get(&h.state, "/root/pypi/simple/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers
+            .get(header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("json")
+    );
+    assert!(body.contains("flask"));
+
+    let (html_status, html_headers, html_body) = get(&h.state, "/root/pypi/simple/", Some("text/html")).await;
+    assert_eq!(html_status, StatusCode::OK);
+    assert_eq!(
+        html_headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/html; charset=utf-8"
+    );
+    assert!(html_body.contains("flask"));
+}
+
+#[tokio::test]
+async fn test_simple_index_unknown_index() {
+    let h = harness(60).await;
+    let (status, ..) = get(&h.state, "/foo/bar/simple/", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn test_index_response_error_is_bad_gateway() {
+    use crate::cache::CacheError;
+    use crate::handlers::{Format, index_response};
+    let response = index_response(Err(CacheError::Unavailable), Format::Json);
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
 async fn test_status() {
     let h = harness(60).await;
     let (status, headers, body) = get(&h.state, "/+status", None).await;

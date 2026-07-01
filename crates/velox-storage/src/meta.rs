@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 const SERIAL: TableDefinition<&str, u64> = TableDefinition::new("serial");
 const INDEX: TableDefinition<&str, &[u8]> = TableDefinition::new("simple_index");
 const FILE: TableDefinition<&str, &str> = TableDefinition::new("file_url");
+const PROJECTS: TableDefinition<&str, &str> = TableDefinition::new("projects");
 const SERIAL_KEY: &str = "serial";
 
 /// A cached upstream simple-index response plus the metadata needed to revalidate it.
@@ -78,6 +79,7 @@ impl MetaStore {
             txn.open_table(SERIAL)?;
             txn.open_table(INDEX)?;
             txn.open_table(FILE)?;
+            txn.open_table(PROJECTS)?;
         }
         txn.commit()?;
         Ok(Self { db })
@@ -159,5 +161,40 @@ impl MetaStore {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(FILE)?;
         Ok(table.get(sha256)?.map(|value| value.value().to_owned()))
+    }
+
+    /// Record that `display` (a project's display name) has been observed on `index`, keyed by its
+    /// normalized name so re-observations do not duplicate.
+    ///
+    /// # Errors
+    /// Returns a store error if the write or commit fails.
+    pub fn put_project(&self, index: &str, normalized: &str, display: &str) -> Result<(), MetaError> {
+        let key = format!("{index}/{normalized}");
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(PROJECTS)?;
+            table.insert(key.as_str(), display)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// List the display names of projects observed on `index`, sorted.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn list_projects(&self, index: &str) -> Result<Vec<String>, MetaError> {
+        let prefix = format!("{index}/");
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(PROJECTS)?;
+        let mut names = Vec::new();
+        for entry in table.iter()? {
+            let (key, value) = entry?;
+            if key.value().starts_with(&prefix) {
+                names.push(value.value().to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 }

@@ -4,7 +4,8 @@
 use bytes::Bytes;
 use url::Url;
 use velox_core::pypi::{
-    CoreMetadata, File, Meta, ParsedDetail, ProjectDetail, parse_detail, parse_detail_html, to_json,
+    CoreMetadata, File, Meta, ParsedDetail, ProjectDetail, ProjectList, ProjectListEntry, parse_detail,
+    parse_detail_html, to_json,
 };
 use velox_storage::blob::Digest;
 use velox_storage::meta::CachedIndex;
@@ -96,7 +97,26 @@ fn store_fresh(
         body: to_json(&detail).into_bytes(),
     };
     state.meta.put_index(key, &record)?;
+    state.meta.put_project(&state.index, project, &detail.name)?;
     Ok(detail)
+}
+
+/// The list of projects velox has observed on this index (its own `/simple/` root). A mirror does
+/// not enumerate all of the upstream, so this reflects what has been requested and cached.
+///
+/// # Errors
+/// Returns [`CacheError`] if the store read fails.
+pub fn project_list(state: &AppState) -> Result<ProjectList, CacheError> {
+    let projects = state
+        .meta
+        .list_projects(&state.index)?
+        .into_iter()
+        .map(|name| ProjectListEntry { name })
+        .collect();
+    Ok(ProjectList {
+        meta: Meta::default(),
+        projects,
+    })
 }
 
 /// Parse an upstream simple page as PEP 691 JSON, or fall back to PEP 503 HTML for indexes that do

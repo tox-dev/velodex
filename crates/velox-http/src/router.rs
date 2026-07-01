@@ -11,6 +11,7 @@ use crate::state::AppState;
 /// Build the velox HTTP router over the given state.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/{user}/{index}/simple/", get(handlers::simple_index))
         .route("/{user}/{index}/simple/{project}/", get(handlers::simple_detail))
         .route(
             "/{user}/{index}/files/{sha256}/{filename}",
