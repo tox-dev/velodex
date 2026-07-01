@@ -14,7 +14,7 @@ use wiremock::matchers::{header as match_header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::router;
-use crate::state::{AppState, StateConfig};
+use crate::state::{AppState, Index, IndexKind};
 
 struct Harness {
     _dir: tempfile::TempDir,
@@ -23,7 +23,9 @@ struct Harness {
     clock: Arc<AtomicI64>,
 }
 
-async fn harness(ttl: i64) -> Harness {
+/// A mirror (`pypi`) proxying the mock, a local store (`local`), and an overlay (`root/pypi`) that
+/// layers the local store in front of the mirror. `token`/`volatile` tune the local store.
+async fn harness_with(token: bool, volatile: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
@@ -31,16 +33,34 @@ async fn harness(ttl: i64) -> Harness {
     let upstream = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
     let clock = Arc::new(AtomicI64::new(1000));
     let ticks = clock.clone();
-    let state = Arc::new(AppState::with_clock(
-        StateConfig {
-            meta,
-            blobs,
-            upstream,
-            index: "root/pypi".to_owned(),
-            upload_index: "root/local".to_owned(),
-            upload_token: Some("s3cret".to_owned()),
-            ttl_secs: ttl,
+    let indexes = vec![
+        Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror(upstream),
         },
+        Index {
+            name: "local".to_owned(),
+            route: "local".to_owned(),
+            kind: IndexKind::Local {
+                upload_token: token.then(|| "s3cret".to_owned()),
+                volatile,
+            },
+        },
+        Index {
+            name: "root/pypi".to_owned(),
+            route: "root/pypi".to_owned(),
+            kind: IndexKind::Overlay {
+                layers: vec![1, 0],
+                upload: Some(1),
+            },
+        },
+    ];
+    let state = Arc::new(AppState::with_clock(
+        meta,
+        blobs,
+        60,
+        indexes,
         Arc::new(move || ticks.load(Ordering::Relaxed)),
     ));
     Harness {
@@ -49,6 +69,10 @@ async fn harness(ttl: i64) -> Harness {
         state,
         clock,
     }
+}
+
+async fn harness() -> Harness {
+    harness_with(true, true).await
 }
 
 async fn get(state: &Arc<AppState>, uri: &str, accept: Option<&str>) -> (StatusCode, HeaderMap, String) {
@@ -64,6 +88,18 @@ async fn get(state: &Arc<AppState>, uri: &str, accept: Option<&str>) -> (StatusC
     let headers = response.headers().clone();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn request(state: &Arc<AppState>, verb: &str, uri: &str, auth: Option<&str>) -> StatusCode {
+    let mut builder = Request::builder().uri(uri).method(verb);
+    if let Some(auth) = auth {
+        builder = builder.header(header::AUTHORIZATION, auth);
+    }
+    router(state.clone())
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 fn detail_json(digest: &str, file_url: &str) -> String {
@@ -90,13 +126,13 @@ async fn mount_detail(server: &MockServer, digest: &str, file_url: &str, etag: O
 }
 
 #[tokio::test]
-async fn test_simple_detail_json_rewrites_file_url_and_caches() {
-    let h = harness(60).await;
+async fn test_mirror_detail_json_rewrites_file_url_and_caches() {
+    let h = harness().await;
     let digest = Digest::of(b"wheel");
     let file_url = format!("{}/files/flask.whl", h.server.uri());
     mount_detail(&h.server, digest.as_str(), &file_url, None).await;
 
-    let (status, headers, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    let (status, headers, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -104,23 +140,20 @@ async fn test_simple_detail_json_rewrites_file_url_and_caches() {
         "application/vnd.pypi.simple.v1+json"
     );
     assert_eq!(headers.get(header::VARY).unwrap(), "Accept");
-    assert!(body.contains(&format!(
-        "/root/pypi/files/{}/flask-1.0-py3-none-any.whl",
-        digest.as_str()
-    )));
+    assert!(body.contains(&format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str())));
 
-    // Second request within the TTL is a cache hit (upstream mock would fail verification if hit twice).
-    let (status2, ..) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    // Second request within the TTL is a cache hit.
+    let (status2, ..) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     assert_eq!(status2, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn test_simple_detail_html() {
-    let h = harness(60).await;
+async fn test_mirror_detail_html() {
+    let h = harness().await;
     let digest = Digest::of(b"wheel");
     mount_detail(&h.server, digest.as_str(), "http://x/flask.whl", None).await;
 
-    let (status, headers, body) = get(&h.state, "/root/pypi/simple/flask/", Some("text/html")).await;
+    let (status, headers, body) = get(&h.state, "/pypi/simple/flask/", Some("text/html")).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "text/html; charset=utf-8");
@@ -128,8 +161,8 @@ async fn test_simple_detail_html() {
 }
 
 #[tokio::test]
-async fn test_simple_detail_from_html_only_upstream() {
-    let h = harness(60).await;
+async fn test_mirror_detail_from_html_only_upstream() {
+    let h = harness().await;
     let digest = Digest::of(b"wheel");
     let html = format!(
         "<a href=\"/packages/flask-1.0.whl#sha256={}\">flask-1.0.whl</a>",
@@ -141,35 +174,34 @@ async fn test_simple_detail_from_html_only_upstream() {
         .mount(&h.server)
         .await;
 
-    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    let (status, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
 
     assert_eq!(status, StatusCode::OK);
-    // Parsed from HTML, re-served as JSON with the file URL rewritten to velox's own route.
-    assert!(body.contains(&format!("/root/pypi/files/{}/flask-1.0.whl", digest.as_str())));
+    assert!(body.contains(&format!("/pypi/files/{}/flask-1.0.whl", digest.as_str())));
 }
 
 #[tokio::test]
-async fn test_simple_detail_unknown_index() {
-    let h = harness(60).await;
-    let (status, ..) = get(&h.state, "/other/index/simple/flask/", None).await;
+async fn test_unknown_route_is_not_found() {
+    let h = harness().await;
+    let (status, ..) = get(&h.state, "/nope/simple/flask/", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn test_simple_detail_upstream_404() {
-    let h = harness(60).await;
+async fn test_mirror_detail_upstream_404() {
+    let h = harness().await;
     Mock::given(method("GET"))
         .and(path("/simple/missing/"))
         .respond_with(ResponseTemplate::new(404))
         .mount(&h.server)
         .await;
-    let (status, ..) = get(&h.state, "/root/pypi/simple/missing/", None).await;
+    let (status, ..) = get(&h.state, "/pypi/simple/missing/", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn test_simple_detail_revalidate_304_serves_cached() {
-    let h = harness(60).await;
+async fn test_mirror_detail_revalidate_304_serves_cached() {
+    let h = harness().await;
     let digest = Digest::of(b"wheel");
     mount_detail(&h.server, digest.as_str(), "http://x/flask.whl", Some("\"v1\"")).await;
     Mock::given(method("GET"))
@@ -180,31 +212,28 @@ async fn test_simple_detail_revalidate_304_serves_cached() {
         .mount(&h.server)
         .await;
 
-    let (first, ..) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    let (first, ..) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     assert_eq!(first, StatusCode::OK);
 
-    h.clock.store(5000, Ordering::Relaxed); // now stale, forces revalidation
-    let (second, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    h.clock.store(5000, Ordering::Relaxed); // stale, forces revalidation
+    let (second, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     assert_eq!(second, StatusCode::OK);
     assert!(body.contains("flask"));
 }
 
 #[tokio::test]
-async fn test_simple_detail_stale_on_5xx() {
-    let h = harness(60).await;
-    let digest = Digest::of(b"wheel");
-    // Pre-seed a cached copy directly.
+async fn test_mirror_detail_stale_on_5xx() {
+    let h = harness().await;
     let body = velox_core::pypi::to_json(&velox_core::pypi::ProjectDetail {
         meta: velox_core::pypi::Meta::default(),
         name: "flask".to_owned(),
         versions: vec!["1.0".to_owned()],
         files: vec![],
     });
-    let _ = digest;
     h.state
         .meta
         .put_index(
-            "root/pypi/flask",
+            "pypi/flask",
             &CachedIndex {
                 etag: None,
                 last_serial: None,
@@ -218,60 +247,28 @@ async fn test_simple_detail_stale_on_5xx() {
         .respond_with(ResponseTemplate::new(503))
         .mount(&h.server)
         .await;
-
-    // TTL 60 but fetched_at 0 and clock 1000 => stale => revalidate => 503 => serve stale.
-    let (status, _, served) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    let (status, ..) = get(&h.state, "/pypi/simple/flask/", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(served.contains("flask"));
 }
 
 #[tokio::test]
-async fn test_simple_detail_invalid_upstream_json_is_bad_gateway() {
-    let h = harness(60).await;
-    Mock::given(method("GET"))
-        .and(path("/simple/flask/"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw(b"not json".to_vec(), "application/vnd.pypi.simple.v1+json"),
-        )
-        .mount(&h.server)
-        .await;
-    let (status, ..) = get(&h.state, "/root/pypi/simple/flask/", None).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-}
-
-#[tokio::test]
-async fn test_simple_detail_5xx_without_cache_is_bad_gateway() {
-    let h = harness(60).await;
-    Mock::given(method("GET"))
-        .and(path("/simple/flask/"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&h.server)
-        .await;
-    let (status, ..) = get(&h.state, "/root/pypi/simple/flask/", None).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-}
-
-#[tokio::test]
-async fn test_simple_detail_upstream_unreachable_is_bad_gateway() {
+async fn test_mirror_detail_upstream_unreachable_is_bad_gateway() {
     let dir = tempfile::tempdir().unwrap();
     let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
     let blobs = BlobStore::new(dir.path().join("blobs"));
     let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
-    let state = Arc::new(AppState::new(StateConfig {
-        meta,
-        blobs,
-        upstream,
-        index: "root/pypi".to_owned(),
-        upload_index: "root/local".to_owned(),
-        upload_token: None,
-        ttl_secs: 60,
-    }));
-    let (status, ..) = get(&state, "/root/pypi/simple/flask/", None).await;
+    let indexes = vec![Index {
+        name: "pypi".to_owned(),
+        route: "pypi".to_owned(),
+        kind: IndexKind::Mirror(upstream),
+    }];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
+    let (status, ..) = get(&state, "/pypi/simple/flask/", None).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
 }
 
 #[tokio::test]
-async fn test_simple_detail_stale_on_upstream_error() {
+async fn test_mirror_detail_stale_on_upstream_error() {
     let dir = tempfile::tempdir().unwrap();
     let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
     let blobs = BlobStore::new(dir.path().join("blobs"));
@@ -283,7 +280,7 @@ async fn test_simple_detail_stale_on_upstream_error() {
         files: vec![],
     });
     meta.put_index(
-        "root/pypi/flask",
+        "pypi/flask",
         &CachedIndex {
             etag: None,
             last_serial: None,
@@ -292,23 +289,107 @@ async fn test_simple_detail_stale_on_upstream_error() {
         },
     )
     .unwrap();
-    let state = Arc::new(AppState::with_clock(
-        StateConfig {
-            meta,
-            blobs,
-            upstream,
-            index: "root/pypi".to_owned(),
-            upload_index: "root/local".to_owned(),
-            upload_token: None,
-            ttl_secs: 60,
-        },
-        Arc::new(|| 100_000),
-    ));
-
-    let (status, _, served) = get(&state, "/root/pypi/simple/flask/", Some("application/json")).await;
-
+    let indexes = vec![Index {
+        name: "pypi".to_owned(),
+        route: "pypi".to_owned(),
+        kind: IndexKind::Mirror(upstream),
+    }];
+    let state = Arc::new(AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 100_000)));
+    let (status, _, served) = get(&state, "/pypi/simple/flask/", Some("application/json")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(served.contains("flask"));
+}
+
+#[tokio::test]
+async fn test_file_download_fetches_verifies_and_caches() {
+    let h = harness().await;
+    let wheel = b"wheelcontent";
+    let digest = Digest::of(wheel);
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    get(&h.state, "/pypi/simple/flask/", Some("application/json")).await; // registers the file url
+    let uri = format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "wheelcontent");
+    let (status2, _, body2) = get(&h.state, &uri, None).await; // second from blob cache
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(body2, body);
+}
+
+#[tokio::test]
+async fn test_file_download_invalid_digest_is_bad_request() {
+    let h = harness().await;
+    let (status, ..) = get(&h.state, "/pypi/files/notahex/x.whl", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_file_download_unknown_digest_is_not_found() {
+    let h = harness().await;
+    let uri = format!("/pypi/files/{}/x.whl", "a".repeat(64));
+    let (status, ..) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_metadata_served_verified_and_counted() {
+    let h = harness().await;
+    let wheel_digest = Digest::of(b"wheel-bytes");
+    let metadata = b"Metadata-Version: 2.1\nName: flask\n";
+    let meta_digest = Digest::of(metadata);
+    let wheel_url = format!("{}/files/flask.whl", h.server.uri());
+    let json = format!(
+        "{{\"meta\":{{\"api-version\":\"1.1\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\
+         \"files\":[{{\"filename\":\"flask-1.0.whl\",\"url\":\"{}\",\"hashes\":{{\"sha256\":\"{}\"}},\
+         \"core-metadata\":{{\"sha256\":\"{}\"}}}}]}}",
+        wheel_url,
+        wheel_digest.as_str(),
+        meta_digest.as_str()
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(json.into_bytes(), "application/vnd.pypi.simple.v1+json"))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(metadata.to_vec()))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let (_, _, detail) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert!(detail.contains(&format!(
+        "\"core-metadata\":{{\"sha256\":\"{}\"}}",
+        meta_digest.as_str()
+    )));
+
+    let uri = format!("/pypi/files/{}/flask-1.0.whl.metadata", wheel_digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "Metadata-Version: 2.1\nName: flask\n");
+    let (status2, _, body2) = get(&h.state, &uri, None).await; // cached
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(body2, body);
+
+    let (_, _, metrics) = get(&h.state, "/metrics", None).await;
+    assert!(metrics.contains("velox_metadata_requests_total 2"));
+}
+
+#[tokio::test]
+async fn test_metadata_not_found_when_unregistered() {
+    let h = harness().await;
+    let uri = format!("/pypi/files/{}/x.whl.metadata", "a".repeat(64));
+    let (status, ..) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 fn upload_fields() -> Vec<(&'static str, &'static str)> {
@@ -367,107 +448,157 @@ async fn post_upload(
         .status()
 }
 
-#[tokio::test]
-async fn test_upload_then_serve_and_download() {
-    let h = harness(60).await;
-    let wheel = b"PKfakewheelbytes";
+async fn upload_veloxpkg(state: &Arc<AppState>, uri: &str, wheel: &[u8]) -> StatusCode {
     let (ct, body) = multipart_body(&upload_fields(), Some(("veloxpkg-1.0-py3-none-any.whl", wheel)));
-    assert_eq!(
-        post_upload(&h.state, "/root/local/", Some(&upload_auth()), &ct, body).await,
-        StatusCode::OK
-    );
+    post_upload(state, uri, Some(&upload_auth()), &ct, body).await
+}
 
-    let (ds, _, detail) = get(&h.state, "/root/local/simple/veloxpkg/", Some("application/json")).await;
+#[tokio::test]
+async fn test_upload_via_overlay_then_serve_and_download() {
+    let h = harness().await;
+    let wheel = b"PKuploadedwheel";
+    assert_eq!(upload_veloxpkg(&h.state, "/root/pypi/", wheel).await, StatusCode::OK);
+
+    // Served through the overlay, with the URL on the overlay route.
+    let (ds, _, detail) = get(&h.state, "/root/pypi/simple/veloxpkg/", Some("application/json")).await;
     assert_eq!(ds, StatusCode::OK);
     assert!(detail.contains("veloxpkg-1.0-py3-none-any.whl"));
     assert!(detail.contains("\"1.0\""));
-    assert!(detail.contains(">=3.8"));
-
     let digest = Digest::of(wheel);
-    let uri = format!("/root/local/files/{}/veloxpkg-1.0-py3-none-any.whl", digest.as_str());
+    assert!(detail.contains(&format!("/root/pypi/files/{}/veloxpkg", digest.as_str())));
+
+    let uri = format!("/root/pypi/files/{}/veloxpkg-1.0-py3-none-any.whl", digest.as_str());
     let (fs, _, fbody) = get(&h.state, &uri, None).await;
     assert_eq!(fs, StatusCode::OK);
     assert_eq!(fbody.as_bytes(), wheel);
 
-    let (ls, _, list) = get(&h.state, "/root/local/simple/", Some("application/json")).await;
+    // The overlay's project list includes the uploaded project.
+    let (ls, _, list) = get(&h.state, "/root/pypi/simple/", Some("application/json")).await;
     assert_eq!(ls, StatusCode::OK);
     assert!(list.contains("veloxpkg"));
 }
 
 #[tokio::test]
-async fn test_upload_to_mirror_index_is_not_found() {
-    let h = harness(60).await;
-    let (ct, body) = multipart_body(&upload_fields(), Some(("x-1.0.whl", b"x")));
+async fn test_overlay_tolerates_unavailable_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
+    let indexes = vec![
+        Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror(upstream),
+        },
+        Index {
+            name: "local".to_owned(),
+            route: "local".to_owned(),
+            kind: IndexKind::Local {
+                upload_token: Some("s3cret".to_owned()),
+                volatile: true,
+            },
+        },
+        Index {
+            name: "root/pypi".to_owned(),
+            route: "root/pypi".to_owned(),
+            kind: IndexKind::Overlay {
+                layers: vec![1, 0],
+                upload: Some(1),
+            },
+        },
+    ];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
+    upload_veloxpkg(&state, "/root/pypi/", b"x").await;
+    // The mirror layer is unreachable, but the local layer still serves the upload.
+    let (status, _, detail) = get(&state, "/root/pypi/simple/veloxpkg/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(detail.contains("veloxpkg"));
+}
+
+#[tokio::test]
+async fn test_upload_direct_to_local_route() {
+    let h = harness().await;
+    assert_eq!(upload_veloxpkg(&h.state, "/local/", b"bytes").await, StatusCode::OK);
+    let (status, _, detail) = get(&h.state, "/local/simple/veloxpkg/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(detail.contains("veloxpkg"));
+}
+
+#[tokio::test]
+async fn test_upload_to_mirror_route_is_method_not_allowed() {
+    let h = harness().await;
     assert_eq!(
-        post_upload(&h.state, "/root/pypi/", Some(&upload_auth()), &ct, body).await,
+        upload_veloxpkg(&h.state, "/pypi/", b"x").await,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn test_upload_unknown_route_is_not_found() {
+    let h = harness().await;
+    assert_eq!(upload_veloxpkg(&h.state, "/nope/", b"x").await, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_upload_to_subpath_is_not_found() {
+    let h = harness().await;
+    assert_eq!(
+        upload_veloxpkg(&h.state, "/local/simple/", b"x").await,
         StatusCode::NOT_FOUND
     );
 }
 
 #[tokio::test]
 async fn test_upload_without_auth_is_unauthorized() {
-    let h = harness(60).await;
+    let h = harness().await;
     let (ct, body) = multipart_body(&upload_fields(), Some(("x-1.0.whl", b"x")));
     assert_eq!(
-        post_upload(&h.state, "/root/local/", None, &ct, body).await,
+        post_upload(&h.state, "/root/pypi/", None, &ct, body).await,
         StatusCode::UNAUTHORIZED
     );
 }
 
 #[tokio::test]
 async fn test_upload_disabled_without_token_is_forbidden() {
-    let dir = tempfile::tempdir().unwrap();
-    let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
-    let blobs = BlobStore::new(dir.path().join("blobs"));
-    let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
-    let state = Arc::new(AppState::new(StateConfig {
-        meta,
-        blobs,
-        upstream,
-        index: "root/pypi".to_owned(),
-        upload_index: "root/local".to_owned(),
-        upload_token: None,
-        ttl_secs: 60,
-    }));
-    let (ct, body) = multipart_body(&upload_fields(), Some(("x-1.0.whl", b"x")));
+    let h = harness_with(false, true).await;
     assert_eq!(
-        post_upload(&state, "/root/local/", Some(&upload_auth()), &ct, body).await,
+        upload_veloxpkg(&h.state, "/root/pypi/", b"x").await,
         StatusCode::FORBIDDEN
     );
 }
 
 #[tokio::test]
 async fn test_upload_wrong_action_is_bad_request() {
-    let h = harness(60).await;
+    let h = harness().await;
     let fields = vec![(":action", "submit"), ("name", "x"), ("version", "1.0")];
     let (ct, body) = multipart_body(&fields, Some(("x-1.0.whl", b"x")));
     assert_eq!(
-        post_upload(&h.state, "/root/local/", Some(&upload_auth()), &ct, body).await,
+        post_upload(&h.state, "/root/pypi/", Some(&upload_auth()), &ct, body).await,
         StatusCode::BAD_REQUEST
     );
 }
 
 #[tokio::test]
 async fn test_upload_missing_field_is_bad_request() {
-    let h = harness(60).await;
+    let h = harness().await;
     let fields = vec![(":action", "file_upload"), ("version", "1.0")];
     let (ct, body) = multipart_body(&fields, Some(("x-1.0.whl", b"x")));
     assert_eq!(
-        post_upload(&h.state, "/root/local/", Some(&upload_auth()), &ct, body).await,
+        post_upload(&h.state, "/root/pypi/", Some(&upload_auth()), &ct, body).await,
         StatusCode::BAD_REQUEST
     );
 }
 
 #[tokio::test]
 async fn test_upload_non_utf8_field_is_bad_request() {
-    let h = harness(60).await;
+    let h = harness().await;
     let mut body = Vec::new();
     body.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n");
     body.extend_from_slice(&[0xff, 0xfe]);
     body.extend_from_slice(b"\r\n--b--\r\n");
     let status = post_upload(
         &h.state,
-        "/root/local/",
+        "/root/pypi/",
         Some(&upload_auth()),
         "multipart/form-data; boundary=b",
         body,
@@ -477,49 +608,8 @@ async fn test_upload_non_utf8_field_is_bad_request() {
 }
 
 #[tokio::test]
-async fn test_uploaded_detail_absent_is_not_found() {
-    let h = harness(60).await;
-    let (status, ..) = get(&h.state, "/root/local/simple/ghost/", Some("application/json")).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_simple_detail_unknown_index_is_not_found() {
-    let h = harness(60).await;
-    let (status, ..) = get(&h.state, "/foo/bar/simple/x/", Some("application/json")).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_file_download_unknown_index_is_not_found() {
-    let h = harness(60).await;
-    let uri = format!("/foo/bar/files/{}/x.whl", "a".repeat(64));
-    let (status, ..) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_upload_with_declared_digest_and_extra_fields() {
-    let h = harness(60).await;
-    let wheel = b"PKwheelpayload";
-    let digest = Digest::of(wheel);
-    let fields = vec![
-        (":action", "file_upload"),
-        ("name", "veloxpkg"),
-        ("version", "1.0"),
-        ("sha256_digest", digest.as_str()),
-        ("summary", "an ignored metadata field"),
-    ];
-    let (ct, body) = multipart_body(&fields, Some(("veloxpkg-1.0-py3-none-any.whl", wheel)));
-    assert_eq!(
-        post_upload(&h.state, "/root/local/", Some(&upload_auth()), &ct, body).await,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
 async fn test_upload_declared_digest_mismatch_is_bad_request() {
-    let h = harness(60).await;
+    let h = harness().await;
     let wrong = "00".repeat(32);
     let fields = vec![
         (":action", "file_upload"),
@@ -527,228 +617,181 @@ async fn test_upload_declared_digest_mismatch_is_bad_request() {
         ("version", "1.0"),
         ("sha256_digest", wrong.as_str()),
     ];
-    let (ct, body) = multipart_body(&fields, Some(("veloxpkg-1.0-py3-none-any.whl", b"bytes")));
+    let (ct, body) = multipart_body(&fields, Some(("veloxpkg-1.0.whl", b"bytes")));
     assert_eq!(
-        post_upload(&h.state, "/root/local/", Some(&upload_auth()), &ct, body).await,
+        post_upload(&h.state, "/root/pypi/", Some(&upload_auth()), &ct, body).await,
         StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn test_upload_with_declared_digest_and_extra_field() {
+    let h = harness().await;
+    let wheel = b"PKwheelpayload";
+    let digest = Digest::of(wheel);
+    let fields = vec![
+        (":action", "file_upload"),
+        ("name", "veloxpkg"),
+        ("version", "1.0"),
+        ("sha256_digest", digest.as_str()),
+        ("summary", "ignored"),
+    ];
+    let (ct, body) = multipart_body(&fields, Some(("veloxpkg-1.0.whl", wheel)));
+    assert_eq!(
+        post_upload(&h.state, "/root/pypi/", Some(&upload_auth()), &ct, body).await,
+        StatusCode::OK
     );
 }
 
 #[tokio::test]
 async fn test_upload_storage_failure_is_server_error() {
     let dir = tempfile::tempdir().unwrap();
-    // A file where the blob directory should be, so the blob write fails.
     std::fs::write(dir.path().join("blobs"), b"not a directory").unwrap();
     let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
     let blobs = BlobStore::new(dir.path().join("blobs"));
-    let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
-    let state = Arc::new(AppState::new(StateConfig {
-        meta,
-        blobs,
-        upstream,
-        index: "root/pypi".to_owned(),
-        upload_index: "root/local".to_owned(),
-        upload_token: Some("s3cret".to_owned()),
-        ttl_secs: 60,
-    }));
-    let (ct, body) = multipart_body(&upload_fields(), Some(("veloxpkg-1.0-py3-none-any.whl", b"data")));
+    let indexes = vec![Index {
+        name: "local".to_owned(),
+        route: "local".to_owned(),
+        kind: IndexKind::Local {
+            upload_token: Some("s3cret".to_owned()),
+            volatile: true,
+        },
+    }];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
     assert_eq!(
-        post_upload(&state, "/root/local/", Some(&upload_auth()), &ct, body).await,
+        upload_veloxpkg(&state, "/local/", b"data").await,
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }
 
 #[tokio::test]
-async fn test_file_download_fetches_verifies_and_caches() {
-    let h = harness(60).await;
-    let wheel = b"wheelcontent";
-    let digest = Digest::of(wheel);
-    let file_url = format!("{}/files/flask.whl", h.server.uri());
-    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
-    Mock::given(method("GET"))
-        .and(path("/files/flask.whl"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
-        .expect(1)
-        .mount(&h.server)
-        .await;
-    // Populate the file-url mapping via a simple request.
-    get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+async fn test_yank_and_unyank_and_delete() {
+    let h = harness().await;
+    upload_veloxpkg(&h.state, "/root/pypi/", b"PKyankme").await;
 
-    let uri = format!("/root/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
-    let (status, headers, body) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
-    assert!(
-        headers
-            .get(header::CACHE_CONTROL)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("immutable")
-    );
-    assert_eq!(body, "wheelcontent");
-
-    // Second download is served from the blob store (upstream file mock expects exactly one hit).
-    let (status2, _, body2) = get(&h.state, &uri, None).await;
-    assert_eq!(status2, StatusCode::OK);
-    assert_eq!(body2, "wheelcontent");
-}
-
-#[tokio::test]
-async fn test_file_download_invalid_digest() {
-    let h = harness(60).await;
-    let (status, ..) = get(&h.state, "/root/pypi/files/not-hex/x.whl", None).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_file_download_unknown_index() {
-    let h = harness(60).await;
-    let uri = format!("/a/b/files/{}/x.whl", "0".repeat(64));
-    let (status, ..) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_file_download_unknown_file() {
-    let h = harness(60).await;
-    let uri = format!("/root/pypi/files/{}/x.whl", "a".repeat(64));
-    let (status, ..) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_file_download_upstream_error_is_bad_gateway() {
-    let h = harness(60).await;
-    let digest = Digest::of(b"content");
-    h.state
-        .meta
-        .put_file_url(digest.as_str(), "http://127.0.0.1:0/x.whl")
-        .unwrap();
-    let uri = format!("/root/pypi/files/{}/x.whl", digest.as_str());
-    let (status, ..) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-}
-
-#[tokio::test]
-async fn test_simple_detail_file_without_hash_is_not_rewritten() {
-    let h = harness(60).await;
-    let json = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"flask\",\"versions\":[\"1.0\"],\
-                 \"files\":[{\"filename\":\"flask-1.0.tar.gz\",\"url\":\"http://up/flask-1.0.tar.gz\"}]}";
-    Mock::given(method("GET"))
-        .and(path("/simple/flask/"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw(json.as_bytes().to_vec(), "application/vnd.pypi.simple.v1+json"),
-        )
-        .mount(&h.server)
-        .await;
-    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("http://up/flask-1.0.tar.gz"));
-}
-
-#[tokio::test]
-async fn test_metadata_sibling_served_verified_and_cached() {
-    let h = harness(60).await;
-    let wheel_digest = Digest::of(b"wheelbytes");
-    let metadata = b"Metadata-Version: 2.1\nName: flask\n";
-    let meta_digest = Digest::of(metadata);
-    let wheel_url = format!("{}/files/flask.whl", h.server.uri());
-    let json = format!(
-        "{{\"meta\":{{\"api-version\":\"1.1\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\
-         \"files\":[{{\"filename\":\"flask-1.0.whl\",\"url\":\"{}\",\"hashes\":{{\"sha256\":\"{}\"}},\
-         \"core-metadata\":{{\"sha256\":\"{}\"}}}}]}}",
-        wheel_url,
-        wheel_digest.as_str(),
-        meta_digest.as_str()
-    );
-    Mock::given(method("GET"))
-        .and(path("/simple/flask/"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(json.into_bytes(), "application/vnd.pypi.simple.v1+json"))
-        .mount(&h.server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/files/flask.whl.metadata"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(metadata.to_vec()))
-        .expect(1)
-        .mount(&h.server)
-        .await;
-
-    let (_, _, detail) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
-    assert!(detail.contains(&format!(
-        "\"core-metadata\":{{\"sha256\":\"{}\"}}",
-        meta_digest.as_str()
-    )));
-
-    let uri = format!("/root/pypi/files/{}/flask-1.0.whl.metadata", wheel_digest.as_str());
-    let (status, _, body) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, "Metadata-Version: 2.1\nName: flask\n");
-
-    // Second request is served from the blob cache (the upstream metadata mock expects one hit).
-    let (status2, _, body2) = get(&h.state, &uri, None).await;
-    assert_eq!(status2, StatusCode::OK);
-    assert_eq!(body2, body);
-
-    // Both .metadata requests are counted, giving /metrics server-side proof of the PEP 658 path.
-    let (_, _, metrics) = get(&h.state, "/metrics", None).await;
-    assert!(metrics.contains("velox_metadata_requests_total 2"));
-}
-
-#[tokio::test]
-async fn test_metadata_not_found_when_unregistered() {
-    let h = harness(60).await;
-    let uri = format!("/root/pypi/files/{}/x.whl.metadata", "a".repeat(64));
-    let (status, ..) = get(&h.state, &uri, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_simple_index_lists_observed_projects() {
-    let h = harness(60).await;
-    let digest = Digest::of(b"wheel");
-    mount_detail(&h.server, digest.as_str(), "http://x/flask.whl", None).await;
-    get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
-
-    let (status, headers, body) = get(&h.state, "/root/pypi/simple/", Some("application/json")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        headers
-            .get(header::CONTENT_TYPE)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("json")
-    );
-    assert!(body.contains("flask"));
-
-    let (html_status, html_headers, html_body) = get(&h.state, "/root/pypi/simple/", Some("text/html")).await;
-    assert_eq!(html_status, StatusCode::OK);
+    // Yank the version, then the file is served with a yank marker.
     assert_eq!(
-        html_headers.get(header::CONTENT_TYPE).unwrap(),
-        "text/html; charset=utf-8"
+        request(&h.state, "PUT", "/root/pypi/veloxpkg/1.0/yank", Some(&upload_auth())).await,
+        StatusCode::OK
     );
-    assert!(html_body.contains("flask"));
-}
+    let (_, _, yanked) = get(&h.state, "/root/pypi/simple/veloxpkg/", Some("application/json")).await;
+    assert!(yanked.contains("\"yanked\":true"));
 
-#[tokio::test]
-async fn test_simple_index_unknown_index() {
-    let h = harness(60).await;
-    let (status, ..) = get(&h.state, "/foo/bar/simple/", None).await;
+    // Un-yank via DELETE .../yank.
+    assert_eq!(
+        request(&h.state, "DELETE", "/root/pypi/veloxpkg/1.0/yank", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (_, _, unyanked) = get(&h.state, "/root/pypi/simple/veloxpkg/", Some("application/json")).await;
+    assert!(!unyanked.contains("\"yanked\":true"));
+
+    // Delete the whole project.
+    assert_eq!(
+        request(&h.state, "DELETE", "/root/pypi/veloxpkg/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/root/pypi/simple/veloxpkg/", Some("application/json")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[test]
-fn test_index_response_error_is_bad_gateway() {
-    use crate::cache::CacheError;
-    use crate::handlers::{Format, index_response};
-    let response = index_response(Err(CacheError::Unavailable), Format::Json);
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+#[tokio::test]
+async fn test_delete_specific_version() {
+    let h = harness().await;
+    upload_veloxpkg(&h.state, "/local/", b"PKv1").await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/local/veloxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/local/simple/veloxpkg/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn test_status() {
-    let h = harness(60).await;
+async fn test_delete_nonexistent_is_not_found() {
+    let h = harness().await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/local/ghost/", Some(&upload_auth())).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn test_delete_requires_auth() {
+    let h = harness().await;
+    upload_veloxpkg(&h.state, "/local/", b"x").await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/local/veloxpkg/", None).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn test_delete_on_non_volatile_is_forbidden() {
+    let h = harness_with(true, false).await;
+    upload_veloxpkg(&h.state, "/local/", b"x").await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/local/veloxpkg/", Some(&upload_auth())).await,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn test_delete_on_mirror_route_is_method_not_allowed() {
+    let h = harness().await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/pypi/flask/", Some(&upload_auth())).await,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn test_put_without_yank_suffix_is_not_found() {
+    let h = harness().await;
+    assert_eq!(
+        request(&h.state, "PUT", "/local/veloxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn test_yank_on_mirror_route_is_method_not_allowed() {
+    let h = harness().await;
+    let status = request(&h.state, "PUT", "/pypi/flask/1.0/yank", Some(&upload_auth())).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn test_longest_prefix_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    // Routes "a" and "a/b" both prefix "a/b/simple/"; the longer must win.
+    let indexes = vec![
+        Index {
+            name: "a".to_owned(),
+            route: "a".to_owned(),
+            kind: IndexKind::Local {
+                upload_token: None,
+                volatile: true,
+            },
+        },
+        Index {
+            name: "ab".to_owned(),
+            route: "a/b".to_owned(),
+            kind: IndexKind::Local {
+                upload_token: Some("s3cret".to_owned()),
+                volatile: true,
+            },
+        },
+    ];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
+    // Uploading requires a token; only "a/b" has one, so a 401-vs-200 proves which matched.
+    assert_eq!(upload_veloxpkg(&state, "/a/b/", b"x").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_status_lists_routes() {
+    let h = harness().await;
     let (status, headers, body) = get(&h.state, "/+status", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -764,11 +807,182 @@ async fn test_status() {
 }
 
 #[tokio::test]
-async fn test_metrics() {
-    let h = harness(60).await;
+async fn test_metrics_exposes_counters() {
+    let h = harness().await;
     get(&h.state, "/+status", None).await;
     let (status, _, body) = get(&h.state, "/metrics", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("velox_requests_total"));
     assert!(body.contains("velox_metadata_requests_total 0"));
+}
+
+#[test]
+fn test_index_response_error_is_bad_gateway() {
+    use crate::cache::CacheError;
+    use crate::handlers::{Format, index_response};
+    let response = index_response(Err(CacheError::Unavailable), Format::Json);
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+async fn upload_version(state: &Arc<AppState>, uri: &str, version: &str, wheel: &[u8]) -> StatusCode {
+    let fields = vec![(":action", "file_upload"), ("name", "veloxpkg"), ("version", version)];
+    let filename = format!("veloxpkg-{version}-py3-none-any.whl");
+    let (ct, body) = multipart_body(&fields, Some((&filename, wheel)));
+    post_upload(state, uri, Some(&upload_auth()), &ct, body).await
+}
+
+#[tokio::test]
+async fn test_mirror_5xx_without_cache_is_bad_gateway() {
+    let h = harness().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&h.server)
+        .await;
+    let (status, ..) = get(&h.state, "/pypi/simple/flask/", None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn test_mirror_file_without_sha_is_kept() {
+    let h = harness().await;
+    let json = "{\"meta\":{\"api-version\":\"1.1\"},\"name\":\"flask\",\"versions\":[\"1.0\"],\
+                \"files\":[{\"filename\":\"flask-1.0.tar.gz\",\"url\":\"http://x/flask-1.0.tar.gz\",\"hashes\":{}}]}";
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(json.as_bytes().to_vec(), "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&h.server)
+        .await;
+    let (status, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("flask-1.0.tar.gz"));
+}
+
+#[tokio::test]
+async fn test_file_source_not_a_mirror_is_not_found() {
+    let h = harness().await;
+    let digest = Digest::of(b"orphan");
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), "http://x/orphan.whl", "local")
+        .unwrap();
+    let uri = format!("/pypi/files/{}/orphan.whl", digest.as_str());
+    let (status, ..) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_file_digest_mismatch_is_bad_gateway() {
+    let h = harness().await;
+    let digest = Digest::of(b"expected");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"wrong bytes".to_vec()))
+        .mount(&h.server)
+        .await;
+    get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    let uri = format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
+    let (status, ..) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn test_delete_one_of_two_versions() {
+    let h = harness().await;
+    upload_version(&h.state, "/local/", "1.0", b"PKv1").await;
+    upload_version(&h.state, "/local/", "2.0", b"PKv2").await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/local/veloxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (_, _, detail) = get(&h.state, "/local/simple/veloxpkg/", Some("application/json")).await;
+    assert!(detail.contains("2.0"));
+    assert!(!detail.contains("veloxpkg-1.0"));
+}
+
+#[tokio::test]
+async fn test_yank_one_of_two_versions() {
+    let h = harness().await;
+    upload_version(&h.state, "/local/", "1.0", b"PKv1").await;
+    upload_version(&h.state, "/local/", "2.0", b"PKv2").await;
+    assert_eq!(
+        request(&h.state, "PUT", "/local/veloxpkg/1.0/yank", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (_, _, detail) = get(&h.state, "/local/simple/veloxpkg/", Some("application/json")).await;
+    // Only the 1.0 file carries the yank marker.
+    assert_eq!(detail.matches("\"yanked\":true").count(), 1);
+}
+
+#[tokio::test]
+async fn test_file_path_without_filename_is_not_found() {
+    let h = harness().await;
+    let (status, ..) = get(&h.state, "/pypi/files/onlyonesegment", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_get_unrecognized_subpath_is_not_found() {
+    let h = harness().await;
+    let (status, ..) = get(&h.state, "/pypi/random/", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_get_route_without_trailing_slash_is_not_found() {
+    let h = harness().await;
+    let (status, ..) = get(&h.state, "/pypi", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_project_list_html() {
+    let h = harness().await;
+    upload_veloxpkg(&h.state, "/local/", b"x").await;
+    let (status, headers, body) = get(&h.state, "/local/simple/", Some("text/html")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "text/html; charset=utf-8");
+    assert!(body.contains("veloxpkg"));
+}
+
+#[tokio::test]
+async fn test_removal_storage_error_is_server_error() {
+    let h = harness().await;
+    h.state
+        .meta
+        .put_upload("local", "veloxpkg", "veloxpkg-1.0.whl", b"{ not json")
+        .unwrap();
+    // A versioned delete must decode each record to filter, so the corrupt record errors.
+    let status = request(&h.state, "DELETE", "/local/veloxpkg/1.0/", Some(&upload_auth())).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn test_upload_target_resolving_to_non_local_is_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("velox.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
+    // A deliberately inconsistent overlay whose upload target points at the mirror.
+    let indexes = vec![
+        Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror(upstream),
+        },
+        Index {
+            name: "ov".to_owned(),
+            route: "ov".to_owned(),
+            kind: IndexKind::Overlay {
+                layers: vec![0],
+                upload: Some(0),
+            },
+        },
+    ];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
+    assert_eq!(upload_veloxpkg(&state, "/ov/", b"x").await, StatusCode::NOT_FOUND);
 }

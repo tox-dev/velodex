@@ -1,4 +1,4 @@
-//! Shared application state.
+//! Shared application state and index routing.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -11,18 +11,34 @@ use velox_upstream::UpstreamClient;
 /// tests.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+/// One resolved index. `layers`/`upload` in an overlay are indices into [`AppState::indexes`], so
+/// resolution is a plain vector walk with no name lookups at request time.
+#[derive(Debug)]
+pub struct Index {
+    pub name: String,
+    pub route: String,
+    pub kind: IndexKind,
+}
+
+/// The runtime shape of an index: a mirror owns its upstream client, a local store its upload
+/// policy, an overlay the resolved positions of its layers and upload target.
+#[derive(Debug)]
+pub enum IndexKind {
+    Mirror(UpstreamClient),
+    Local {
+        upload_token: Option<String>,
+        volatile: bool,
+    },
+    Overlay {
+        layers: Vec<usize>,
+        upload: Option<usize>,
+    },
+}
+
 /// Everything a request handler needs. Shared as `Arc<AppState>`.
 pub struct AppState {
     pub meta: MetaStore,
     pub blobs: BlobStore,
-    pub upstream: UpstreamClient,
-    /// The configured mirror index route prefix, for example `root/pypi`.
-    pub index: String,
-    /// The private upload index route prefix, for example `root/local`. Distinct from the mirror:
-    /// it serves uploaded distributions rather than proxying an upstream.
-    pub upload_index: String,
-    /// The shared secret an upload must present as its Basic-auth password. `None` disables uploads.
-    pub upload_token: Option<String>,
     /// How long a cached simple page is served before revalidating, in seconds.
     pub ttl_secs: i64,
     pub clock: Clock,
@@ -31,72 +47,60 @@ pub struct AppState {
     /// only hit this when they take the metadata-only resolution fast path, so it is the server-side
     /// proof that pip and uv resolve through velox without downloading whole wheels.
     pub metadata_requests: AtomicU64,
+    pub indexes: Vec<Index>,
 }
 
 impl AppState {
     /// Build the state with a system clock.
     #[must_use]
-    pub fn new(config: StateConfig) -> Self {
-        Self::with_clock(config, Arc::new(system_now))
+    pub fn new(meta: MetaStore, blobs: BlobStore, ttl_secs: i64, indexes: Vec<Index>) -> Self {
+        Self::with_clock(meta, blobs, ttl_secs, indexes, Arc::new(system_now))
     }
 
     /// Build the state with an injected clock.
     #[must_use]
-    pub fn with_clock(config: StateConfig, clock: Clock) -> Self {
-        let StateConfig {
-            meta,
-            blobs,
-            upstream,
-            index,
-            upload_index,
-            upload_token,
-            ttl_secs,
-        } = config;
+    pub fn with_clock(meta: MetaStore, blobs: BlobStore, ttl_secs: i64, indexes: Vec<Index>, clock: Clock) -> Self {
         Self {
             meta,
             blobs,
-            upstream,
-            index,
-            upload_index,
-            upload_token,
             ttl_secs,
             clock,
             requests: AtomicU64::new(0),
             metadata_requests: AtomicU64::new(0),
+            indexes,
         }
     }
 
-    /// Whether `user/index` addresses the mirror index.
+    /// Find the index whose route is the longest segment-aligned prefix of `path` (which has no
+    /// leading slash), and the path remainder after `route/`. Returns `None` if no route matches.
     #[must_use]
-    pub fn is_mirror(&self, user: &str, index: &str) -> bool {
-        self.index == format!("{user}/{index}")
+    pub fn resolve<'a>(&'a self, path: &'a str) -> Option<(&'a Index, &'a str)> {
+        let mut best: Option<(&Index, &str)> = None;
+        for index in &self.indexes {
+            let Some(rest) = remainder(path, &index.route) else {
+                continue;
+            };
+            if best.is_none_or(|(current, _)| index.route.len() > current.route.len()) {
+                best = Some((index, rest));
+            }
+        }
+        best
     }
 
-    /// Whether `user/index` addresses the private upload index.
+    /// The index at position `pos` (an overlay layer or upload target).
     #[must_use]
-    pub fn is_upload(&self, user: &str, index: &str) -> bool {
-        self.upload_index == format!("{user}/{index}")
-    }
-
-    /// The stored index key if `user/index` is either the mirror or the upload index; `None`
-    /// otherwise. Used where the two are served the same way (project list, file download).
-    #[must_use]
-    pub fn resolve_index(&self, user: &str, index: &str) -> Option<String> {
-        let key = format!("{user}/{index}");
-        (key == self.index || key == self.upload_index).then_some(key)
+    pub fn index_at(&self, pos: usize) -> &Index {
+        &self.indexes[pos]
     }
 }
 
-/// The stored fields of an [`AppState`], grouped so the constructor takes one argument instead of a
-/// long positional list.
-pub struct StateConfig {
-    pub meta: MetaStore,
-    pub blobs: BlobStore,
-    pub upstream: UpstreamClient,
-    pub index: String,
-    pub upload_index: String,
-    pub upload_token: Option<String>,
-    pub ttl_secs: i64,
+/// The part of `path` after `route`, requiring a segment boundary so `team/dev` does not match
+/// `team/development`. `""` means the index root itself.
+fn remainder<'a>(path: &'a str, route: &str) -> Option<&'a str> {
+    if path == route {
+        return Some("");
+    }
+    path.strip_prefix(route)?.strip_prefix('/')
 }
 
 fn system_now() -> i64 {

@@ -15,7 +15,7 @@ against pypi.org, and every artifact is cached content-addressed on disk.
 
 Implemented so far:
 
-- `serve` and `init` commands, configured by flags, environment, or a TOML file.
+- `serve` and `init` commands, configured by a TOML file plus a few operational flags.
 - The [Simple Repository API][simple-api] at `/{index}/simple/` (project list) and `/{index}/simple/{project}/`
   (detail), negotiated between [PEP 691][pep691] JSON and [PEP 503][pep503] HTML, versioned per [PEP 629][pep629] and
   carrying the [PEP 700][pep700] `versions`/`size`/`upload-time` fields and [PEP 592][pep592] yank markers.
@@ -26,15 +26,21 @@ Implemented so far:
 - Content negotiation with the upstream: velox asks for [PEP 691][pep691] JSON and uses it when the mirror offers it;
   only when a mirror serves [PEP 503][pep503] HTML alone (Artifactory, GitLab, static indexes) does velox parse the HTML
   and re-serve it as JSON downstream.
-- Per-upstream authentication (Basic or Bearer), including the pypi.org `__token__` convention from the
-  [`.pypirc` spec][pypirc], and a configurable mirror index route and cache freshness window.
-- A private upload index that accepts the [legacy upload API][upload-api] over token-authenticated Basic auth, stores
-  each distribution content-addressed, and serves it back through the same simple API. The end-to-end tests confirm both
-  twine and `uv publish` can upload and that the result installs and imports.
+- Composable indexes: any number of mirrors (each with its own upstream and credentials), local hosted stores that
+  accept uploads, and overlays that serve several layers under one URL with first-match-per-filename resolution — your
+  uploaded file shadows the upstream one, everything else falls through. The default topology is a pypi.org mirror with
+  a local store overlaid in front of it at `root/pypi`.
+- Per-mirror authentication (Basic or Bearer), including the pypi.org `__token__` convention from the
+  [`.pypirc` spec][pypirc], and a configurable cache freshness window.
+- Uploads via the [legacy upload API][upload-api] over token-authenticated Basic auth: each distribution is stored
+  content-addressed in the overlay's local layer and served back through the same simple API. The end-to-end tests
+  confirm both twine and `uv publish` can upload and that the result installs and imports.
+- Removal of uploaded distributions, both reversible and permanent: [PEP 592][pep592] yank/un-yank, and hard delete on
+  indexes marked `volatile`. Deleting an overlaid file makes the upstream version visible again.
 - Structured, leveled logging to stdout, a file, journald, or syslog.
 
-Not yet built: overlaying the private index onto the mirror (so one URL serves both), the web UI, and distribution as
-`PyPI` wheels or standalone installers. [proposal.md](proposal.md) holds the full design and the phased plan.
+Not yet built: the web UI, and distribution as `PyPI` wheels or standalone installers. [proposal.md](proposal.md) holds
+the full design and the phased plan.
 
 ## Install
 
@@ -69,38 +75,76 @@ from the cache without touching the upstream.
 
 ## Configuration
 
-velox runs with sensible defaults and no config at all — `velox serve` mirrors pypi.org out of the box. Everything else
-lives in one TOML file, passed with `--config`. Only the handful of operational settings you tend to vary per run are
-also exposed as flags, which override the file. Precedence is `defaults < TOML file < flags`.
+velox runs with sensible defaults and no config at all — `velox serve` mirrors pypi.org with a local upload store
+overlaid in front of it at `root/pypi`. Everything else lives in one TOML file, passed with `--config`. Only the
+operational settings you tend to vary per run are also exposed as flags, which override the file. Precedence is
+`defaults < TOML file < flags`.
 
-| Setting                   | Flag              | TOML key            | Default                    |
-| ------------------------- | ----------------- | ------------------- | -------------------------- |
-| Bind host                 | `--host`          | `host`              | `127.0.0.1`                |
-| Bind port                 | `--port`          | `port`              | `4433`                     |
-| Data directory            | `--data-dir`      | `data_dir`          | `velox-data`               |
-| Config file               | `--config` / `-c` | (n/a)               | (none)                     |
-| Upstream index URL        | (file only)       | `upstream_url`      | `https://pypi.org/simple/` |
-| Upstream username         | (file only)       | `upstream_username` | (none)                     |
-| Upstream password         | (file only)       | `upstream_password` | (none)                     |
-| Upstream bearer token     | (file only)       | `upstream_token`    | (none)                     |
-| Mirror index route        | (file only)       | `index`             | `root/pypi`                |
-| Upload index route        | (file only)       | `upload_index`      | `root/local`               |
-| Upload token              | (file only)       | `upload_token`      | (none, uploads disabled)   |
-| Cache freshness (seconds) | (file only)       | `cache_ttl_secs`    | `1800`                     |
+| Setting                   | Flag              | TOML key         | Default      |
+| ------------------------- | ----------------- | ---------------- | ------------ |
+| Bind host                 | `--host`          | `host`           | `127.0.0.1`  |
+| Bind port                 | `--port`          | `port`           | `4433`       |
+| Data directory            | `--data-dir`      | `data_dir`       | `velox-data` |
+| Config file               | `--config` / `-c` | (n/a)            | (none)       |
+| Cache freshness (seconds) | (file only)       | `cache_ttl_secs` | `1800`       |
+| Indexes                   | (file only)       | `[[index]]`      | (see below)  |
 
-A complete config file, with the log settings under their own table:
+### Indexes
+
+Indexes come in three composable shapes, declared as `[[index]]` tables. This is the virtual-repository model of
+Artifactory and Nexus combined with devpi's index inheritance:
+
+- **mirror** — proxies and caches an upstream simple index, with optional credentials.
+- **local** — a hosted store that accepts uploads. `upload_token` is the Basic-auth password an upload must present
+  (omit it to disable uploads); `volatile = true` (the default) allows delete and overwrite.
+- **overlay** — serves several other indexes under one route in order. Resolution is first-match per filename: your
+  uploaded file shadows the same filename upstream, and everything else falls through. Uploads to the overlay land in
+  its `upload` layer (defaulting to its first local layer). Overlays can layer other overlays.
+
+Declaring any `[[index]]` replaces the default topology, which is equivalent to:
 
 ```toml
-host = "0.0.0.0"
-port = 4433
-data_dir = "/var/lib/velox"
+[[index]]
+name = "pypi"
+mirror = "https://pypi.org/simple/"
 
-# proxy a private mirror instead of pypi.org
-upstream_url = "https://myco.jfrog.io/artifactory/api/pypi/pypi/simple/"
-upstream_token = "<access-token>" # Bearer; takes precedence over username/password
+[[index]]
+name = "local"
+local = true # set upload_token = "<secret>" to enable uploads
 
-# accept uploads to the root/local index (omit upload_token to disable uploads)
+[[index]]
+name = "root/pypi"
+layers = ["local", "pypi"]
+upload = "local"
+```
+
+Every mirror can have its own overlay. A fuller example — two mirrors with different credentials, each with its own
+private layer in front:
+
+```toml
+[[index]]
+name = "pypi"
+mirror = "https://pypi.org/simple/"
+
+[[index]]
+name = "corp"
+mirror = "https://myco.jfrog.io/artifactory/api/pypi/pypi/simple/"
+token = "<access-token>" # Bearer; takes precedence over username/password
+
+[[index]]
+name = "team-local"
 upload_token = "<shared-upload-secret>"
+volatile = true
+
+[[index]]
+name = "team"
+route = "team/dev" # URL prefix; defaults to name
+layers = ["team-local", "corp"]
+upload = "team-local"
+
+[[index]]
+name = "oss"
+layers = ["pypi"]
 
 [log]
 level = "info"
@@ -111,6 +155,26 @@ sink = "stdout"
 Secrets live in this file, so keep it readable only by the velox user (`chmod 600`). velox handles upstreams that serve
 only HTML: it parses their PEP 503 page and re-serves it to clients as JSON, so uv and pip get the modern format even
 from an old mirror.
+
+### Uploading, yanking, and deleting
+
+Point twine or `uv publish` at an index that accepts uploads (any username; the token is the password):
+
+```shell
+twine upload --repository-url http://127.0.0.1:4433/root/pypi/ -u __token__ -p <secret> dist/*
+uv publish --publish-url http://127.0.0.1:4433/root/pypi/ -u __token__ -p <secret> dist/*
+```
+
+Uploaded distributions can be yanked ([PEP 592][pep592], reversible — the file stays downloadable when pinned but
+resolvers skip it) or deleted outright (only on `volatile` indexes; for an overlay the upstream version becomes visible
+again). Both operate on the index's local layer and take the same Basic-auth token:
+
+```shell
+curl -X PUT    -u __token__:<secret> http://127.0.0.1:4433/root/pypi/mypkg/1.2.0/yank  # yank one version
+curl -X DELETE -u __token__:<secret> http://127.0.0.1:4433/root/pypi/mypkg/1.2.0/yank  # un-yank
+curl -X DELETE -u __token__:<secret> http://127.0.0.1:4433/root/pypi/mypkg/1.2.0/      # delete one version
+curl -X DELETE -u __token__:<secret> http://127.0.0.1:4433/root/pypi/mypkg/            # delete the whole project
+```
 
 ## Logging
 
@@ -124,16 +188,20 @@ Output goes to one sink, selected with `--log-sink`:
 
 ## Endpoints
 
-| Path                                              | Purpose                                 |
-| ------------------------------------------------- | --------------------------------------- |
-| `GET /{index}/simple/`                            | Project list (JSON or HTML by `Accept`) |
-| `GET /{index}/simple/{project}/`                  | Project detail                          |
-| `GET /{index}/files/{sha256}/{filename}`          | Cached artifact                         |
-| `GET /{index}/files/{sha256}/{filename}.metadata` | PEP 658 core metadata                   |
-| `GET /+status`                                    | JSON health and identity                |
-| `GET /metrics`                                    | Prometheus metrics                      |
+Every configured index route serves the same surface (`{route}` below, for example `root/pypi`):
 
-The built-in mirror index is `root/pypi`.
+| Path                                              | Purpose                                      |
+| ------------------------------------------------- | -------------------------------------------- |
+| `GET /{route}/simple/`                            | Project list (JSON or HTML by `Accept`)      |
+| `GET /{route}/simple/{project}/`                  | Project detail, merged across overlay layers |
+| `GET /{route}/files/{sha256}/{filename}`          | Cached artifact                              |
+| `GET /{route}/files/{sha256}/{filename}.metadata` | PEP 658 core metadata                        |
+| `POST /{route}/`                                  | Upload (legacy API; twine and `uv publish`)  |
+| `PUT /{route}/{project}/[{version}/]yank`         | Yank uploaded files (PEP 592)                |
+| `DELETE /{route}/{project}/[{version}/]yank`      | Un-yank                                      |
+| `DELETE /{route}/{project}/[{version}/]`          | Delete uploaded files (volatile only)        |
+| `GET /+status`                                    | JSON health, identity, and index routes      |
+| `GET /metrics`                                    | Prometheus metrics                           |
 
 ## Standards
 

@@ -16,7 +16,7 @@ fn test_parse_serve_defaults() {
     assert_eq!(cli.verbose, 0);
     let overlay = cli.overlay();
     assert!(overlay.host.is_none());
-    assert!(overlay.upstream_url.is_none());
+    assert!(overlay.indexes.is_none());
     assert!(overlay.log.level.is_none());
 }
 

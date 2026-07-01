@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use std::io::{Cursor, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -39,7 +39,7 @@ use zip::write::SimpleFileOptions;
 const SIMPLE_JSON_CT: &str = "application/vnd.pypi.simple.v1+json";
 
 /// The upload token every spawned velox is configured with, so twine and `uv publish` can push to
-/// the private `root/local` index.
+/// the local layer of the `root/pypi` overlay.
 const UPLOAD_TOKEN: &str = "e2e-upload-secret";
 
 /// A minimal but genuinely pip/uv-installable distribution built in memory. `metadata` is both the
@@ -189,6 +189,9 @@ fn serve(listener: &TcpListener, routes: &Arc<Routes>, stop: &Arc<AtomicBool>) {
 
 /// Read one HTTP request, route by path, and write a `Connection: close` response.
 fn respond(mut socket: TcpStream, routes: &Routes) {
+    // On macOS an accepted socket inherits the listener's non-blocking mode, so reads would return
+    // EWOULDBLOCK (seen as EOF here) and writes could truncate. Restore blocking I/O explicitly.
+    socket.set_nonblocking(false).expect("blocking socket");
     socket.set_read_timeout(Some(Duration::from_secs(5))).ok();
     let mut request = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -222,48 +225,56 @@ fn respond(mut socket: TcpStream, routes: &Routes) {
 struct Velox {
     child: Child,
     port: u16,
-    _data: TempDir,
+    data: TempDir,
 }
 
 impl Velox {
     /// Spawn velox proxying the given upstream (a fixture, or pypi.org) and wait until it answers.
     /// Configuration is a TOML file (the only config surface besides the operational flags).
+    ///
+    /// Picking a free port and re-binding it in the child is racy under parallel tests: another
+    /// test's velox can grab the port in the window, our child dies at bind, and the health check
+    /// would get answers from the *other* server. Detecting the child's exit and retrying on a fresh
+    /// port makes startup deterministic.
     fn start_against(upstream_url: &str) -> Self {
-        let port = free_port();
         let data = TempDir::new().expect("temp data dir");
         let config = data.path().join("velox.toml");
-        std::fs::write(&config, format!("upstream_url = \"{upstream_url}\"\nupload_token = \"{UPLOAD_TOKEN}\"\n"))
-            .expect("write config");
-        let child = Command::new(env!("CARGO_BIN_EXE_velox"))
-            .args(["--port", &port.to_string()])
-            .arg("--data-dir")
-            .arg(data.path())
-            .arg("--config")
-            .arg(&config)
-            .arg("serve")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn velox");
-        let velox = Self {
-            child,
-            port,
-            _data: data,
-        };
-        velox.wait_ready();
-        velox
+        // A mirror of the given upstream with a local store overlaid in front, served at root/pypi.
+        let config_toml = format!(
+            "[[index]]\nname = \"upstream\"\nroute = \"upstream\"\nmirror = \"{upstream_url}\"\n\
+             [[index]]\nname = \"local\"\nlocal = true\nupload_token = \"{UPLOAD_TOKEN}\"\n\
+             [[index]]\nname = \"root/pypi\"\nroute = \"root/pypi\"\nlayers = [\"local\", \"upstream\"]\nupload = \"local\"\n"
+        );
+        std::fs::write(&config, config_toml).expect("write config");
+        for attempt in 0..10 {
+            let port = free_port();
+            // The server's own log lands next to its data, so a failing test can be diagnosed from
+            // what velox saw rather than only what the client printed.
+            let log = std::fs::File::create(data.path().join("velox.log")).expect("create server log");
+            let mut child = Command::new(env!("CARGO_BIN_EXE_velox"))
+                .args(["--port", &port.to_string()])
+                .arg("--data-dir")
+                .arg(data.path())
+                .arg("--config")
+                .arg(&config)
+                .arg("serve")
+                .args(["--log-level", "debug"])
+                .stdout(log.try_clone().expect("clone log handle"))
+                .stderr(log)
+                .spawn()
+                .expect("spawn velox");
+            if wait_ready(&mut child, port) {
+                return Self { child, port, data };
+            }
+            let _ = child.wait(); // exited at bind; reap and retry on a fresh port
+            eprintln!("velox lost the race for port {port} (attempt {attempt}), retrying on a fresh port");
+        }
+        panic!("velox failed to bind a free port after 10 attempts");
     }
 
-    fn wait_ready(&self) {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
-            if let Some((status, _)) = http_get(self.port, "/+status") {
-                assert_eq!(status, 200, "unexpected /+status");
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        panic!("velox did not become ready on port {}", self.port);
+    /// The tail of the server's own log, for failure diagnostics.
+    fn server_log(&self) -> String {
+        std::fs::read_to_string(self.data.path().join("velox.log")).unwrap_or_default()
     }
 
     /// The client-facing simple index URL for the built-in `root/pypi` mirror.
@@ -271,14 +282,9 @@ impl Velox {
         format!("http://127.0.0.1:{}/root/pypi/simple/", self.port)
     }
 
-    /// The upload endpoint (repository URL) of the private `root/local` index.
+    /// The upload endpoint (repository URL): uploads to the root/pypi overlay land in its local layer.
     fn upload_url(&self) -> String {
-        format!("http://127.0.0.1:{}/root/local/", self.port)
-    }
-
-    /// The simple index URL of the private `root/local` index, to install what was uploaded.
-    fn local_index_url(&self) -> String {
-        format!("http://127.0.0.1:{}/root/local/simple/", self.port)
+        format!("http://127.0.0.1:{}/root/pypi/", self.port)
     }
 
     /// Read velox's `velox_metadata_requests_total` counter — the PEP 658 siblings it has served.
@@ -294,6 +300,23 @@ impl Drop for Velox {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Poll until this spawn's own child answers `/+status`. Returns `false` if the child exited (it
+/// lost the port race to another test's server), so the caller can retry on a fresh port.
+fn wait_ready(child: &mut Child, port: u16) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if child.try_wait().expect("child status").is_some() {
+            return false;
+        }
+        if let Some((status, _)) = http_get(port, "/+status") {
+            assert_eq!(status, 200, "unexpected /+status");
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("velox did not become ready on port {port}");
 }
 
 /// Stand up a hermetic fixture upstream and a velox proxying it. Both live until the tuple drops.
@@ -385,6 +408,8 @@ fn parse_counter(metrics: &str, name: &str) -> u64 {
 /// install into it by pointing at its interpreter — no activation, nothing shared between tests.
 fn uv_venv() -> TempDir {
     let dir = TempDir::new().expect("venv dir");
+    // Plain `uv` here: `uv venv` fetches nothing, and pointing UV_CACHE_DIR inside the target would
+    // make it non-empty before creation, which uv refuses. The cache override is for installs.
     run(Command::new("uv").arg("venv").arg(dir.path()), "uv venv");
     dir
 }
@@ -395,26 +420,46 @@ fn venv_python(venv: &TempDir) -> PathBuf {
 
 /// Install into `venv` with the real pip client. `pip --python <interp>` targets the venv without
 /// seeding pip into it (faster) and without activation.
-fn pip_install(venv: &TempDir, index_url: &str, spec: &str) {
+fn pip_install(venv: &TempDir, velox: &Velox, spec: &str) {
     let mut cmd = Command::new("pip3");
     cmd.arg("--python").arg(venv_python(venv)).args([
         "install",
         "--no-cache-dir",
         "--no-input",
         "--index-url",
-        index_url,
+        &velox.index_url(),
         spec,
     ]);
-    run(&mut cmd, "pip install");
+    run_against(&mut cmd, "pip install", velox);
 }
 
 /// Install into `venv` with uv targeting that interpreter — faster than pip, still isolated.
-fn uv_install(venv: &TempDir, index_url: &str, spec: &str) {
-    let mut cmd = Command::new("uv");
+fn uv_install(venv: &TempDir, velox: &Velox, spec: &str) {
+    let mut cmd = uv(venv);
     cmd.args(["pip", "install", "--python"])
         .arg(venv_python(venv))
-        .args(["--index-url", index_url, spec]);
-    run(&mut cmd, "uv pip install");
+        .args(["--index-url", &velox.index_url(), spec]);
+    run_against(&mut cmd, "uv pip install", velox);
+}
+
+/// Like [`run`], but a failure also dumps the velox server's own log before panicking — the temp
+/// data dir (and the log in it) is deleted during unwind, so it must be printed eagerly.
+fn run_against(cmd: &mut Command, what: &str, velox: &Velox) {
+    let output = cmd.output().unwrap_or_else(|err| panic!("spawn {what}: {err}"));
+    if !output.status.success() {
+        eprintln!("=== velox server log (port {}) ===\n{}", velox.port, velox.server_log());
+        panic!("{what} failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+/// A uv command with a per-test cache directory inside `venv`. uv's global cache is shared across
+/// parallel tests, so a package another test already resolved would be served from cache and never
+/// hit velox — making the PEP 658 metric assertions flaky. A private cache keeps each test's uv
+/// fetching through its own velox while still caching within the test.
+fn uv(venv: &TempDir) -> Command {
+    let mut cmd = Command::new("uv");
+    cmd.env("UV_CACHE_DIR", venv.path().join("uv-cache"));
+    cmd
 }
 
 /// Run a command, surfacing captured stderr if it fails.
@@ -439,7 +484,7 @@ fn assert_importable(venv: &TempDir, module: &str) {
 fn e2e_pip_installs_and_resolves_dependencies() {
     let (_upstream, velox) = hermetic();
     let venv = uv_venv();
-    pip_install(&venv, &velox.index_url(), "veloxa");
+    pip_install(&venv, &velox, "veloxa");
     assert_importable(&venv, "veloxa");
     assert_importable(&venv, "veloxb"); // transitive dependency resolved through velox
 }
@@ -448,7 +493,7 @@ fn e2e_pip_installs_and_resolves_dependencies() {
 fn e2e_pip_uses_pep658_metadata_fast_path() {
     let (_upstream, velox) = hermetic();
     let venv = uv_venv();
-    pip_install(&venv, &velox.index_url(), "veloxa");
+    pip_install(&venv, &velox, "veloxa");
     assert!(
         velox.metadata_requests() >= 1,
         "pip did not fetch a .metadata sibling through velox"
@@ -459,7 +504,7 @@ fn e2e_pip_uses_pep658_metadata_fast_path() {
 fn e2e_uv_installs_and_resolves_dependencies() {
     let (_upstream, velox) = hermetic();
     let venv = uv_venv();
-    uv_install(&venv, &velox.index_url(), "veloxa");
+    uv_install(&venv, &velox, "veloxa");
     assert_importable(&venv, "veloxa");
     assert_importable(&venv, "veloxb"); // transitive dependency resolved through velox
 }
@@ -468,7 +513,7 @@ fn e2e_uv_installs_and_resolves_dependencies() {
 fn e2e_uv_uses_pep658_metadata_fast_path() {
     let (_upstream, velox) = hermetic();
     let venv = uv_venv();
-    uv_install(&venv, &velox.index_url(), "veloxa");
+    uv_install(&venv, &velox, "veloxa");
     assert!(
         velox.metadata_requests() >= 1,
         "uv did not fetch a .metadata sibling through velox"
@@ -539,14 +584,19 @@ fn e2e_twine_upload_then_install() {
     let velox = Velox::start_against("http://127.0.0.1:9/simple/");
     let (_dir, wheel) = wheel_on_disk("veloxtwine");
     let mut cmd = Command::new("twine");
-    cmd.args(["upload", "--non-interactive", "--disable-progress-bar", "--repository-url"])
-        .arg(velox.upload_url())
-        .args(["-u", "__token__", "-p", UPLOAD_TOKEN])
-        .arg(&wheel);
+    cmd.args([
+        "upload",
+        "--non-interactive",
+        "--disable-progress-bar",
+        "--repository-url",
+    ])
+    .arg(velox.upload_url())
+    .args(["-u", "__token__", "-p", UPLOAD_TOKEN])
+    .arg(&wheel);
     run(&mut cmd, "twine upload");
 
     let venv = uv_venv();
-    uv_install(&venv, &velox.local_index_url(), "veloxtwine");
+    uv_install(&venv, &velox, "veloxtwine");
     assert_importable(&venv, "veloxtwine");
 }
 
@@ -562,8 +612,75 @@ fn e2e_uv_publish_then_install() {
     run(&mut cmd, "uv publish");
 
     let venv = uv_venv();
-    uv_install(&venv, &velox.local_index_url(), "veloxpublish");
+    uv_install(&venv, &velox, "veloxpublish");
     assert_importable(&venv, "veloxpublish");
+}
+
+#[test]
+fn e2e_yank_and_delete_round_trip() {
+    let velox = Velox::start_against("http://127.0.0.1:9/simple/");
+    let (_dir, wheel) = wheel_on_disk("veloxremove");
+    let mut cmd = Command::new("uv");
+    cmd.args(["publish", "--publish-url"])
+        .arg(velox.upload_url())
+        .args(["-u", "__token__", "-p", UPLOAD_TOKEN])
+        .arg(&wheel);
+    run(&mut cmd, "uv publish");
+
+    // Yank the version: the file stays but carries the PEP 592 marker.
+    assert_eq!(http_verb(velox.port, "PUT", "/root/pypi/veloxremove/1.0/yank"), 200);
+    let (_, yanked) = http_get(velox.port, "/root/pypi/simple/veloxremove/").expect("detail");
+    assert!(yanked.contains("\"yanked\":true"), "yank marker missing");
+
+    // Un-yank restores it.
+    assert_eq!(http_verb(velox.port, "DELETE", "/root/pypi/veloxremove/1.0/yank"), 200);
+    let (_, restored) = http_get(velox.port, "/root/pypi/simple/veloxremove/").expect("detail");
+    assert!(!restored.contains("\"yanked\":true"), "yank marker not cleared");
+
+    // Delete removes the project outright (the local layer is volatile by default).
+    assert_eq!(http_verb(velox.port, "DELETE", "/root/pypi/veloxremove/"), 200);
+    let (status, _) = http_get(velox.port, "/root/pypi/simple/veloxremove/").expect("detail");
+    assert_eq!(status, 404, "project still served after delete");
+}
+
+/// A raw authenticated HTTP request with no body, as `curl -X <verb> -u __token__:<token>` sends.
+fn http_verb(port: u16, verb: &str, path: &str) -> u16 {
+    let credentials = base64_encode(format!("__token__:{UPLOAD_TOKEN}").as_bytes());
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(
+            format!(
+                "{verb} {path} HTTP/1.0\r\nHost: localhost\r\nAuthorization: Basic {credentials}\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .expect("write request");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("read response");
+    raw.split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .expect("status code")
+}
+
+/// Standard base64, enough for the Basic-auth header without pulling a crate into the test.
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let block = (u32::from(chunk[0]) << 16)
+            | (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
+            | u32::from(chunk.get(2).copied().unwrap_or(0));
+        for position in 0..4 {
+            if position <= chunk.len() {
+                out.push(ALPHABET[(block >> (18 - 6 * position)) as usize & 0x3f] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// The same client flows, but against the real pypi.org, to catch upstream drift.
@@ -577,7 +694,7 @@ fn live() -> Velox {
 fn e2e_live_pip_installs_from_pypi_via_pep658() {
     let velox = live();
     let venv = uv_venv();
-    pip_install(&venv, &velox.index_url(), "certifi");
+    pip_install(&venv, &velox, "certifi");
     assert_importable(&venv, "certifi");
     assert!(
         velox.metadata_requests() >= 1,
@@ -590,7 +707,7 @@ fn e2e_live_pip_installs_from_pypi_via_pep658() {
 fn e2e_live_uv_installs_from_pypi_via_pep658() {
     let velox = live();
     let venv = uv_venv();
-    uv_install(&venv, &velox.index_url(), "certifi");
+    uv_install(&venv, &velox, "certifi");
     assert_importable(&venv, "certifi");
     assert!(
         velox.metadata_requests() >= 1,

@@ -143,28 +143,30 @@ impl MetaStore {
         }
     }
 
-    /// Record the upstream URL a blob digest can be fetched from.
+    /// Record the upstream URL a blob digest can be fetched from, and the name of the mirror it came
+    /// from (so a fetch on a cache miss reuses that mirror's authentication).
     ///
     /// # Errors
     /// Returns a store error if the write or commit fails.
-    pub fn put_file_url(&self, sha256: &str, url: &str) -> Result<(), MetaError> {
+    pub fn put_file_url(&self, sha256: &str, url: &str, source: &str) -> Result<(), MetaError> {
+        let value = format!("{url}\n{source}");
         let txn = self.db.begin_write()?;
         {
             let mut table = txn.open_table(FILE)?;
-            table.insert(sha256, url)?;
+            table.insert(sha256, value.as_str())?;
         }
         txn.commit()?;
         Ok(())
     }
 
-    /// Look up the upstream URL for a blob digest.
+    /// Look up the `(upstream url, mirror name)` for a blob digest.
     ///
     /// # Errors
     /// Returns a store error if the read fails.
-    pub fn get_file_url(&self, sha256: &str) -> Result<Option<String>, MetaError> {
+    pub fn get_file_url(&self, sha256: &str) -> Result<Option<(String, String)>, MetaError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(FILE)?;
-        Ok(table.get(sha256)?.map(|value| value.value().to_owned()))
+        Ok(table.get(sha256)?.and_then(|value| split_pair(value.value())))
     }
 
     /// Record the PEP 658 metadata sibling for a wheel: keyed by the wheel's digest, storing the
@@ -172,8 +174,14 @@ impl MetaStore {
     ///
     /// # Errors
     /// Returns a store error if the write or commit fails.
-    pub fn put_metadata(&self, wheel_sha256: &str, url: &str, metadata_sha256: &str) -> Result<(), MetaError> {
-        let value = format!("{url}\n{metadata_sha256}");
+    pub fn put_metadata(
+        &self,
+        wheel_sha256: &str,
+        url: &str,
+        metadata_sha256: &str,
+        source: &str,
+    ) -> Result<(), MetaError> {
+        let value = format!("{url}\n{metadata_sha256}\n{source}");
         let txn = self.db.begin_write()?;
         {
             let mut table = txn.open_table(METADATA)?;
@@ -183,18 +191,20 @@ impl MetaStore {
         Ok(())
     }
 
-    /// Look up a wheel's metadata sibling: `(upstream url, metadata sha256)`.
+    /// Look up a wheel's metadata sibling: `(upstream url, metadata sha256, mirror name)`.
     ///
     /// # Errors
     /// Returns a store error if the read fails.
-    pub fn get_metadata(&self, wheel_sha256: &str) -> Result<Option<(String, String)>, MetaError> {
+    pub fn get_metadata(&self, wheel_sha256: &str) -> Result<Option<(String, String, String)>, MetaError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(METADATA)?;
         Ok(table.get(wheel_sha256)?.and_then(|value| {
-            value
-                .value()
-                .split_once('\n')
-                .map(|(url, digest)| (url.to_owned(), digest.to_owned()))
+            let mut parts = value.value().splitn(3, '\n');
+            Some((
+                parts.next()?.to_owned(),
+                parts.next()?.to_owned(),
+                parts.next()?.to_owned(),
+            ))
         }))
     }
 
@@ -231,22 +241,37 @@ impl MetaStore {
         Ok(())
     }
 
-    /// List the serialized file records uploaded for `normalized` on `index`, sorted by filename.
+    /// List the `(filename, record)` pairs uploaded for `normalized` on `index`, sorted by filename.
     ///
     /// # Errors
     /// Returns a store error if the read fails.
-    pub fn list_uploads(&self, index: &str, normalized: &str) -> Result<Vec<Vec<u8>>, MetaError> {
+    pub fn list_upload_entries(&self, index: &str, normalized: &str) -> Result<Vec<(String, Vec<u8>)>, MetaError> {
         let prefix = format!("{index}/{normalized}/");
         let txn = self.db.begin_read()?;
         let table = txn.open_table(UPLOAD)?;
-        let mut records = Vec::new();
+        let mut entries = Vec::new();
         for entry in table.iter()? {
             let (key, value) = entry?;
-            if key.value().starts_with(&prefix) {
-                records.push(value.value().to_vec());
+            if let Some(filename) = key.value().strip_prefix(&prefix) {
+                entries.push((filename.to_owned(), value.value().to_vec()));
             }
         }
-        Ok(records)
+        Ok(entries)
+    }
+
+    /// Delete one uploaded file record, returning whether it existed.
+    ///
+    /// # Errors
+    /// Returns a store error if the write or commit fails.
+    pub fn delete_upload(&self, index: &str, normalized: &str, filename: &str) -> Result<bool, MetaError> {
+        let key = format!("{index}/{normalized}/{filename}");
+        let txn = self.db.begin_write()?;
+        let existed = {
+            let mut table = txn.open_table(UPLOAD)?;
+            table.remove(key.as_str())?.is_some()
+        };
+        txn.commit()?;
+        Ok(existed)
     }
 
     /// List the display names of projects observed on `index`, sorted.
@@ -267,4 +292,11 @@ impl MetaStore {
         names.sort();
         Ok(names)
     }
+}
+
+/// Split a `"first\nsecond"` stored value into its two owned halves.
+fn split_pair(value: &str) -> Option<(String, String)> {
+    value
+        .split_once('\n')
+        .map(|(first, second)| (first.to_owned(), second.to_owned()))
 }

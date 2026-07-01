@@ -60,10 +60,12 @@ fn test_reopen_persists() {
 fn test_put_and_get_file_url() {
     let (_dir, store) = store();
     assert_eq!(store.get_file_url("deadbeef").unwrap(), None);
-    store.put_file_url("deadbeef", "https://files.example/pkg.whl").unwrap();
+    store
+        .put_file_url("deadbeef", "https://files.example/pkg.whl", "pypi")
+        .unwrap();
     assert_eq!(
-        store.get_file_url("deadbeef").unwrap().as_deref(),
-        Some("https://files.example/pkg.whl")
+        store.get_file_url("deadbeef").unwrap(),
+        Some(("https://files.example/pkg.whl".to_owned(), "pypi".to_owned()))
     );
 }
 
@@ -72,11 +74,15 @@ fn test_put_and_get_metadata() {
     let (_dir, store) = store();
     assert_eq!(store.get_metadata("wheelsha").unwrap(), None);
     store
-        .put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha")
+        .put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha", "pypi")
         .unwrap();
     assert_eq!(
         store.get_metadata("wheelsha").unwrap(),
-        Some(("https://up/pkg.whl.metadata".to_owned(), "metasha".to_owned()))
+        Some((
+            "https://up/pkg.whl.metadata".to_owned(),
+            "metasha".to_owned(),
+            "pypi".to_owned()
+        ))
     );
 }
 
@@ -92,9 +98,9 @@ fn test_put_and_list_projects() {
 }
 
 #[test]
-fn test_put_and_list_uploads() {
+fn test_put_and_list_upload_entries() {
     let (_dir, store) = store();
-    assert!(store.list_uploads("root/local", "flask").unwrap().is_empty());
+    assert!(store.list_upload_entries("root/local", "flask").unwrap().is_empty());
     store
         .put_upload("root/local", "flask", "flask-2.0.whl", b"two")
         .unwrap();
@@ -104,14 +110,17 @@ fn test_put_and_list_uploads() {
     store
         .put_upload("root/local", "django", "django-4.0.whl", b"other")
         .unwrap();
-    // Sorted by key (filename), and scoped to the one project.
+    // Sorted by filename, scoped to the one project, filename returned alongside the record.
     assert_eq!(
-        store.list_uploads("root/local", "flask").unwrap(),
-        vec![b"one".to_vec(), b"two".to_vec()]
+        store.list_upload_entries("root/local", "flask").unwrap(),
+        vec![
+            ("flask-1.0.whl".to_owned(), b"one".to_vec()),
+            ("flask-2.0.whl".to_owned(), b"two".to_vec())
+        ]
     );
     assert_eq!(
-        store.list_uploads("root/local", "django").unwrap(),
-        vec![b"other".to_vec()]
+        store.list_upload_entries("root/local", "django").unwrap(),
+        vec![("django-4.0.whl".to_owned(), b"other".to_vec())]
     );
 }
 
@@ -125,9 +134,20 @@ fn test_put_upload_overwrites_same_filename() {
         .put_upload("root/local", "flask", "flask-1.0.whl", b"second")
         .unwrap();
     assert_eq!(
-        store.list_uploads("root/local", "flask").unwrap(),
-        vec![b"second".to_vec()]
+        store.list_upload_entries("root/local", "flask").unwrap(),
+        vec![("flask-1.0.whl".to_owned(), b"second".to_vec())]
     );
+}
+
+#[test]
+fn test_delete_upload() {
+    let (_dir, store) = store();
+    store
+        .put_upload("root/local", "flask", "flask-1.0.whl", b"one")
+        .unwrap();
+    assert!(store.delete_upload("root/local", "flask", "flask-1.0.whl").unwrap());
+    assert!(!store.delete_upload("root/local", "flask", "flask-1.0.whl").unwrap());
+    assert!(store.list_upload_entries("root/local", "flask").unwrap().is_empty());
 }
 
 #[test]

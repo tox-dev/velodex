@@ -1,52 +1,132 @@
 //! Assembling the HTTP server from configuration.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use axum::Router;
-use velox_http::{AppState, StateConfig, router};
+use velox_http::{AppState, Index, IndexKind, router};
 use velox_storage::blob::BlobStore;
 use velox_storage::meta::MetaStore;
 use velox_upstream::{Auth, UpstreamClient};
 
-use crate::config::Config;
+use crate::config::{Config, IndexConfig, IndexKind as ConfigKind};
 
-/// Build the velox router: open the metadata store and blob store under the data directory and wire
-/// up the upstream mirror. Does not bind a socket, so it is testable in isolation.
+/// Build the velox router from configuration.
+///
+/// Opens the stores under the data directory and resolves the configured indexes (mirrors, local
+/// stores, and overlays) into their runtime form. Does not bind a socket, so it is testable in
+/// isolation.
 ///
 /// # Errors
-/// Returns an error if the data directory cannot be created, the store cannot be opened, or the
-/// upstream URL is invalid.
+/// Returns an error if the data directory or stores cannot be opened, an upstream URL is invalid, or
+/// an overlay references an unknown or non-local index.
 pub fn build_router(config: &Config) -> anyhow::Result<Router> {
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
     let meta = MetaStore::open(config.data_dir.join("velox.redb"))?;
     let blobs = BlobStore::new(config.data_dir.join("blobs"));
-    let upstream = UpstreamClient::with_auth(&config.upstream_url, upstream_auth(config))?;
-    let state = Arc::new(AppState::new(StateConfig {
-        meta,
-        blobs,
-        upstream,
-        index: config.index.clone(),
-        upload_index: config.upload_index.clone(),
-        upload_token: config.upload_token.clone(),
-        ttl_secs: config.cache_ttl_secs,
-    }));
+    let indexes = build_indexes(&config.indexes)?;
+    let state = Arc::new(AppState::new(meta, blobs, config.cache_ttl_secs, indexes));
     Ok(router(state))
 }
 
-/// Derive the upstream authentication from config: a bearer token takes precedence over a
-/// username/password pair; otherwise the mirror is anonymous.
-pub(crate) fn upstream_auth(config: &Config) -> Auth {
-    match (
-        &config.upstream_token,
-        &config.upstream_username,
-        &config.upstream_password,
-    ) {
-        (Some(token), _, _) => Auth::Bearer(token.clone()),
+/// Resolve configured indexes into their runtime form, mapping overlay layer names to positions and
+/// building each mirror's authenticated upstream client.
+pub(crate) fn build_indexes(configs: &[IndexConfig]) -> anyhow::Result<Vec<Index>> {
+    let mut positions = HashMap::with_capacity(configs.len());
+    let mut routes = HashMap::with_capacity(configs.len());
+    for (pos, index) in configs.iter().enumerate() {
+        if positions.insert(index.name.as_str(), pos).is_some() {
+            bail!("duplicate index name {}", index.name);
+        }
+        if routes.insert(index.route.as_str(), pos).is_some() {
+            bail!("duplicate index route {}", index.route);
+        }
+    }
+    configs
+        .iter()
+        .map(|index| {
+            Ok(Index {
+                name: index.name.clone(),
+                route: index.route.clone(),
+                kind: build_kind(index, configs, &positions)?,
+            })
+        })
+        .collect()
+}
+
+fn build_kind(
+    index: &IndexConfig,
+    configs: &[IndexConfig],
+    positions: &HashMap<&str, usize>,
+) -> anyhow::Result<IndexKind> {
+    match &index.kind {
+        ConfigKind::Mirror {
+            upstream,
+            username,
+            password,
+            token,
+        } => {
+            let auth = mirror_auth(token.as_deref(), username.as_deref(), password.as_deref());
+            Ok(IndexKind::Mirror(UpstreamClient::with_auth(upstream, auth)?))
+        }
+        ConfigKind::Local { upload_token, volatile } => Ok(IndexKind::Local {
+            upload_token: upload_token.clone(),
+            volatile: *volatile,
+        }),
+        ConfigKind::Overlay { layers, upload } => {
+            let layer_positions = layers
+                .iter()
+                .map(|name| resolve_name(&index.name, name, positions))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let upload_pos = resolve_upload(index, upload.as_deref(), &layer_positions, configs, positions)?;
+            Ok(IndexKind::Overlay {
+                layers: layer_positions,
+                upload: upload_pos,
+            })
+        }
+    }
+}
+
+fn resolve_name(overlay: &str, name: &str, positions: &HashMap<&str, usize>) -> anyhow::Result<usize> {
+    positions
+        .get(name)
+        .copied()
+        .with_context(|| format!("overlay {overlay} references unknown index {name}"))
+}
+
+/// The overlay's upload target: the named local index, or (when unset) the first local layer.
+fn resolve_upload(
+    index: &IndexConfig,
+    upload: Option<&str>,
+    layers: &[usize],
+    configs: &[IndexConfig],
+    positions: &HashMap<&str, usize>,
+) -> anyhow::Result<Option<usize>> {
+    match upload {
+        Some(name) => {
+            let pos = resolve_name(&index.name, name, positions)?;
+            if !matches!(configs[pos].kind, ConfigKind::Local { .. }) {
+                bail!("overlay {} upload target {name} is not a local index", index.name);
+            }
+            Ok(Some(pos))
+        }
+        None => Ok(layers
+            .iter()
+            .copied()
+            .find(|&pos| matches!(configs[pos].kind, ConfigKind::Local { .. }))),
+    }
+}
+
+/// Derive upstream authentication: a bearer token takes precedence over a username/password pair;
+/// otherwise the mirror is anonymous.
+pub(crate) fn mirror_auth(token: Option<&str>, username: Option<&str>, password: Option<&str>) -> Auth {
+    match (token, username, password) {
+        (Some(token), _, _) => Auth::Bearer(token.to_owned()),
         (None, Some(username), Some(password)) => Auth::Basic {
-            username: username.clone(),
-            password: password.clone(),
+            username: username.to_owned(),
+            password: password.to_owned(),
         },
         _ => Auth::None,
     }

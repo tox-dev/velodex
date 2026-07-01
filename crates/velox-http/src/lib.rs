@@ -8,7 +8,7 @@ pub mod state;
 pub mod upload;
 
 pub use router::router;
-pub use state::{AppState, StateConfig};
+pub use state::{AppState, Index, IndexKind};
 
 #[cfg(test)]
 mod tests;

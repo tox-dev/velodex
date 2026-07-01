@@ -3,25 +3,28 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::get;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
 use crate::state::AppState;
 
-/// Build the velox HTTP router over the given state. Every request is traced (method, path,
+/// Build the velox HTTP router.
+///
+/// All index traffic lands on a catch-all path that the handlers resolve to a configured index by
+/// longest route prefix, so routes are data, not hardcoded. Every request is traced (method, path,
 /// status) at debug level, which is how the `.metadata` fast path can be observed in the logs.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/{user}/{index}/", post(handlers::upload))
-        .route("/{user}/{index}/simple/", get(handlers::simple_index))
-        .route("/{user}/{index}/simple/{project}/", get(handlers::simple_detail))
-        .route(
-            "/{user}/{index}/files/{sha256}/{filename}",
-            get(handlers::file_download),
-        )
         .route("/+status", get(handlers::status))
         .route("/metrics", get(handlers::metrics))
+        .route(
+            "/{*path}",
+            get(handlers::dispatch_get)
+                .post(handlers::dispatch_post)
+                .put(handlers::dispatch_put)
+                .delete(handlers::dispatch_delete),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

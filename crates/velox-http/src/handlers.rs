@@ -1,4 +1,11 @@
 //! axum request handlers.
+//!
+//! All index traffic arrives on a catch-all path that is resolved to a configured index by longest
+//! route prefix, then dispatched by method and remainder.
+#![allow(
+    clippy::result_large_err,
+    reason = "handler helpers carry an axum Response as their error; boxing it everywhere adds noise"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -6,11 +13,13 @@ use std::sync::atomic::Ordering;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use velox_core::pypi::{ProjectDetail, ProjectList, normalize_name, render_detail_html, render_index_html, to_json};
+use velox_core::pypi::{
+    ProjectDetail, ProjectList, Yanked, normalize_name, render_detail_html, render_index_html, to_json,
+};
 use velox_storage::blob::Digest;
 
 use crate::cache::{self, CacheError};
-use crate::state::AppState;
+use crate::state::{AppState, Index, IndexKind};
 use crate::upload::{self, UploadError, UploadForm};
 
 const MIME_JSON: &str = "application/vnd.pypi.simple.v1+json";
@@ -34,17 +43,191 @@ fn negotiate(headers: &HeaderMap) -> Format {
     }
 }
 
-/// `GET /{user}/{index}/simple/` — the observed project list.
-pub async fn simple_index(
+/// `GET /{route}/...` — project list, project detail, or a file/metadata download.
+pub async fn dispatch_get(
     State(state): State<Arc<AppState>>,
-    Path((user, index)): Path<(String, String)>,
+    Path(path): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
-    let Some(index_key) = state.resolve_index(&user, &index) else {
-        return (StatusCode::NOT_FOUND, "unknown index").into_response();
+    let Some((index, rest)) = state.resolve(&path) else {
+        return not_found();
     };
-    index_response(cache::project_list(&state, &index_key), negotiate(&headers))
+    if rest == "simple/" {
+        return index_response(cache::resolve_list(&state, index), negotiate(&headers));
+    }
+    if let Some(project) = rest.strip_prefix("simple/").and_then(|rest| rest.strip_suffix('/')) {
+        let normalized = normalize_name(project);
+        let detail = cache::resolve_detail(&state, index, &normalized, &index.route).await;
+        return detail_response(detail, negotiate(&headers));
+    }
+    if let Some(file) = rest.strip_prefix("files/") {
+        return file_route(&state, file).await;
+    }
+    not_found()
+}
+
+async fn file_route(state: &AppState, file: &str) -> Response {
+    let Some((sha256, filename)) = file.split_once('/') else {
+        return not_found();
+    };
+    let Some(digest) = Digest::from_hex(sha256) else {
+        return (StatusCode::BAD_REQUEST, "invalid digest").into_response();
+    };
+    if filename.ends_with(".metadata") {
+        state.metadata_requests.fetch_add(1, Ordering::Relaxed);
+        file_response(cache::metadata_bytes(state, &digest).await)
+    } else {
+        file_response(cache::file_bytes(state, &digest).await)
+    }
+}
+
+/// `POST /{route}/` — the legacy multipart upload API, used unchanged by twine and `uv publish`.
+pub async fn dispatch_post(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Response {
+    state.requests.fetch_add(1, Ordering::Relaxed);
+    let Some((index, rest)) = state.resolve(&path) else {
+        return not_found();
+    };
+    if !rest.is_empty() {
+        return not_found();
+    }
+    let Some(local) = upload_target(&state, index) else {
+        return (StatusCode::METHOD_NOT_ALLOWED, "index does not accept uploads").into_response();
+    };
+    if let Err(response) = authorize(local, &headers) {
+        return response;
+    }
+    let form = match collect_form(multipart).await {
+        Ok(form) => form,
+        Err(response) => return response,
+    };
+    let prepared = match upload::prepare(form, &index.route) {
+        Ok(prepared) => prepared,
+        Err(err) => return upload_error_response(&err),
+    };
+    match cache::store_upload(&state, &local.name, &prepared) {
+        Ok(()) => (StatusCode::OK, "upload accepted").into_response(),
+        Err(err) => {
+            tracing::error!(error = ?err, "upload store failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "storage error").into_response()
+        }
+    }
+}
+
+/// `PUT /{route}/{project}/[{version}/]yank` — mark uploaded files yanked (PEP 592, reversible).
+pub async fn dispatch_put(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    state.requests.fetch_add(1, Ordering::Relaxed);
+    let (local, spec) = match removal_target(&state, &path, &headers) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    let Some(spec) = spec.strip_suffix("yank") else {
+        return not_found();
+    };
+    let (project, version) = parse_project_version(spec);
+    count_response(cache::yank_uploads(
+        &state,
+        &local.name,
+        &project,
+        version.as_deref(),
+        &Yanked::Yes,
+    ))
+}
+
+/// `DELETE /{route}/{project}/[{version}/]` removes uploaded files; a `.../yank` suffix un-yanks.
+pub async fn dispatch_delete(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    state.requests.fetch_add(1, Ordering::Relaxed);
+    let (local, spec) = match removal_target(&state, &path, &headers) {
+        Ok(target) => target,
+        Err(response) => return response,
+    };
+    if let Some(spec) = spec.strip_suffix("yank") {
+        let (project, version) = parse_project_version(spec);
+        return count_response(cache::yank_uploads(
+            &state,
+            &local.name,
+            &project,
+            version.as_deref(),
+            &Yanked::No,
+        ));
+    }
+    if !is_volatile(local) {
+        return (StatusCode::FORBIDDEN, "index is not volatile; delete is disabled").into_response();
+    }
+    let (project, version) = parse_project_version(spec);
+    count_response(cache::delete_uploads(&state, &local.name, &project, version.as_deref()))
+}
+
+/// Resolve the writable local index for a mutation request and authorize it, returning that index
+/// and the path remainder (the `{project}/...` part).
+fn removal_target<'a>(
+    state: &'a AppState,
+    path: &'a str,
+    headers: &HeaderMap,
+) -> Result<(&'a Index, &'a str), Response> {
+    let (index, rest) = state.resolve(path).ok_or_else(not_found)?;
+    let local = upload_target(state, index)
+        .ok_or_else(|| (StatusCode::METHOD_NOT_ALLOWED, "index is read-only").into_response())?;
+    authorize(local, headers)?;
+    Ok((local, rest))
+}
+
+/// The writable local index behind `index`: itself if local, its upload layer if an overlay.
+fn upload_target<'a>(state: &'a AppState, index: &'a Index) -> Option<&'a Index> {
+    match &index.kind {
+        IndexKind::Local { .. } => Some(index),
+        IndexKind::Overlay { upload: Some(pos), .. } => Some(state.index_at(*pos)),
+        IndexKind::Mirror(_) | IndexKind::Overlay { upload: None, .. } => None,
+    }
+}
+
+const fn is_volatile(local: &Index) -> bool {
+    matches!(local.kind, IndexKind::Local { volatile: true, .. })
+}
+
+/// Check the Basic-auth token of a local index, returning a ready response on any failure.
+fn authorize(local: &Index, headers: &HeaderMap) -> Result<(), Response> {
+    let IndexKind::Local { upload_token, .. } = &local.kind else {
+        return Err(not_found());
+    };
+    let Some(token) = upload_token.as_deref() else {
+        return Err((StatusCode::FORBIDDEN, "uploads are disabled").into_response());
+    };
+    let auth = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
+    if upload::authorized(auth, token) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Basic realm=\"velox\"")],
+            "unauthorized",
+        )
+            .into_response())
+    }
+}
+
+fn parse_project_version(spec: &str) -> (String, Option<String>) {
+    let trimmed = spec.trim_matches('/');
+    let mut parts = trimmed.splitn(2, '/');
+    let project = normalize_name(parts.next().unwrap_or_default());
+    let version = parts
+        .next()
+        .map(|version| version.trim_matches('/').to_owned())
+        .filter(|version| !version.is_empty());
+    (project, version)
 }
 
 /// Map a project-list result to a negotiated response. Sync so every arm is directly testable.
@@ -56,24 +239,6 @@ pub(crate) fn index_response(result: Result<ProjectList, CacheError>, format: Fo
     match format {
         Format::Json => ([(header::CONTENT_TYPE, MIME_JSON), vary], to_json(&list)).into_response(),
         Format::Html => ([(header::CONTENT_TYPE, MIME_HTML), vary], render_index_html(&list)).into_response(),
-    }
-}
-
-/// `GET /{user}/{index}/simple/{project}/` — the project detail page.
-pub async fn simple_detail(
-    State(state): State<Arc<AppState>>,
-    Path((user, index, project)): Path<(String, String, String)>,
-    headers: HeaderMap,
-) -> Response {
-    state.requests.fetch_add(1, Ordering::Relaxed);
-    let normalized = normalize_name(&project);
-    let format = negotiate(&headers);
-    if state.is_mirror(&user, &index) {
-        detail_response(cache::project_detail(&state, &normalized).await, format)
-    } else if state.is_upload(&user, &index) {
-        detail_response(cache::uploaded_detail(&state, &normalized), format)
-    } else {
-        (StatusCode::NOT_FOUND, "unknown index").into_response()
     }
 }
 
@@ -95,27 +260,6 @@ pub(crate) fn detail_response(result: Result<Option<ProjectDetail>, CacheError>,
     }
 }
 
-/// `GET /{user}/{index}/files/{sha256}/{filename}` — a cached (or lazily fetched) blob. A
-/// `{filename}.metadata` request serves the wheel's PEP 658 metadata sibling instead.
-pub async fn file_download(
-    State(state): State<Arc<AppState>>,
-    Path((user, index, sha256, filename)): Path<(String, String, String, String)>,
-) -> Response {
-    state.requests.fetch_add(1, Ordering::Relaxed);
-    if state.resolve_index(&user, &index).is_none() {
-        return (StatusCode::NOT_FOUND, "unknown index").into_response();
-    }
-    let Some(digest) = Digest::from_hex(&sha256) else {
-        return (StatusCode::BAD_REQUEST, "invalid digest").into_response();
-    };
-    if filename.ends_with(".metadata") {
-        state.metadata_requests.fetch_add(1, Ordering::Relaxed);
-        file_response(cache::metadata_bytes(&state, &digest).await)
-    } else {
-        file_response(cache::file_bytes(&state, &digest).await)
-    }
-}
-
 /// Map a file-bytes result to a response. Sync so every arm is directly unit-testable.
 pub(crate) fn file_response(result: Result<bytes::Bytes, CacheError>) -> Response {
     match result {
@@ -132,45 +276,19 @@ pub(crate) fn file_response(result: Result<bytes::Bytes, CacheError>) -> Respons
     }
 }
 
-/// `POST /{user}/{index}/` — the legacy multipart upload API, used unchanged by twine and
-/// `uv publish`. Requires the upload index and a valid Basic-auth token.
-pub async fn upload(
-    State(state): State<Arc<AppState>>,
-    Path((user, index)): Path<(String, String)>,
-    headers: HeaderMap,
-    multipart: Multipart,
-) -> Response {
-    state.requests.fetch_add(1, Ordering::Relaxed);
-    if !state.is_upload(&user, &index) {
-        return (StatusCode::NOT_FOUND, "unknown index").into_response();
-    }
-    let Some(token) = state.upload_token.as_deref() else {
-        return (StatusCode::FORBIDDEN, "uploads are disabled").into_response();
-    };
-    let auth = headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok());
-    if !upload::authorized(auth, token) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Basic realm=\"velox\"")],
-            "unauthorized",
-        )
-            .into_response();
-    }
-    let form = match collect_form(multipart).await {
-        Ok(form) => form,
-        Err(response) => return response,
-    };
-    let prepared = match upload::prepare(form, &state.upload_index) {
-        Ok(prepared) => prepared,
-        Err(err) => return upload_error_response(&err),
-    };
-    match cache::store_upload(&state, &prepared) {
-        Ok(()) => (StatusCode::OK, "upload accepted").into_response(),
+fn count_response(result: Result<usize, CacheError>) -> Response {
+    match result {
+        Ok(0) => (StatusCode::NOT_FOUND, "nothing to remove").into_response(),
+        Ok(count) => (StatusCode::OK, format!("removed {count} file(s)")).into_response(),
         Err(err) => {
-            tracing::error!(error = ?err, "upload store failed");
+            tracing::error!(error = ?err, "removal failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "storage error").into_response()
         }
     }
+}
+
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 /// Drain a multipart body into an [`UploadForm`], reading the `content` part as bytes and the rest
@@ -216,9 +334,10 @@ fn upload_error_response(err: &UploadError) -> Response {
 /// `GET /+status` — health and identity.
 pub async fn status(State(state): State<Arc<AppState>>) -> Response {
     let serial = state.meta.current_serial().unwrap_or(0);
+    let routes: Vec<&str> = state.indexes.iter().map(|index| index.route.as_str()).collect();
     axum::Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "index": state.index,
+        "indexes": routes,
         "serial": serial,
     }))
     .into_response()

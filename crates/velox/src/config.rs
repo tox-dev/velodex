@@ -14,22 +14,47 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub data_dir: PathBuf,
-    pub upstream_url: String,
-    /// Username for the upstream mirror (Basic auth), for example `__token__` for pypi.org tokens.
-    pub upstream_username: Option<String>,
-    pub upstream_password: Option<String>,
-    /// Bearer token for the upstream mirror (Artifactory/GitLab access tokens); takes precedence
-    /// over username/password.
-    pub upstream_token: Option<String>,
-    /// The route prefix of the mirror index, for example `root/pypi`.
-    pub index: String,
-    /// The route prefix of the private upload index, for example `root/local`.
-    pub upload_index: String,
-    /// The shared secret an upload must present as its Basic-auth password. `None` disables uploads.
-    pub upload_token: Option<String>,
     /// How long a cached simple page is served before revalidating, in seconds.
     pub cache_ttl_secs: i64,
+    /// The configured indexes: mirrors, local (hosted) stores, and overlays that compose them.
+    pub indexes: Vec<IndexConfig>,
     pub log: LogConfig,
+}
+
+/// One configured index, addressed at `route`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexConfig {
+    /// Identifier other indexes reference in their `layers`.
+    pub name: String,
+    /// URL prefix the index is served under, for example `root/pypi`.
+    pub route: String,
+    pub kind: IndexKind,
+}
+
+/// The three composable index shapes: a read-through mirror, a writable local store, or an overlay
+/// that layers other indexes under one route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexKind {
+    /// Proxy and cache an upstream simple index.
+    Mirror {
+        upstream: String,
+        username: Option<String>,
+        password: Option<String>,
+        /// Bearer token; takes precedence over username/password.
+        token: Option<String>,
+    },
+    /// A hosted store that accepts uploads. `upload_token` is the Basic-auth password an upload must
+    /// present (`None` disables uploads); `volatile` allows delete and overwrite.
+    Local {
+        upload_token: Option<String>,
+        volatile: bool,
+    },
+    /// An ordered composition of other indexes (by name). Resolution merges layers first-match; a
+    /// file in an earlier layer shadows a later one. Uploads target `upload` (a local layer name).
+    Overlay {
+        layers: Vec<String>,
+        upload: Option<String>,
+    },
 }
 
 impl Default for Config {
@@ -38,23 +63,53 @@ impl Default for Config {
             host: "127.0.0.1".to_owned(),
             port: 4433,
             data_dir: PathBuf::from("velox-data"),
-            upstream_url: "https://pypi.org/simple/".to_owned(),
-            upstream_username: None,
-            upstream_password: None,
-            upstream_token: None,
-            index: "root/pypi".to_owned(),
-            upload_index: "root/local".to_owned(),
-            upload_token: None,
             cache_ttl_secs: 1800,
+            indexes: default_indexes(),
             log: LogConfig::default(),
         }
     }
 }
 
+/// The out-of-the-box topology: a pypi.org mirror with a local store overlaid in front of it, served
+/// together at `root/pypi`. Uploads to `root/pypi` land in the local layer once a token is set.
+fn default_indexes() -> Vec<IndexConfig> {
+    vec![
+        IndexConfig {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                upstream: "https://pypi.org/simple/".to_owned(),
+                username: None,
+                password: None,
+                token: None,
+            },
+        },
+        IndexConfig {
+            name: "local".to_owned(),
+            route: "local".to_owned(),
+            kind: IndexKind::Local {
+                upload_token: None,
+                volatile: true,
+            },
+        },
+        IndexConfig {
+            name: "root/pypi".to_owned(),
+            route: "root/pypi".to_owned(),
+            kind: IndexKind::Overlay {
+                layers: vec!["local".to_owned(), "pypi".to_owned()],
+                upload: Some("local".to_owned()),
+            },
+        },
+    ]
+}
+
 impl Config {
     /// Overlay a partial source on top of these values, returning the merged config.
-    #[must_use]
-    pub fn apply(mut self, partial: PartialConfig) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`ConfigError::Index`] if the partial defines indexes but one is not classifiable as a
+    /// mirror, local, or overlay.
+    pub fn apply(mut self, partial: PartialConfig) -> Result<Self, ConfigError> {
         if let Some(host) = partial.host {
             self.host = host;
         }
@@ -64,33 +119,49 @@ impl Config {
         if let Some(data_dir) = partial.data_dir {
             self.data_dir = data_dir;
         }
-        if let Some(upstream_url) = partial.upstream_url {
-            self.upstream_url = upstream_url;
-        }
-        if partial.upstream_username.is_some() {
-            self.upstream_username = partial.upstream_username;
-        }
-        if partial.upstream_password.is_some() {
-            self.upstream_password = partial.upstream_password;
-        }
-        if partial.upstream_token.is_some() {
-            self.upstream_token = partial.upstream_token;
-        }
-        if let Some(index) = partial.index {
-            self.index = index;
-        }
-        if let Some(upload_index) = partial.upload_index {
-            self.upload_index = upload_index;
-        }
-        if partial.upload_token.is_some() {
-            self.upload_token = partial.upload_token;
-        }
         if let Some(cache_ttl_secs) = partial.cache_ttl_secs {
             self.cache_ttl_secs = cache_ttl_secs;
         }
+        if let Some(raw) = partial.indexes {
+            self.indexes = raw.into_iter().map(classify_index).collect::<Result<_, _>>()?;
+        }
         self.log = self.log.apply(partial.log);
-        self
+        Ok(self)
     }
+}
+
+/// Turn a raw `[[index]]` table into a classified [`IndexConfig`]: `layers` makes an overlay, else
+/// `mirror` makes a mirror, else `local`/`upload_token` makes a local store.
+fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
+    let route = raw.route.clone().unwrap_or_else(|| raw.name.clone());
+    let kind = if let Some(layers) = raw.layers {
+        IndexKind::Overlay {
+            layers,
+            upload: raw.upload,
+        }
+    } else if let Some(upstream) = raw.mirror {
+        IndexKind::Mirror {
+            upstream,
+            username: raw.username,
+            password: raw.password,
+            token: raw.token,
+        }
+    } else if raw.local == Some(true) || raw.upload_token.is_some() {
+        IndexKind::Local {
+            upload_token: raw.upload_token,
+            volatile: raw.volatile.unwrap_or(true),
+        }
+    } else {
+        return Err(ConfigError::Index {
+            name: raw.name,
+            reason: "index needs one of `mirror`, `local`, or `layers`",
+        });
+    };
+    Ok(IndexConfig {
+        name: raw.name,
+        route,
+        kind,
+    })
 }
 
 /// Logging configuration: level filter, output format, and sink.
@@ -154,22 +225,36 @@ pub enum LogSink {
     Syslog,
 }
 
-/// A configuration source with every field optional, used for file, env, and CLI overlays.
+/// A configuration source with every field optional, used for the file and CLI overlays.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PartialConfig {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub data_dir: Option<PathBuf>,
-    pub upstream_url: Option<String>,
-    pub upstream_username: Option<String>,
-    pub upstream_password: Option<String>,
-    pub upstream_token: Option<String>,
-    pub index: Option<String>,
-    pub upload_index: Option<String>,
-    pub upload_token: Option<String>,
     pub cache_ttl_secs: Option<i64>,
+    /// The `[[index]]` array from the TOML file. When present it replaces the default topology.
+    #[serde(rename = "index")]
+    pub indexes: Option<Vec<RawIndex>>,
     pub log: PartialLogConfig,
+}
+
+/// A raw `[[index]]` table before classification. Exactly one of `mirror`, `local`, or `layers`
+/// selects the kind; [`classify_index`] enforces that.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawIndex {
+    pub name: String,
+    pub route: Option<String>,
+    pub mirror: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub token: Option<String>,
+    pub local: Option<bool>,
+    pub upload_token: Option<String>,
+    pub volatile: Option<bool>,
+    pub layers: Option<Vec<String>>,
+    pub upload: Option<String>,
 }
 
 /// The logging half of [`PartialConfig`].
@@ -189,6 +274,8 @@ pub enum ConfigError {
     Read { path: PathBuf, source: std::io::Error },
     #[error("failed to parse config file {path}: {source}")]
     Parse { path: PathBuf, source: toml::de::Error },
+    #[error("index {name}: {reason}")]
+    Index { name: String, reason: &'static str },
 }
 
 /// Parse a TOML document into a [`PartialConfig`].

@@ -19,9 +19,9 @@ type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
 fn resolve_config(cli: &Cli) -> anyhow::Result<Config> {
     let mut cfg = Config::default();
     if let Some(path) = &cli.config {
-        cfg = cfg.apply(config::from_file(path.clone())?);
+        cfg = cfg.apply(config::from_file(path.clone())?)?;
     }
-    cfg = cfg.apply(cli.overlay());
+    cfg = cfg.apply(cli.overlay())?;
     Ok(cfg)
 }
 
@@ -89,7 +89,7 @@ fn run_server(config: &Config) -> anyhow::Result<()> {
         let router = velox::server::build_router(config)?;
         let addr = format!("{}:{}", config.host, config.port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        tracing::info!(%addr, upstream = %config.upstream_url, "velox listening");
+        tracing::info!(%addr, indexes = config.indexes.len(), "velox listening");
         axum::serve(listener, router).await?;
         anyhow::Ok(())
     })

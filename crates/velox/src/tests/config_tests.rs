@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
-use crate::config::{self, Config, LogConfig, LogFormat, LogSink, PartialConfig, PartialLogConfig};
+use crate::config::{self, Config, IndexKind, LogConfig, LogFormat, LogSink, PartialConfig, PartialLogConfig};
+
+fn toml_config(text: &str) -> Config {
+    let partial = config::from_toml(PathBuf::from("x.toml"), text).unwrap();
+    Config::default().apply(partial).unwrap()
+}
 
 #[test]
 fn test_default_config() {
@@ -8,65 +13,47 @@ fn test_default_config() {
     assert_eq!(c.host, "127.0.0.1");
     assert_eq!(c.port, 4433);
     assert_eq!(c.data_dir, PathBuf::from("velox-data"));
-    assert_eq!(c.upstream_url, "https://pypi.org/simple/");
-    assert_eq!(c.upstream_username, None);
-    assert_eq!(c.upstream_password, None);
-    assert_eq!(c.upstream_token, None);
-    assert_eq!(c.index, "root/pypi");
     assert_eq!(c.cache_ttl_secs, 1800);
     assert_eq!(c.log, LogConfig::default());
-}
-
-#[test]
-fn test_apply_upstream_auth_and_index() {
-    let partial = PartialConfig {
-        upstream_username: Some("__token__".to_owned()),
-        upstream_password: Some("secret".to_owned()),
-        upstream_token: Some("bearer-tok".to_owned()),
-        index: Some("team/private".to_owned()),
-        upload_index: Some("team/local".to_owned()),
-        upload_token: Some("upload-tok".to_owned()),
-        cache_ttl_secs: Some(60),
-        ..PartialConfig::default()
-    };
-    let merged = Config::default().apply(partial);
-    assert_eq!(merged.upstream_username.as_deref(), Some("__token__"));
-    assert_eq!(merged.upstream_password.as_deref(), Some("secret"));
-    assert_eq!(merged.upstream_token.as_deref(), Some("bearer-tok"));
-    assert_eq!(merged.index, "team/private");
-    assert_eq!(merged.upload_index, "team/local");
-    assert_eq!(merged.upload_token.as_deref(), Some("upload-tok"));
-    assert_eq!(merged.cache_ttl_secs, 60);
+    // A pypi mirror with a local store overlaid in front, served at root/pypi.
+    let routes: Vec<&str> = c.indexes.iter().map(|index| index.route.as_str()).collect();
+    assert_eq!(routes, ["pypi", "local", "root/pypi"]);
+    assert!(matches!(c.indexes[0].kind, IndexKind::Mirror { .. }));
+    assert!(matches!(c.indexes[1].kind, IndexKind::Local { .. }));
+    assert!(matches!(&c.indexes[2].kind, IndexKind::Overlay { upload: Some(target), .. } if target == "local"));
 }
 
 #[test]
 fn test_apply_overlays_only_present_fields() {
-    let partial = PartialConfig {
-        host: Some("0.0.0.0".to_owned()),
-        port: Some(9000),
-        upstream_url: Some("https://example.test/simple/".to_owned()),
-        ..PartialConfig::default()
-    };
-    let merged = Config::default().apply(partial);
+    let merged = Config::default()
+        .apply(PartialConfig {
+            host: Some("0.0.0.0".to_owned()),
+            port: Some(9000),
+            cache_ttl_secs: Some(60),
+            ..PartialConfig::default()
+        })
+        .unwrap();
     assert_eq!(merged.host, "0.0.0.0");
     assert_eq!(merged.port, 9000);
+    assert_eq!(merged.cache_ttl_secs, 60);
     assert_eq!(merged.data_dir, PathBuf::from("velox-data"));
-    assert_eq!(merged.upstream_url, "https://example.test/simple/");
+    assert_eq!(merged.indexes.len(), 3); // untouched, so the defaults remain
 }
 
 #[test]
 fn test_apply_data_dir_and_log() {
-    let partial = PartialConfig {
-        data_dir: Some(PathBuf::from("/tmp/velox")),
-        log: PartialLogConfig {
-            level: Some("debug".to_owned()),
-            format: Some(LogFormat::Json),
-            sink: Some(LogSink::File),
-            file: Some(PathBuf::from("velox.log")),
-        },
-        ..PartialConfig::default()
-    };
-    let merged = Config::default().apply(partial);
+    let merged = Config::default()
+        .apply(PartialConfig {
+            data_dir: Some(PathBuf::from("/tmp/velox")),
+            log: PartialLogConfig {
+                level: Some("debug".to_owned()),
+                format: Some(LogFormat::Json),
+                sink: Some(LogSink::File),
+                file: Some(PathBuf::from("velox.log")),
+            },
+            ..PartialConfig::default()
+        })
+        .unwrap();
     assert_eq!(merged.data_dir, PathBuf::from("/tmp/velox"));
     assert_eq!(merged.log.level, "debug");
     assert_eq!(merged.log.format, LogFormat::Json);
@@ -81,37 +68,51 @@ fn test_log_config_apply_empty_keeps_defaults() {
 }
 
 #[test]
-fn test_from_toml_ok() {
+fn test_indexes_from_toml_classify_all_kinds() {
     let text = "\
-host = \"1.2.3.4\"\n\
-port = 8080\n\
-upstream_url = \"https://up/simple/\"\n\
-upstream_username = \"__token__\"\n\
-upstream_password = \"secret\"\n\
-index = \"team/pypi\"\n\
-upload_index = \"team/local\"\n\
-upload_token = \"upload-tok\"\n\
-cache_ttl_secs = 300\n\
-[log]\nlevel = \"warn\"\nformat = \"json\"\nsink = \"stdout\"\n";
-    let p = config::from_toml(PathBuf::from("x.toml"), text).unwrap();
-    assert_eq!(p.host.as_deref(), Some("1.2.3.4"));
-    assert_eq!(p.port, Some(8080));
-    assert_eq!(p.upstream_url.as_deref(), Some("https://up/simple/"));
-    assert_eq!(p.upstream_username.as_deref(), Some("__token__"));
-    assert_eq!(p.upstream_password.as_deref(), Some("secret"));
-    assert_eq!(p.index.as_deref(), Some("team/pypi"));
-    assert_eq!(p.upload_index.as_deref(), Some("team/local"));
-    assert_eq!(p.upload_token.as_deref(), Some("upload-tok"));
-    assert_eq!(p.cache_ttl_secs, Some(300));
-    assert_eq!(p.log.level.as_deref(), Some("warn"));
-    assert_eq!(p.log.format, Some(LogFormat::Json));
-    assert_eq!(p.log.sink, Some(LogSink::Stdout));
+[[index]]\nname = \"pypi\"\nmirror = \"https://pypi.org/simple/\"\ntoken = \"bear\"\n\
+[[index]]\nname = \"corp\"\nmirror = \"https://corp/simple/\"\nusername = \"u\"\npassword = \"p\"\n\
+[[index]]\nname = \"team-local\"\nlocal = true\nupload_token = \"s\"\nvolatile = false\n\
+[[index]]\nname = \"secret\"\nupload_token = \"z\"\n\
+[[index]]\nname = \"team\"\nroute = \"team/dev\"\nlayers = [\"team-local\", \"pypi\"]\nupload = \"team-local\"\n";
+    let c = toml_config(text);
+    assert_eq!(c.indexes.len(), 5);
+    assert_eq!(c.indexes[0].route, "pypi"); // route defaults to name
+    assert!(matches!(&c.indexes[0].kind, IndexKind::Mirror { token: Some(token), .. } if token == "bear"));
+    assert!(matches!(
+        &c.indexes[1].kind,
+        IndexKind::Mirror {
+            username: Some(_),
+            password: Some(_),
+            token: None,
+            ..
+        }
+    ));
+    assert!(matches!(c.indexes[2].kind, IndexKind::Local { volatile: false, .. })); // explicit local, non-volatile
+    assert!(matches!(c.indexes[3].kind, IndexKind::Local { volatile: true, .. })); // upload_token implies local, default volatile
+    assert_eq!(c.indexes[4].route, "team/dev");
+    assert!(
+        matches!(&c.indexes[4].kind, IndexKind::Overlay { layers, upload: Some(upload) }
+            if layers == &["team-local".to_owned(), "pypi".to_owned()] && upload == "team-local")
+    );
+}
+
+#[test]
+fn test_index_without_kind_is_error() {
+    let partial = config::from_toml(PathBuf::from("x.toml"), "[[index]]\nname = \"bad\"\n").unwrap();
+    let err = Config::default().apply(partial).unwrap_err();
+    assert!(err.to_string().contains("bad"));
 }
 
 #[test]
 fn test_from_toml_rejects_unknown_key() {
     let err = config::from_toml(PathBuf::from("bad.toml"), "bogus = 1").unwrap_err();
     assert!(err.to_string().contains("bad.toml"));
+}
+
+#[test]
+fn test_from_toml_rejects_unknown_index_key() {
+    assert!(config::from_toml(PathBuf::from("x.toml"), "[[index]]\nname = \"a\"\nbogus = 1\n").is_err());
 }
 
 #[test]
@@ -127,14 +128,6 @@ fn test_from_toml_rejects_invalid_log_format() {
 #[test]
 fn test_from_toml_rejects_invalid_log_sink() {
     assert!(config::from_toml(PathBuf::from("x.toml"), "[log]\nsink = \"kafka\"\n").is_err());
-}
-
-#[test]
-fn test_from_toml_bearer_token_and_upstream_url() {
-    let text = "upstream_url = \"https://up/simple/\"\nupstream_token = \"bearer-tok\"\n";
-    let p = config::from_toml(PathBuf::from("x.toml"), text).unwrap();
-    assert_eq!(p.upstream_token.as_deref(), Some("bearer-tok"));
-    assert_eq!(p.upstream_url.as_deref(), Some("https://up/simple/"));
 }
 
 #[test]
