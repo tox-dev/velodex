@@ -35,7 +35,10 @@ so in [§14](#14-what-velox-changes-vs-devpi).
 ### Goals
 
 - **Zero-config read-through cache.** Run the binary, point pip/uv/twine at it, and it proxies and permanently caches
-  pypi.org. Cached artifacts stay immutable and serve forever; only index pages revalidate.
+  pypi.org. Cached artifacts stay immutable and serve forever; only index pages revalidate. pypi.org is the default
+  upstream; a TOML config file or CLI flags (with matching env vars, precedence defaults < file < env < flags) repoint
+  the mirror at any other index instead, such as a private Artifactory or an internal devpi, and configure additional
+  mirrors alongside it.
 - **Private overlay indexes.** Teams publish private packages into indexes that inherit from the mirror and from each
   other. A locally published project shadows the upstream one, which gives dependency-confusion defense by default, as
   in devpi \[devpi model.py:1229 `sro()`\].
