@@ -30,21 +30,44 @@ pub enum UpstreamError {
     Http(#[from] reqwest::Error),
 }
 
+/// How velox authenticates to a private upstream. `Basic` covers pypi.org tokens (`__token__` +
+/// token) and Artifactory/GitLab username/password; `Bearer` covers access/identity tokens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Auth {
+    #[default]
+    None,
+    Basic {
+        username: String,
+        password: String,
+    },
+    Bearer(String),
+}
+
 /// A client for one upstream index, rooted at its `/simple/` base URL.
 #[derive(Debug, Clone)]
 pub struct UpstreamClient {
     http: reqwest::Client,
     base: Url,
+    auth: Auth,
 }
 
 impl UpstreamClient {
-    /// Build a client for `base` (for example `https://pypi.org/simple/`). A trailing slash is
-    /// added if missing so project paths join correctly.
+    /// Build an unauthenticated client for `base` (for example `https://pypi.org/simple/`).
     ///
     /// # Errors
     /// Returns [`UpstreamError::Url`] if `base` is not a valid URL, or [`UpstreamError::Http`] if
     /// the HTTP client cannot be built.
     pub fn new(base: &str) -> Result<Self, UpstreamError> {
+        Self::with_auth(base, Auth::None)
+    }
+
+    /// Build a client for `base` with the given upstream authentication. A trailing slash is added
+    /// if missing so project paths join correctly.
+    ///
+    /// # Errors
+    /// Returns [`UpstreamError::Url`] if `base` is not a valid URL, or [`UpstreamError::Http`] if
+    /// the HTTP client cannot be built.
+    pub fn with_auth(base: &str, auth: Auth) -> Result<Self, UpstreamError> {
         let mut base = Url::parse(base)?;
         if !base.path().ends_with('/') {
             let with_slash = format!("{}/", base.path());
@@ -53,7 +76,15 @@ impl UpstreamClient {
         let http = reqwest::Client::builder()
             .user_agent(concat!("velox/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { http, base })
+        Ok(Self { http, base, auth })
+    }
+
+    fn authenticate(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.auth {
+            Auth::None => request,
+            Auth::Basic { username, password } => request.basic_auth(username, Some(password)),
+            Auth::Bearer(token) => request.bearer_auth(token),
+        }
     }
 
     /// Fetch a project's simple page, optionally revalidating with `If-None-Match`.
@@ -62,7 +93,7 @@ impl UpstreamClient {
     /// Returns [`UpstreamError`] if the URL cannot be formed or the request fails.
     pub async fn fetch_project(&self, project: &str, etag: Option<&str>) -> Result<SimpleResponse, UpstreamError> {
         let url = self.base.join(&format!("{project}/"))?;
-        let mut request = self.http.get(url).header(ACCEPT, ACCEPT_SIMPLE);
+        let mut request = self.authenticate(self.http.get(url)).header(ACCEPT, ACCEPT_SIMPLE);
         if let Some(etag) = etag {
             request = request.header(IF_NONE_MATCH, etag);
         }
@@ -74,7 +105,7 @@ impl UpstreamClient {
     /// # Errors
     /// Returns [`UpstreamError::Http`] if the request fails.
     pub async fn fetch_bytes(&self, url: &str) -> Result<Bytes, UpstreamError> {
-        let response = self.http.get(url).send().await?;
+        let response = self.authenticate(self.http.get(url)).send().await?;
         Ok(response.bytes().await?)
     }
 }

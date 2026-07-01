@@ -9,7 +9,24 @@ fn test_default_config() {
     assert_eq!(c.port, 4433);
     assert_eq!(c.data_dir, PathBuf::from("velox-data"));
     assert_eq!(c.upstream_url, "https://pypi.org/simple/");
+    assert_eq!(c.upstream_username, None);
+    assert_eq!(c.upstream_password, None);
+    assert_eq!(c.upstream_token, None);
     assert_eq!(c.log, LogConfig::default());
+}
+
+#[test]
+fn test_apply_upstream_auth() {
+    let partial = PartialConfig {
+        upstream_username: Some("__token__".to_owned()),
+        upstream_password: Some("secret".to_owned()),
+        upstream_token: Some("bearer-tok".to_owned()),
+        ..PartialConfig::default()
+    };
+    let merged = Config::default().apply(partial);
+    assert_eq!(merged.upstream_username.as_deref(), Some("__token__"));
+    assert_eq!(merged.upstream_password.as_deref(), Some("secret"));
+    assert_eq!(merged.upstream_token.as_deref(), Some("bearer-tok"));
 }
 
 #[test]
@@ -92,6 +109,9 @@ fn test_from_env_reads_known_keys_and_ignores_others() {
         ("VELOX_PORT".to_owned(), "7000".to_owned()),
         ("VELOX_DATA_DIR".to_owned(), "/data".to_owned()),
         ("VELOX_UPSTREAM_URL".to_owned(), "https://up/simple/".to_owned()),
+        ("VELOX_UPSTREAM_USERNAME".to_owned(), "user".to_owned()),
+        ("VELOX_UPSTREAM_PASSWORD".to_owned(), "pass".to_owned()),
+        ("VELOX_UPSTREAM_TOKEN".to_owned(), "tok".to_owned()),
         ("VELOX_LOG_LEVEL".to_owned(), "trace".to_owned()),
         ("UNRELATED".to_owned(), "ignored".to_owned()),
     ];
@@ -100,6 +120,9 @@ fn test_from_env_reads_known_keys_and_ignores_others() {
     assert_eq!(p.port, Some(7000));
     assert_eq!(p.data_dir, Some(PathBuf::from("/data")));
     assert_eq!(p.upstream_url.as_deref(), Some("https://up/simple/"));
+    assert_eq!(p.upstream_username.as_deref(), Some("user"));
+    assert_eq!(p.upstream_password.as_deref(), Some("pass"));
+    assert_eq!(p.upstream_token.as_deref(), Some("tok"));
     assert_eq!(p.log.level.as_deref(), Some("trace"));
 }
 

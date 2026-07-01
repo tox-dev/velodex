@@ -73,6 +73,9 @@ impl Cli {
             port: self.port,
             data_dir: self.data_dir.clone(),
             upstream_url: None,
+            upstream_username: None,
+            upstream_password: None,
+            upstream_token: None,
             log: PartialLogConfig {
                 level,
                 format: self.log_format,

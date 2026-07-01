@@ -26,6 +26,44 @@ async fn test_build_router_serves_status() {
 }
 
 #[test]
+fn test_upstream_auth_bearer_takes_precedence() {
+    let config = Config {
+        upstream_token: Some("tok".to_owned()),
+        upstream_username: Some("u".to_owned()),
+        upstream_password: Some("p".to_owned()),
+        ..Config::default()
+    };
+    assert_eq!(
+        crate::server::upstream_auth(&config),
+        velox_upstream::Auth::Bearer("tok".to_owned())
+    );
+}
+
+#[test]
+fn test_upstream_auth_basic() {
+    let config = Config {
+        upstream_username: Some("u".to_owned()),
+        upstream_password: Some("p".to_owned()),
+        ..Config::default()
+    };
+    assert_eq!(
+        crate::server::upstream_auth(&config),
+        velox_upstream::Auth::Basic {
+            username: "u".to_owned(),
+            password: "p".to_owned()
+        }
+    );
+}
+
+#[test]
+fn test_upstream_auth_none() {
+    assert_eq!(
+        crate::server::upstream_auth(&Config::default()),
+        velox_upstream::Auth::None
+    );
+}
+
+#[test]
 fn test_build_router_data_dir_error() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("afile");

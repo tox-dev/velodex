@@ -3,7 +3,7 @@
 
 pub mod client;
 
-pub use client::{SimpleResponse, UpstreamClient, UpstreamError};
+pub use client::{Auth, SimpleResponse, UpstreamClient, UpstreamError};
 
 #[cfg(test)]
 mod tests;

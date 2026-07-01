@@ -15,6 +15,12 @@ pub struct Config {
     pub port: u16,
     pub data_dir: PathBuf,
     pub upstream_url: String,
+    /// Username for the upstream mirror (Basic auth), for example `__token__` for pypi.org tokens.
+    pub upstream_username: Option<String>,
+    pub upstream_password: Option<String>,
+    /// Bearer token for the upstream mirror (Artifactory/GitLab access tokens); takes precedence
+    /// over username/password.
+    pub upstream_token: Option<String>,
     pub log: LogConfig,
 }
 
@@ -25,6 +31,9 @@ impl Default for Config {
             port: 4433,
             data_dir: PathBuf::from("velox-data"),
             upstream_url: "https://pypi.org/simple/".to_owned(),
+            upstream_username: None,
+            upstream_password: None,
+            upstream_token: None,
             log: LogConfig::default(),
         }
     }
@@ -45,6 +54,15 @@ impl Config {
         }
         if let Some(upstream_url) = partial.upstream_url {
             self.upstream_url = upstream_url;
+        }
+        if partial.upstream_username.is_some() {
+            self.upstream_username = partial.upstream_username;
+        }
+        if partial.upstream_password.is_some() {
+            self.upstream_password = partial.upstream_password;
+        }
+        if partial.upstream_token.is_some() {
+            self.upstream_token = partial.upstream_token;
         }
         self.log = self.log.apply(partial.log);
         self
@@ -120,6 +138,9 @@ pub struct PartialConfig {
     pub port: Option<u16>,
     pub data_dir: Option<PathBuf>,
     pub upstream_url: Option<String>,
+    pub upstream_username: Option<String>,
+    pub upstream_password: Option<String>,
+    pub upstream_token: Option<String>,
     pub log: PartialLogConfig,
 }
 
@@ -175,6 +196,9 @@ pub fn from_env(vars: Vec<(String, String)>) -> Result<PartialConfig, ConfigErro
             }
             "VELOX_DATA_DIR" => partial.data_dir = Some(PathBuf::from(value)),
             "VELOX_UPSTREAM_URL" => partial.upstream_url = Some(value),
+            "VELOX_UPSTREAM_USERNAME" => partial.upstream_username = Some(value),
+            "VELOX_UPSTREAM_PASSWORD" => partial.upstream_password = Some(value),
+            "VELOX_UPSTREAM_TOKEN" => partial.upstream_token = Some(value),
             "VELOX_LOG_LEVEL" => partial.log.level = Some(value),
             _ => {}
         }

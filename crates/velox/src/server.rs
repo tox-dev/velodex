@@ -7,7 +7,7 @@ use axum::Router;
 use velox_http::{AppState, router};
 use velox_storage::blob::BlobStore;
 use velox_storage::meta::MetaStore;
-use velox_upstream::UpstreamClient;
+use velox_upstream::{Auth, UpstreamClient};
 
 use crate::config::Config;
 
@@ -27,7 +27,7 @@ pub fn build_router(config: &Config) -> anyhow::Result<Router> {
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
     let meta = MetaStore::open(config.data_dir.join("velox.redb"))?;
     let blobs = BlobStore::new(config.data_dir.join("blobs"));
-    let upstream = UpstreamClient::new(&config.upstream_url)?;
+    let upstream = UpstreamClient::with_auth(&config.upstream_url, upstream_auth(config))?;
     let state = Arc::new(AppState::new(
         meta,
         blobs,
@@ -36,4 +36,21 @@ pub fn build_router(config: &Config) -> anyhow::Result<Router> {
         DEFAULT_TTL_SECS,
     ));
     Ok(router(state))
+}
+
+/// Derive the upstream authentication from config: a bearer token takes precedence over a
+/// username/password pair; otherwise the mirror is anonymous.
+pub(crate) fn upstream_auth(config: &Config) -> Auth {
+    match (
+        &config.upstream_token,
+        &config.upstream_username,
+        &config.upstream_password,
+    ) {
+        (Some(token), _, _) => Auth::Bearer(token.clone()),
+        (None, Some(username), Some(password)) => Auth::Basic {
+            username: username.clone(),
+            password: password.clone(),
+        },
+        _ => Auth::None,
+    }
 }

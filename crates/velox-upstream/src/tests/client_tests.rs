@@ -1,7 +1,7 @@
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, header_regex, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::client::{UpstreamClient, UpstreamError};
+use crate::client::{Auth, UpstreamClient, UpstreamError};
 
 #[tokio::test]
 async fn test_fetch_project_json_with_metadata() {
@@ -106,4 +106,35 @@ async fn test_new_adds_trailing_slash() {
 fn test_new_rejects_invalid_url() {
     let err = UpstreamClient::new("not a url").unwrap_err();
     assert!(matches!(err, UpstreamError::Url(_)));
+}
+
+#[tokio::test]
+async fn test_fetch_with_basic_auth() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .and(header_regex("authorization", "^Basic "))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let auth = Auth::Basic {
+        username: "__token__".to_owned(),
+        password: "secret".to_owned(),
+    };
+    let client = UpstreamClient::with_auth(&format!("{}/simple/", server.uri()), auth).unwrap();
+    assert_eq!(client.fetch_project("flask", None).await.unwrap().status, 200);
+}
+
+#[tokio::test]
+async fn test_fetch_with_bearer_auth() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .and(header("authorization", "Bearer tok123"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let client =
+        UpstreamClient::with_auth(&format!("{}/simple/", server.uri()), Auth::Bearer("tok123".to_owned())).unwrap();
+    assert_eq!(client.fetch_project("flask", None).await.unwrap().status, 200);
 }
