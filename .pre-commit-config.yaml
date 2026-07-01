@@ -1,0 +1,59 @@
+ci:
+  autoupdate_schedule: monthly
+  # pre-commit.ci has no Rust toolchain; CI runs fmt/clippy instead
+  skip: [cargo-fmt, cargo-clippy]
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --check --
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        types: [rust]
+        pass_filenames: false
+  - repo: https://github.com/hukkin/mdformat
+    rev: 0.7.22
+    hooks:
+      - id: mdformat
+        additional_dependencies: ["mdformat-gfm"]
+        args: ["--wrap", "120"]
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: "v3.8.3"
+    hooks:
+      - id: prettier
+        name: Prettier non-workflow files
+        args: ["--print-width=120", "--prose-wrap=always"]
+        exclude: "(^.github/workflows/|\\.md$)"
+      - id: prettier
+        name: Prettier workflow files
+        args: ["--print-width=240", "--prose-wrap=always"]
+        exclude: "^(?!.github/workflows/)"
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.2
+    hooks:
+      - id: check-github-workflows
+        args: ["--verbose"]
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
+    hooks:
+      - id: codespell
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.25.2
+    hooks:
+      - id: zizmor
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+      - id: check-useless-excludes
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
