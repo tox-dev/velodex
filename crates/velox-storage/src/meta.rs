@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 const SERIAL: TableDefinition<&str, u64> = TableDefinition::new("serial");
 const INDEX: TableDefinition<&str, &[u8]> = TableDefinition::new("simple_index");
+const FILE: TableDefinition<&str, &str> = TableDefinition::new("file_url");
 const SERIAL_KEY: &str = "serial";
 
 /// A cached upstream simple-index response plus the metadata needed to revalidate it.
@@ -76,6 +77,7 @@ impl MetaStore {
         {
             txn.open_table(SERIAL)?;
             txn.open_table(INDEX)?;
+            txn.open_table(FILE)?;
         }
         txn.commit()?;
         Ok(Self { db })
@@ -133,5 +135,29 @@ impl MetaStore {
             Some(value) => Ok(Some(CachedIndex::decode(value.value())?)),
             None => Ok(None),
         }
+    }
+
+    /// Record the upstream URL a blob digest can be fetched from.
+    ///
+    /// # Errors
+    /// Returns a store error if the write or commit fails.
+    pub fn put_file_url(&self, sha256: &str, url: &str) -> Result<(), MetaError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(FILE)?;
+            table.insert(sha256, url)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Look up the upstream URL for a blob digest.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn get_file_url(&self, sha256: &str) -> Result<Option<String>, MetaError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(FILE)?;
+        Ok(table.get(sha256)?.map(|value| value.value().to_owned()))
     }
 }

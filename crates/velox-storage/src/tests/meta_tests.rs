@@ -57,6 +57,17 @@ fn test_reopen_persists() {
 }
 
 #[test]
+fn test_put_and_get_file_url() {
+    let (_dir, store) = store();
+    assert_eq!(store.get_file_url("deadbeef").unwrap(), None);
+    store.put_file_url("deadbeef", "https://files.example/pkg.whl").unwrap();
+    assert_eq!(
+        store.get_file_url("deadbeef").unwrap().as_deref(),
+        Some("https://files.example/pkg.whl")
+    );
+}
+
+#[test]
 fn test_cached_index_encode_decode_roundtrip() {
     assert_eq!(CachedIndex::decode(&record().encode()).unwrap(), record());
 }
