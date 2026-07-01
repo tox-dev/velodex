@@ -10,6 +10,11 @@ default-run = "velox"
 
 [dependencies]
 velox-core.workspace = true
+velox-storage.workspace = true
+velox-upstream.workspace = true
+velox-http.workspace = true
+axum.workspace = true
+tokio.workspace = true
 clap.workspace = true
 serde.workspace = true
 toml.workspace = true
@@ -27,6 +32,8 @@ tracing-journald = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+tower = { workspace = true, features = ["util"] }
+http-body-util.workspace = true
 
 [lints]
 workspace = true

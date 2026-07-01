@@ -1,5 +1,4 @@
 use crate::app::{self, init_data_dir};
-use crate::cli::Command;
 use crate::config::Config;
 
 #[test]
@@ -20,28 +19,18 @@ fn test_init_data_dir_errors_when_parent_is_file() {
 }
 
 #[test]
-fn test_dispatch_init_creates_dir() {
+fn test_init_creates_dir() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
         data_dir: dir.path().join("d"),
         ..Config::default()
     };
-    app::dispatch(Command::Init, &config).unwrap();
+    app::init(&config).unwrap();
     assert!(config.data_dir.is_dir());
 }
 
 #[test]
-fn test_dispatch_init_existing_dir() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = Config {
-        data_dir: dir.path().to_path_buf(),
-        ..Config::default()
-    };
-    app::dispatch(Command::Init, &config).unwrap();
-}
-
-#[test]
-fn test_dispatch_init_error() {
+fn test_init_error() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("afile");
     std::fs::write(&file, "x").unwrap();
@@ -49,26 +38,19 @@ fn test_dispatch_init_error() {
         data_dir: file.join("sub"),
         ..Config::default()
     };
-    assert!(app::dispatch(Command::Init, &config).is_err());
+    assert!(app::init(&config).is_err());
 }
 
 #[test]
-fn test_dispatch_serve_ok() {
-    app::dispatch(Command::Serve, &Config::default()).unwrap();
-}
-
-#[test]
-fn test_dispatch_emits_logs_when_subscriber_enabled() {
-    // Run every arm with an enabled subscriber so the `tracing::info!` bodies execute.
+fn test_init_logs_both_branches_when_subscriber_enabled() {
     let subscriber = tracing_subscriber::fmt().with_writer(std::io::sink).finish();
     tracing::subscriber::with_default(subscriber, || {
-        app::dispatch(Command::Serve, &Config::default()).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             data_dir: dir.path().join("d"),
             ..Config::default()
         };
-        app::dispatch(Command::Init, &config).unwrap();
-        app::dispatch(Command::Init, &config).unwrap();
+        app::init(&config).unwrap(); // created
+        app::init(&config).unwrap(); // already exists
     });
 }

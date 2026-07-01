@@ -84,10 +84,25 @@ fn syslog_layer(_format: LogFormat) -> anyhow::Result<BoxedLayer> {
     anyhow::bail!("the syslog log sink requires a Unix platform")
 }
 
+fn run_server(config: &Config) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    runtime.block_on(async {
+        let router = velox::server::build_router(config)?;
+        let addr = format!("{}:{}", config.host, config.port);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        tracing::info!(%addr, upstream = %config.upstream_url, "velox listening");
+        axum::serve(listener, router).await?;
+        anyhow::Ok(())
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = resolve_config(&cli)?;
     logging::validate(&config.log)?;
     let _guard = install_logging(&config.log)?;
-    app::dispatch(cli.command, &config)
+    match cli.command {
+        velox::cli::Command::Serve => run_server(&config),
+        velox::cli::Command::Init => app::init(&config),
+    }
 }

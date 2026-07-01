@@ -1836,17 +1836,24 @@ name = "velox"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
+ "http-body-util",
  "serde",
  "syslog-tracing",
  "tempfile",
  "thiserror",
+ "tokio",
  "toml",
+ "tower",
  "tracing",
  "tracing-appender",
  "tracing-journald",
  "tracing-subscriber",
  "velox-core",
+ "velox-http",
+ "velox-storage",
+ "velox-upstream",
 ]
 
 [[package]]
