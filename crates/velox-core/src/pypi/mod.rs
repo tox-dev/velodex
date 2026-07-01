@@ -3,10 +3,12 @@
 //! This is the only ecosystem velox implements. It sits under its own module so a future ecosystem
 //! can be added as a sibling rather than tangled into shared code.
 
+mod html;
 mod name;
 mod simple;
 mod version;
 
+pub use html::parse_detail_html;
 pub use name::{PackageName, normalize_name};
 pub use simple::{
     API_VERSION, CoreMetadata, File, Meta, ParsedDetail, ProjectDetail, ProjectList, ProjectListEntry, Yanked,
