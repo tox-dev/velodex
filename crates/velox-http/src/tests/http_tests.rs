@@ -383,6 +383,58 @@ async fn test_simple_detail_file_without_hash_is_not_rewritten() {
 }
 
 #[tokio::test]
+async fn test_metadata_sibling_served_verified_and_cached() {
+    let h = harness(60).await;
+    let wheel_digest = Digest::of(b"wheelbytes");
+    let metadata = b"Metadata-Version: 2.1\nName: flask\n";
+    let meta_digest = Digest::of(metadata);
+    let wheel_url = format!("{}/files/flask.whl", h.server.uri());
+    let json = format!(
+        "{{\"meta\":{{\"api-version\":\"1.1\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\
+         \"files\":[{{\"filename\":\"flask-1.0.whl\",\"url\":\"{}\",\"hashes\":{{\"sha256\":\"{}\"}},\
+         \"core-metadata\":{{\"sha256\":\"{}\"}}}}]}}",
+        wheel_url,
+        wheel_digest.as_str(),
+        meta_digest.as_str()
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(json.into_bytes(), "application/vnd.pypi.simple.v1+json"))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(metadata.to_vec()))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let (_, _, detail) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+    assert!(detail.contains(&format!(
+        "\"core-metadata\":{{\"sha256\":\"{}\"}}",
+        meta_digest.as_str()
+    )));
+
+    let uri = format!("/root/pypi/files/{}/flask-1.0.whl.metadata", wheel_digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "Metadata-Version: 2.1\nName: flask\n");
+
+    // Second request is served from the blob cache (the upstream metadata mock expects one hit).
+    let (status2, _, body2) = get(&h.state, &uri, None).await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(body2, body);
+}
+
+#[tokio::test]
+async fn test_metadata_not_found_when_unregistered() {
+    let h = harness(60).await;
+    let uri = format!("/root/pypi/files/{}/x.whl.metadata", "a".repeat(64));
+    let (status, ..) = get(&h.state, &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_simple_index_lists_observed_projects() {
     let h = harness(60).await;
     let digest = Digest::of(b"wheel");

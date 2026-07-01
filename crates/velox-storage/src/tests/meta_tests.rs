@@ -68,6 +68,19 @@ fn test_put_and_get_file_url() {
 }
 
 #[test]
+fn test_put_and_get_metadata() {
+    let (_dir, store) = store();
+    assert_eq!(store.get_metadata("wheelsha").unwrap(), None);
+    store
+        .put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha")
+        .unwrap();
+    assert_eq!(
+        store.get_metadata("wheelsha").unwrap(),
+        Some(("https://up/pkg.whl.metadata".to_owned(), "metasha".to_owned()))
+    );
+}
+
+#[test]
 fn test_put_and_list_projects() {
     let (_dir, store) = store();
     assert!(store.list_projects("root/pypi").unwrap().is_empty());

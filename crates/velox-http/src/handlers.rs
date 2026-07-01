@@ -92,10 +92,11 @@ pub(crate) fn detail_response(result: Result<Option<ProjectDetail>, CacheError>,
     }
 }
 
-/// `GET /{user}/{index}/files/{sha256}/{filename}` — a cached (or lazily fetched) blob.
+/// `GET /{user}/{index}/files/{sha256}/{filename}` — a cached (or lazily fetched) blob. A
+/// `{filename}.metadata` request serves the wheel's PEP 658 metadata sibling instead.
 pub async fn file_download(
     State(state): State<Arc<AppState>>,
-    Path((user, index, sha256, _filename)): Path<(String, String, String, String)>,
+    Path((user, index, sha256, filename)): Path<(String, String, String, String)>,
 ) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
     if !state.matches_index(&user, &index) {
@@ -104,7 +105,11 @@ pub async fn file_download(
     let Some(digest) = Digest::from_hex(&sha256) else {
         return (StatusCode::BAD_REQUEST, "invalid digest").into_response();
     };
-    file_response(cache::file_bytes(&state, &digest).await)
+    if filename.ends_with(".metadata") {
+        file_response(cache::metadata_bytes(&state, &digest).await)
+    } else {
+        file_response(cache::file_bytes(&state, &digest).await)
+    }
 }
 
 /// Map a file-bytes result to a response. Sync so every arm is directly unit-testable.

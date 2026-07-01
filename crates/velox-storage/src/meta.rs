@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 const SERIAL: TableDefinition<&str, u64> = TableDefinition::new("serial");
 const INDEX: TableDefinition<&str, &[u8]> = TableDefinition::new("simple_index");
 const FILE: TableDefinition<&str, &str> = TableDefinition::new("file_url");
+const METADATA: TableDefinition<&str, &str> = TableDefinition::new("metadata");
 const PROJECTS: TableDefinition<&str, &str> = TableDefinition::new("projects");
 const SERIAL_KEY: &str = "serial";
 
@@ -79,6 +80,7 @@ impl MetaStore {
             txn.open_table(SERIAL)?;
             txn.open_table(INDEX)?;
             txn.open_table(FILE)?;
+            txn.open_table(METADATA)?;
             txn.open_table(PROJECTS)?;
         }
         txn.commit()?;
@@ -161,6 +163,37 @@ impl MetaStore {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(FILE)?;
         Ok(table.get(sha256)?.map(|value| value.value().to_owned()))
+    }
+
+    /// Record the PEP 658 metadata sibling for a wheel: keyed by the wheel's digest, storing the
+    /// upstream `.metadata` URL and the metadata's own sha256 (for verify-on-fetch).
+    ///
+    /// # Errors
+    /// Returns a store error if the write or commit fails.
+    pub fn put_metadata(&self, wheel_sha256: &str, url: &str, metadata_sha256: &str) -> Result<(), MetaError> {
+        let value = format!("{url}\n{metadata_sha256}");
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(METADATA)?;
+            table.insert(wheel_sha256, value.as_str())?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Look up a wheel's metadata sibling: `(upstream url, metadata sha256)`.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn get_metadata(&self, wheel_sha256: &str) -> Result<Option<(String, String)>, MetaError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(METADATA)?;
+        Ok(table.get(wheel_sha256)?.and_then(|value| {
+            value
+                .value()
+                .split_once('\n')
+                .map(|(url, digest)| (url.to_owned(), digest.to_owned()))
+        }))
     }
 
     /// Record that `display` (a project's display name) has been observed on `index`, keyed by its

@@ -134,18 +134,52 @@ fn parse_upstream(
     }
 }
 
-/// Record a file's upstream URL under its digest and rewrite its URL to velox's own file route.
-/// A file without a sha256 hash is left as-is (it cannot be content-addressed).
+/// Record a file's upstream URL under its digest, register its PEP 658 metadata sibling (if it
+/// advertises one with a sha256 to verify against), and rewrite its URL to velox's own file route.
+/// A file without a sha256 hash cannot be content-addressed, so it is left as-is with no metadata.
 fn register_file(state: &AppState, mut file: File) -> Result<File, CacheError> {
-    // Phase 1 does not serve the PEP 658 `.metadata` sibling, so do not advertise it; clients
-    // download the full artifact instead. Proper metadata backfill arrives in Phase 2.
-    file.core_metadata = CoreMetadata::Absent;
     let Some(sha256) = file.hashes.get("sha256").cloned() else {
+        file.core_metadata = CoreMetadata::Absent;
         return Ok(file);
     };
     state.meta.put_file_url(&sha256, &file.url)?;
+    match metadata_sha256(&file.core_metadata) {
+        Some(metadata_digest) => {
+            state
+                .meta
+                .put_metadata(&sha256, &format!("{}.metadata", file.url), &metadata_digest)?;
+        }
+        None => file.core_metadata = CoreMetadata::Absent,
+    }
     file.url = format!("/{}/files/{sha256}/{}", state.index, file.filename);
     Ok(file)
+}
+
+fn metadata_sha256(core_metadata: &CoreMetadata) -> Option<String> {
+    match core_metadata {
+        CoreMetadata::Hashes(hashes) => hashes.get("sha256").cloned(),
+        CoreMetadata::Absent | CoreMetadata::Available => None,
+    }
+}
+
+/// Resolve a wheel's PEP 658 metadata bytes: serve the cached blob or fetch the upstream
+/// `.metadata` sibling, verify it against the metadata digest, and cache it.
+///
+/// # Errors
+/// Returns [`CacheError::FileNotFound`] if the wheel has no known metadata sibling, or another
+/// [`CacheError`] on a store or upstream failure.
+pub async fn metadata_bytes(state: &AppState, wheel_digest: &Digest) -> Result<Bytes, CacheError> {
+    let (url, metadata_hex) = state
+        .meta
+        .get_metadata(wheel_digest.as_str())?
+        .ok_or(CacheError::FileNotFound)?;
+    let metadata_digest = Digest::from_hex(&metadata_hex).ok_or(CacheError::FileNotFound)?;
+    if state.blobs.exists(&metadata_digest) {
+        return Ok(Bytes::from(state.blobs.read(&metadata_digest)?));
+    }
+    let bytes = state.upstream.fetch_bytes(&url).await?;
+    state.blobs.write_verified(&bytes, &metadata_digest)?;
+    Ok(bytes)
 }
 
 fn decode_detail(body: &[u8]) -> Result<ProjectDetail, CacheError> {
