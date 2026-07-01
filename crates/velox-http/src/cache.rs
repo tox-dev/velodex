@@ -2,7 +2,7 @@
 //! upstream on a miss.
 
 use bytes::Bytes;
-use velox_core::pypi::{File, Meta, ProjectDetail, parse_detail, to_json};
+use velox_core::pypi::{CoreMetadata, File, Meta, ProjectDetail, parse_detail, to_json};
 use velox_storage::blob::Digest;
 use velox_storage::meta::CachedIndex;
 
@@ -106,6 +106,9 @@ fn store_fresh(
 /// Record a file's upstream URL under its digest and rewrite its URL to velox's own file route.
 /// A file without a sha256 hash is left as-is (it cannot be content-addressed).
 fn register_file(state: &AppState, mut file: File) -> Result<File, CacheError> {
+    // Phase 1 does not serve the PEP 658 `.metadata` sibling, so do not advertise it; clients
+    // download the full artifact instead. Proper metadata backfill arrives in Phase 2.
+    file.core_metadata = CoreMetadata::Absent;
     let Some(sha256) = file.hashes.get("sha256").cloned() else {
         return Ok(file);
     };

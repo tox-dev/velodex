@@ -55,7 +55,10 @@ pub(crate) fn detail_response(result: Result<Option<ProjectDetail>, CacheError>,
     let detail = match result {
         Ok(Some(detail)) => detail,
         Ok(None) => return (StatusCode::NOT_FOUND, "project not found").into_response(),
-        Err(_) => return (StatusCode::BAD_GATEWAY, "upstream error").into_response(),
+        Err(err) => {
+            tracing::error!(error = ?err, "upstream error");
+            return (StatusCode::BAD_GATEWAY, "upstream error").into_response();
+        }
     };
     let vary = (header::VARY, "Accept");
     match format {

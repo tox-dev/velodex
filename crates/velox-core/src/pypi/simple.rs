@@ -128,12 +128,10 @@ pub struct File {
     pub upload_time: Option<String>,
     #[serde(default)]
     pub yanked: Yanked,
-    #[serde(
-        rename = "core-metadata",
-        alias = "dist-info-metadata",
-        alias = "data-dist-info-metadata",
-        default
-    )]
+    // Read the PEP 714 `core-metadata` key. The legacy `dist-info-metadata` key is ignored (not
+    // aliased): indexes including pypi.org emit both, and aliasing would make serde reject the
+    // duplicate field.
+    #[serde(rename = "core-metadata", default)]
     pub core_metadata: CoreMetadata,
 }
 

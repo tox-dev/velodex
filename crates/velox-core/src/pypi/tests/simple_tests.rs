@@ -106,10 +106,19 @@ fn test_parse_detail_minimal() {
 }
 
 #[test]
-fn test_parse_detail_accepts_legacy_metadata_key() {
+fn test_parse_detail_reads_core_metadata_and_tolerates_legacy_duplicate() {
+    // pypi.org emits both keys; velox reads core-metadata and ignores the legacy one.
+    let json = r#"{"name":"x","files":[{"filename":"x-1.whl","url":"u",
+        "core-metadata":{"sha256":"abc"},"dist-info-metadata":{"sha256":"abc"}}]}"#;
+    let parsed = crate::pypi::parse_detail(json.as_bytes()).unwrap();
+    assert_eq!(parsed.files[0].core_metadata, CoreMetadata::Hashes(sha256("abc")));
+}
+
+#[test]
+fn test_parse_detail_ignores_legacy_only_metadata_key() {
     let json = r#"{"name":"x","files":[{"filename":"x-1.whl","url":"u","dist-info-metadata":true}]}"#;
     let parsed = crate::pypi::parse_detail(json.as_bytes()).unwrap();
-    assert_eq!(parsed.files[0].core_metadata, CoreMetadata::Available);
+    assert_eq!(parsed.files[0].core_metadata, CoreMetadata::Absent);
 }
 
 #[test]
