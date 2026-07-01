@@ -786,10 +786,23 @@ so velox builds its own, modeled on `packse` [uv's resolver test tool].
 The release bar is a side-by-side against devpi, the closest existing tool. A harness bootstraps both a devpi server and
 velox pointed at the same upstream, then runs one integration workload against each: install a set of popular PyPI
 packages and their dependency trees (numpy, pandas, requests, flask, cryptography, boto3, …) with pip and uv, upload and
-re-download private packages, and exercise the overlay and promotion flow. It compares two axes. Functionality:
-identical resolution, hashes, and install success, and matching simple-index and JSON output modulo host rewriting.
-Performance: cold and warm cache latency, memory and CPU under a concurrent install load, and on-disk cache size. The
-target is functional parity with devpi and a clear win on latency and resource use.
+re-download private packages, and exercise the overlay and promotion flow. Functionality is checked first: identical
+resolution, hashes, and install success, and matching simple-index and JSON output modulo host rewriting.
+
+The headline is a single table that puts **size and performance next to each other for each package**, because they move
+together: a smaller cached footprint is what makes the warm path fast. One row per package (plus an aggregate row),
+devpi vs velox side by side:
+
+| Package   | Cold install (s) | Warm install (s) | Req/s (concurrent) | Peak RSS (MB) | Cache on disk (MB) |
+| --------- | ---------------- | ---------------- | ------------------ | ------------- | ------------------ |
+| numpy     | devpi / velox    | devpi / velox    | devpi / velox      | devpi / velox | devpi / velox      |
+| …         |                  |                  |                    |               |                    |
+| **total** |                  |                  |                    |               |                    |
+
+The size columns (peak RSS, on-disk cache) sit beside the latency and throughput columns so a reader sees directly that
+velox's content-addressed, deduplicated cache and small resident set buy the faster cold and warm numbers. The server's
+own binary size and idle RSS are reported alongside. The target is functional parity with devpi and a clear win across
+every column.
 
 ## 14. What velox changes vs devpi
 
