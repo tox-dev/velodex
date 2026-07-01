@@ -122,6 +122,27 @@ async fn test_simple_detail_html() {
 }
 
 #[tokio::test]
+async fn test_simple_detail_from_html_only_upstream() {
+    let h = harness(60).await;
+    let digest = Digest::of(b"wheel");
+    let html = format!(
+        "<a href=\"/packages/flask-1.0.whl#sha256={}\">flask-1.0.whl</a>",
+        digest.as_str()
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(html.into_bytes(), "text/html"))
+        .mount(&h.server)
+        .await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    // Parsed from HTML, re-served as JSON with the file URL rewritten to velox's own route.
+    assert!(body.contains(&format!("/root/pypi/files/{}/flask-1.0.whl", digest.as_str())));
+}
+
+#[tokio::test]
 async fn test_simple_detail_unknown_index() {
     let h = harness(60).await;
     let (status, ..) = get(&h.state, "/other/index/simple/flask/", None).await;

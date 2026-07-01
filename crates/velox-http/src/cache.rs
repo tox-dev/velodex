@@ -2,9 +2,13 @@
 //! upstream on a miss.
 
 use bytes::Bytes;
-use velox_core::pypi::{CoreMetadata, File, Meta, ProjectDetail, parse_detail, to_json};
+use url::Url;
+use velox_core::pypi::{
+    CoreMetadata, File, Meta, ParsedDetail, ProjectDetail, parse_detail, parse_detail_html, to_json,
+};
 use velox_storage::blob::Digest;
 use velox_storage::meta::CachedIndex;
+use velox_upstream::SimpleResponse;
 
 use crate::state::AppState;
 
@@ -43,14 +47,7 @@ pub async fn project_detail(state: &AppState, project: &str) -> Result<Option<Pr
 
     let etag = cached.as_ref().and_then(|record| record.etag.clone());
     match state.upstream.fetch_project(project, etag.as_deref()).await {
-        Ok(response) if response.status == 200 => Ok(Some(store_fresh(
-            state,
-            &key,
-            &response.body,
-            response.etag,
-            response.last_serial,
-            now,
-        )?)),
+        Ok(response) if response.status == 200 => Ok(Some(store_fresh(state, &key, project, response, now)?)),
         Ok(response) if response.status == 304 => {
             let mut record = cached.ok_or(CacheError::Unavailable)?;
             record.fetched_at_unix = now;
@@ -76,12 +73,11 @@ fn serve_stale(cached: Option<&CachedIndex>) -> Result<Option<ProjectDetail>, Ca
 fn store_fresh(
     state: &AppState,
     key: &str,
-    body: &[u8],
-    etag: Option<String>,
-    last_serial: Option<u64>,
+    project: &str,
+    response: SimpleResponse,
     now: i64,
 ) -> Result<ProjectDetail, CacheError> {
-    let parsed = parse_detail(body)?;
+    let parsed = parse_upstream(project, response.content_type.as_deref(), &response.url, &response.body)?;
     let files = parsed
         .files
         .into_iter()
@@ -94,13 +90,28 @@ fn store_fresh(
         files,
     };
     let record = CachedIndex {
-        etag,
-        last_serial,
+        etag: response.etag,
+        last_serial: response.last_serial,
         fetched_at_unix: now,
         body: to_json(&detail).into_bytes(),
     };
     state.meta.put_index(key, &record)?;
     Ok(detail)
+}
+
+/// Parse an upstream simple page as PEP 691 JSON, or fall back to PEP 503 HTML for indexes that do
+/// not serve JSON. This is the JSON-to-HTML degradation from the upstream adapter.
+fn parse_upstream(
+    project: &str,
+    content_type: Option<&str>,
+    url: &Url,
+    body: &[u8],
+) -> Result<ParsedDetail, CacheError> {
+    if content_type.is_some_and(|content_type| content_type.contains("json")) {
+        Ok(parse_detail(body)?)
+    } else {
+        Ok(parse_detail_html(project, &String::from_utf8_lossy(body), url))
+    }
 }
 
 /// Record a file's upstream URL under its digest and rewrite its URL to velox's own file route.

@@ -13,6 +13,8 @@ const ACCEPT_SIMPLE: &str =
 #[derive(Debug, Clone)]
 pub struct SimpleResponse {
     pub status: u16,
+    /// The final URL fetched (after redirects), used as the base for resolving relative HTML links.
+    pub url: Url,
     pub content_type: Option<String>,
     pub etag: Option<String>,
     pub last_serial: Option<u64>,
@@ -79,6 +81,7 @@ impl UpstreamClient {
 
 async fn into_simple(response: reqwest::Response) -> Result<SimpleResponse, UpstreamError> {
     let status = response.status().as_u16();
+    let url = response.url().clone();
     let headers = response.headers();
     let content_type = header_str(headers, &CONTENT_TYPE);
     let etag = header_str(headers, &ETAG);
@@ -86,6 +89,7 @@ async fn into_simple(response: reqwest::Response) -> Result<SimpleResponse, Upst
     let body = response.bytes().await?;
     Ok(SimpleResponse {
         status,
+        url,
         content_type,
         etag,
         last_serial,

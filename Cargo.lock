@@ -2217,6 +2217,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
  "velox-core",
  "velox-storage",
  "velox-upstream",
