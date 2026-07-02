@@ -1,6 +1,6 @@
 /target
 # trunk output for the web UI
-crates/velox-web/dist/
+crates/velodex-web/dist/
 # coverage artifacts
 /lcov.info
 *.profraw
@@ -11,4 +11,4 @@ site/public/
 tests/frontend/node_modules/
 tests/frontend/test-results/
 tests/frontend/playwright-report/
-/velox-data/
+/velodex-data/

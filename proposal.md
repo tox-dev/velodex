@@ -1,14 +1,14 @@
-# velox: design proposal
+# velodex: design proposal
 
 A PyPI-compatible read-through cache and private-index overlay, written in Rust for low resource use and high
-throughput. velox proxies and caches pypi.org (or any PEP 503 index), lets teams publish private packages into overlay
+throughput. velodex proxies and caches pypi.org (or any PEP 503 index), lets teams publish private packages into overlay
 indexes that shadow the upstream mirror, and serves every modern Python packaging client (pip, uv, twine, Poetry, hatch,
 flit) over the standard wire protocols.
 
-devpi, Warehouse (pypi.org), and uv are the primary references for behavior. velox is a clean-slate design, not a port.
-Where devpi's architecture shows its age (Python per-request overhead, the bespoke keyfs changelog format, one global
-write lock, the `--requests-only` worker split, pluggy on the hot path), velox picks a simpler faster structure and says
-so in [§14](#14-what-velox-changes-vs-devpi).
+devpi, Warehouse (pypi.org), and uv are the primary references for behavior. velodex is a clean-slate design, not a
+port. Where devpi's architecture shows its age (Python per-request overhead, the bespoke keyfs changelog format, one
+global write lock, the `--requests-only` worker split, pluggy on the hot path), velodex picks a simpler faster structure
+and says so in [§14](#14-what-velodex-changes-vs-devpi).
 
 ## Contents
 
@@ -25,7 +25,7 @@ so in [§14](#14-what-velox-changes-vs-devpi).
 1. [Rust stack](#11-rust-stack)
 1. [Distribution: pip-installable and self-contained](#12-distribution-pip-installable-and-self-contained)
 1. [Testing and conformance](#13-testing-and-conformance)
-1. [What velox changes vs devpi](#14-what-velox-changes-vs-devpi)
+1. [What velodex changes vs devpi](#14-what-velodex-changes-vs-devpi)
 1. [Project conventions](#15-project-conventions)
 1. [Roadmap](#16-roadmap)
 1. [References](#17-references)
@@ -42,51 +42,52 @@ so in [§14](#14-what-velox-changes-vs-devpi).
 - **Private overlay indexes.** Teams publish private packages into indexes that inherit from the mirror and from each
   other. A locally published project shadows the upstream one, which gives dependency-confusion defense by default, as
   in devpi \[devpi model.py:1229 `sro()`\].
-- **Standard protocols only.** velox speaks the wire contracts pip/uv/twine already use against pypi.org and
-  Artifactory. No velox-specific client, no bespoke upload tool.
-- **Full modern JSON APIs, not HTML-only.** velox serves the complete JSON surface uv and pip prefer, not just a raw PEP
-  503 HTML index: PEP 691 JSON (`application/vnd.pypi.simple.v1+json`) with PEP 700 `versions`/`size`/`upload-time`, PEP
-  658/714 `.metadata`, PEP 592 yank, PEP 740 provenance and the integrity JSON, PEP 792 project status, and the legacy
-  `/pypi/<project>/json` API. HTML is one negotiated format among these, not the only one. When an upstream serves only
-  HTML, velox parses it and synthesizes the JSON downstream ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)),
-  so clients always get the fast JSON path even behind a dumb index.
+- **Standard protocols only.** velodex speaks the wire contracts pip/uv/twine already use against pypi.org and
+  Artifactory. No velodex-specific client, no bespoke upload tool.
+- **Full modern JSON APIs, not HTML-only.** velodex serves the complete JSON surface uv and pip prefer, not just a raw
+  PEP 503 HTML index: PEP 691 JSON (`application/vnd.pypi.simple.v1+json`) with PEP 700 `versions`/`size`/`upload-time`,
+  PEP 658/714 `.metadata`, PEP 592 yank, PEP 740 provenance and the integrity JSON, PEP 792 project status, and the
+  legacy `/pypi/<project>/json` API. HTML is one negotiated format among these, not the only one. When an upstream
+  serves only HTML, velodex parses it and synthesizes the JSON downstream
+  ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)), so clients always get the fast JSON path even behind a
+  dumb index.
 - **High speed, small footprint.** Async Rust, precomputed responses, content-addressed blob storage with copy-on-write
   dedup, a pure-Rust embedded metadata store, and an in-memory hot tier. Target: single-digit-millisecond cached
   responses and tens of MB RSS at idle.
 - **Handles non-feature-complete upstreams.** Proxy Artifactory, Nexus, GitLab, CodeArtifact, Azure Artifacts, Google
-  Artifact Registry, devpi, and plain static indexes. Most of these serve only PEP 503 HTML, so velox probes
+  Artifact Registry, devpi, and plain static indexes. Most of these serve only PEP 503 HTML, so velodex probes
   capabilities and degrades gracefully, backfilling the PEP 658 metadata and sha256 hashes that upstreams omit
   ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)).
 - **pip/uv behavioral parity.** The acceptance bar: every pip/uv feature that works against pypi.org works against
-  velox, verified by a conformance harness ([§13](#13-testing-and-conformance)).
+  velodex, verified by a conformance harness ([§13](#13-testing-and-conformance)).
 - **Ships like uv.** pip-installable from PyPI (maturin `bindings = "bin"`) and as self-contained static binaries via
   standalone installers ([§12](#12-distribution-pip-installable-and-self-contained)).
 
 ### Non-goals
 
-velox does not build these at all (as opposed to the phased plan, which delivers everything it lists):
+velodex does not build these at all (as opposed to the phased plan, which delivers everything it lists):
 
 - Sphinx documentation hosting and doc-zip serving (a devpi-web feature). The indexer trait seam covers full-text search
   of package metadata; hosting rendered Sphinx sites is out.
 - `devpi test` / tox-result storage.
 - PEP 694 Upload API 2.0 (draft, unimplemented anywhere), PEP 708 tracks (rejected), wheel-variant serving (PEP 817/825,
   draft). The filename and endpoint parsers tolerate these rather than implement them.
-- A dynamic plugin system (pluggy/entry-points). velox uses compile-time traits for the real extension seams (storage,
+- A dynamic plugin system (pluggy/entry-points). velodex uses compile-time traits for the real extension seams (storage,
   auth, upstream adapter, indexer).
-- Other package ecosystems (npm, crates, Maven, …). velox implements only Python. Ecosystem-specific logic is namespaced
-  under a `pypi` module (`velox-core::pypi`) so another ecosystem could be added beside it later without reworking the
-  dependent crates, but none is built now.
+- Other package ecosystems (npm, crates, Maven, …). velodex implements only Python. Ecosystem-specific logic is
+  namespaced under a `pypi` module (`velodex-core::pypi`) so another ecosystem could be added beside it later without
+  reworking the dependent crates, but none is built now.
 
 ## 2. Compatibility surface: standards and endpoints
 
-velox implements the Simple Repository API as consolidated on packaging.python.org, with `meta.api-version` **1.1**
+velodex implements the Simple Repository API as consolidated on packaging.python.org, with `meta.api-version` **1.1**
 required and **1.4** as the ceiling it can advertise [Simple Repository API spec]. The wire contract comes byte-for-byte
 from Warehouse [warehouse/api/simple.py, warehouse/packaging/utils.py], and the client expectations from pip
 [pip/\_internal/index/collector.py] and uv [uv crates/uv-client].
 
 ### PEPs and specs
 
-| Spec                                                  | Status          | velox obligation                                                                                                                            |
+| Spec                                                  | Status          | velodex obligation                                                                                                                          |
 | ----------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PEP 503** Simple HTML                               | Final           | Must. `/simple/`, `/simple/<name>/`, name normalization `re.sub(r"[-_.]+","-",name).lower()`, `#sha256=` fragments, `data-requires-python`. |
 | **PEP 691** JSON Simple                               | Final           | Must. `application/vnd.pypi.simple.v1+json`, `Accept` negotiation, `Vary: Accept`.                                                          |
@@ -104,14 +105,14 @@ from Warehouse [warehouse/api/simple.py, warehouse/packaging/utils.py], and the 
 | **PEP 694** Upload API 2.0                            | Draft           | Skip. Keep legacy `/legacy/`.                                                                                                               |
 | **PEP 708** tracks                                    | Rejected        | Skip. Do not gate on API 1.2.                                                                                                               |
 | PEP 817/825/777 wheel variants, PEP 819 JSON metadata | Draft           | Skip, tolerate. The filename and extension parser must not crash on `.whlx` or an extra filename component.                                 |
-| PEP 751 lock file, PEP 766 index priority             | Final / Draft   | Client-side. No server work; serving PEP 691/700/658 well makes velox a good lock source.                                                   |
+| PEP 751 lock file, PEP 766 index priority             | Final / Draft   | Client-side. No server work; serving PEP 691/700/658 well makes velodex a good lock source.                                                 |
 
 ### Endpoint matrix
 
 Read endpoints follow Warehouse [warehouse/routes.py]; the write endpoint is the standard forklift contract
 [warehouse/forklift/legacy.py].
 
-| Path                                               | Method           | Content-Type                            | Spec                        | Status in velox    |
+| Path                                               | Method           | Content-Type                            | Spec                        | Status in velodex  |
 | -------------------------------------------------- | ---------------- | --------------------------------------- | --------------------------- | ------------------ |
 | `/{index}/simple/`                                 | GET              | html / `vnd.pypi.simple.v1+{html,json}` | 503/691/700                 | Required           |
 | `/{index}/simple/{project}/`                       | GET              | same                                    | 503/691/700/592/658/714/792 | Required           |
@@ -124,14 +125,15 @@ Read endpoints follow Warehouse [warehouse/routes.py]; the write endpoint is the
 | `/integrity/{project}/{version}/{file}/provenance` | GET              | `vnd.pypi.integrity.v1+json`            | 740                         | Nice               |
 | `/+api`, `/{index}/+api`                           | GET              | json                                    | discovery/capabilities      | Required           |
 | `/+status`, `/metrics`                             | GET              | json / prometheus                       | health/obs                  | Required           |
-| management API (index, user CRUD)                  | PUT/PATCH/DELETE | json                                    | velox-specific              | Required           |
+| management API (index, user CRUD)                  | PUT/PATCH/DELETE | json                                    | velodex-specific            | Required           |
 
-pypi.org exposes no machine API for account or index management, so that is the one place velox designs its own contract
-[warehouse management is web-UI plus CSRF only]. The contract stays small and REST-shaped ([§7](#7-http-api)).
+pypi.org exposes no machine API for account or index management, so that is the one place velodex designs its own
+contract [warehouse management is web-UI plus CSRF only]. The contract stays small and REST-shaped ([§7](#7-http-api)).
 
 The `X-PyPI-Last-Serial` header plus the XML-RPC `changelog_since_serial` method form the incremental-mirror contract
-bandersnatch relies on [warehouse/legacy/api/xmlrpc]. velox consumes them from upstream when present but does not depend
-on them ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)); velox emits its own serial on its own responses.
+bandersnatch relies on [warehouse/legacy/api/xmlrpc]. velodex consumes them from upstream when present but does not
+depend on them ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)); velodex emits its own serial on its own
+responses.
 
 ## 3. Architecture
 
@@ -186,7 +188,7 @@ Layers:
   for the RAM hot tier ([§5](#5-storage-and-the-filesystem-cache)).
 
 Extension seams are compile-time traits, not a runtime plugin system: `Storage`, `Authenticator`, `UpstreamAdapter`,
-`Indexer`. Most of what devpi implements as pluggy hooks is core in velox and monomorphized.
+`Indexer`. Most of what devpi implements as pluggy hooks is core in velodex and monomorphized.
 
 ### Project layout
 
@@ -195,35 +197,35 @@ to core to types). The pure crates carry no I/O and unit-test in isolation, whic
 hold.
 
 ```
-velox/
+velodex/
   Cargo.toml                 # workspace, [workspace.lints], [workspace.dependencies]
   rust-toolchain.toml        # stable 1.93.x
   .rustfmt.toml              # max_width = 120
   crates/
-    velox-types/             # newtypes (PackageName, Version, Serial, IndexId) + serde wire structs; no logic
-    velox-core/              # domain: index model, SRO, allow-list, PEP 440/508, wheel/sdist parsing,
+    velodex-types/             # newtypes (PackageName, Version, Serial, IndexId) + serde wire structs; no logic
+    velodex-core/              # domain: index model, SRO, allow-list, PEP 440/508, wheel/sdist parsing,
                              #   core-metadata validation. Pure, no I/O. The bulk of the unit tests.
-    velox-storage/           # redb metadata + serial log, blob CAS, reflink/hardlink dedup, moka tier,
+    velodex-storage/           # redb metadata + serial log, blob CAS, reflink/hardlink dedup, moka tier,
                              #   eviction/GC, fsck, crash recovery. Depends on core + types.
-    velox-upstream/          # reqwest client, capability probe + descriptor, degradation, PEP 658/hash
+    velodex-upstream/          # reqwest client, capability probe + descriptor, degradation, PEP 658/hash
                              #   backfill, per-upstream auth + token refresh. Depends on core + storage.
-    velox-http/              # axum app: simple API (HTML/JSON), blob serving, forklift upload, mgmt API,
+    velodex-http/              # axum app: simple API (HTML/JSON), blob serving, forklift upload, mgmt API,
                              #   /+api, /+status, /metrics, auth extraction, embedded static assets.
-    velox-web/               # Leptos CSR frontend (WASM); built with trunk, output embedded via rust-embed
-    velox/                   # binary: clap CLI (serve/init/cache/fsck/config-snippet), config, tracing, wiring
-  python/velox/              # maturin launcher: __main__.py, _find_velox.py
+    velodex-web/               # Leptos CSR frontend (WASM); built with trunk, output embedded via rust-embed
+    velodex/                   # binary: clap CLI (serve/init/cache/fsck/config-snippet), config, tracing, wiring
+  python/velodex/              # maturin launcher: __main__.py, _find_velodex.py
   pyproject.toml             # maturin bindings = "bin"
   dist-workspace.toml        # cargo-dist installers
   .github/workflows/         # per-crate path-filtered CI + release
 ```
 
-Each crate owns its `src/tests/<module>_tests.rs`. `velox-core` has no dependency on tokio, axum, or redb, so its
+Each crate owns its `src/tests/<module>_tests.rs`. `velodex-core` has no dependency on tokio, axum, or redb, so its
 version/name/metadata logic tests run fast and deterministically.
 
 ## 4. Index model: overlays and resolution order
 
-The overlay system is velox's reason to exist beyond a dumb cache. It follows devpi's model [devpi model.py, mirror.py]
-with a cleaner implementation.
+The overlay system is velodex's reason to exist beyond a dumb cache. It follows devpi's model \[devpi model.py,
+mirror.py\] with a cleaner implementation.
 
 ### Index kinds
 
@@ -260,8 +262,8 @@ flowchart LR
 ### Mirror allow-list
 
 Once a project is published privately, upstream versions of that name stay hidden unless the name is allow-listed
-(`mirror_whitelist` in devpi; velox calls it `allow_upstream`) \[devpi model.py:1177 `op_sro_check_mirror_whitelist`\].
-velox copies this inverted default because it is the security-critical behavior.
+(`mirror_whitelist` in devpi; velodex calls it `allow_upstream`) \[devpi model.py:1177
+`op_sro_check_mirror_whitelist`\]. velodex copies this inverted default because it is the security-critical behavior.
 
 ### Volatile vs non-volatile
 
@@ -275,7 +277,7 @@ velox copies this inverted default because it is the security-critical behavior.
 `push` copies a release (files plus metadata) from one index to another without a rebuild \[devpi views.py
 `_push_links`\]. Because blobs are content-addressed, promotion is a zero-byte copy-on-write clone
 ([§5](#5-storage-and-the-filesystem-cache)). Pushing to an external real PyPI is a re-upload over the standard protocol,
-so velox exposes it as a server-side action that POSTs to a configured upstream's `/legacy/`.
+so velodex exposes it as a server-side action that POSTs to a configured upstream's `/legacy/`.
 
 ## 5. Storage and the filesystem cache
 
@@ -286,14 +288,14 @@ vs filestore_db.py; uv crates/uv-cache\].
 
 ### On-disk layout
 
-Everything sits under one `VELOX_DATA_DIR` on a single filesystem, because reflink/hardlink dedup and atomic rename
-require it. velox checks this at startup by comparing device ids.
+Everything sits under one `VELODEX_DATA_DIR` on a single filesystem, because reflink/hardlink dedup and atomic rename
+require it. velodex checks this at startup by comparing device ids.
 
 ```
 <root>/
   CACHEDIR.TAG                    # uv does this: crates/uv-cache/src/lib.rs
-  velox.redb                      # control DB: metadata, etags, serials, blob refcounts
-  velox.lock                      # process-wide advisory lock (fs4)
+  velodex.redb                      # control DB: metadata, etags, serials, blob refcounts
+  velodex.lock                      # process-wide advisory lock (fs4)
   blobs/sha256/<ab>/<cd>/<64hex>  # content-addressed immutable CAS, 2-level fan-out
   index/<index-id>/<pkg>.rkyv     # cached upstream simple-index records (+ HTTP policy)
   uploads/<user>/<index>/+f/...   # private uploads (durable), hard-linked into blobs/
@@ -350,7 +352,7 @@ DirtyFile.commit, filestore_fs.py:85-98\].
   changelog replay, a large simplification over devpi's `rel_renames` machinery \[devpi filestore_fs_base.py:226
   `perform_crash_recovery`\].
 - **Durable-upload recovery.** The rename intent goes into the redb transaction alongside the metadata and replays at
-  startup. This is the one place velox keeps devpi's rigor, because uploads cannot be re-fetched.
+  startup. This is the one place velodex keeps devpi's rigor, because uploads cannot be re-fetched.
 
 ### Read-through revalidation
 
@@ -359,16 +361,16 @@ DirtyFile.commit, filestore_fs.py:85-98\].
 - **Mutable simple-index pages**: RFC 9111 freshness via `http-cache-semantics`. Fresh serves from cache with no
   network. Stale sends conditional `If-None-Match` (strong ETags only, matching uv [uv httpcache/mod.rs:500]) or
   `If-Modified-Since`; a 304 refreshes the policy without rewriting the body. No cache headers caps freshness at 600s
-  (uv's heuristic mirroring PyPI's `max-age=600`); nothing at all revalidates every fetch. velox reads
+  (uv's heuristic mirroring PyPI's `max-age=600`); nothing at all revalidates every fetch. velodex reads
   `X-PyPI-Last-Serial` as a cheap change-detector when upstream provides it and never depends on it.
-- **Serve-stale-on-error.** Upstream 5xx or unreachable plus a stale entry serves stale (RFC 5861). velox favors
+- **Serve-stale-on-error.** Upstream 5xx or unreachable plus a stale entry serves stale (RFC 5861). velodex favors
   availability over freshness, as devpi does [devpi mirror.py].
 
 ### Concurrency and coalescing
 
 - **Single-flight fetch.** N concurrent misses for one URL trigger one upstream fetch, via moka `try_get_with` for
   cached results and a `dashmap<Key, Arc<Mutex<()>>>` of per-key async locks for streamed blobs \[devpi's
-  WeakValueDictionary of per-project locks maps directly\]. velox never holds a lock across an unrelated `.await`.
+  WeakValueDictionary of per-project locks maps directly\]. velodex never holds a lock across an unrelated `.await`.
 - **Streaming tee.** Bytes from upstream fan out to the client response, the sha256 hasher, and the temp file in one
   pass, so one network read serves the client and warms the cache.
 - **Single-writer metadata.** redb's MVCC gives one writer and many readers with no global mutex. This replaces devpi's
@@ -383,13 +385,13 @@ Two populations, opposite policies:
 - **Private uploads:** never evicted.
 
 A blob shared by both stays pinned by its redb referrer set, so eviction candidates are blobs with only mirror
-referrers. `velox cache gc|prune|clean` runs under an exclusive file lock, modeled on uv's `prune`/`clear` \[uv
-crates/uv-cache/src/lib.rs\]. `velox fsck` recomputes digests and reconciles redb referrers against the filesystem.
+referrers. `velodex cache gc|prune|clean` runs under an exclusive file lock, modeled on uv's `prune`/`clear` \[uv
+crates/uv-cache/src/lib.rs\]. `velodex fsck` recomputes digests and reconciles redb referrers against the filesystem.
 
 ### nginx offload
 
 The blob path stays reverse-proxy-friendly: a front nginx can `try_files` into `blobs/sha256/...` or use
-`X-Accel-Redirect` to serve wheel bytes in kernel space, leaving velox to handle index pages and revalidation \[devpi
+`X-Accel-Redirect` to serve wheel bytes in kernel space, leaving velodex to handle index pages and revalidation \[devpi
 ships an nginx caching config for this\]. This is the highest-leverage throughput move, designed in from day one.
 
 ## 6. Upstream mirror adapter and graceful degradation
@@ -414,7 +416,7 @@ uv#14375/#10394/#11899, pip#11490.
 
 ### Upstream capability descriptor
 
-Per configured upstream, velox holds a descriptor populated by a cheap probe at first use (cached, TTL-revalidated),
+Per configured upstream, velodex holds a descriptor populated by a cheap probe at first use (cached, TTL-revalidated),
 then corrected by real responses:
 
 ```rust
@@ -440,13 +442,13 @@ struct UpstreamDescriptor {
 ```
 
 The probe is one project-page GET (`Accept: …+json, text/html;q=0.5`), one root GET, and one guaranteed-absent-project
-GET. velox derives every field from those. Unknown fields get treated conservatively.
+GET. velodex derives every field from those. Unknown fields get treated conservatively.
 
 ### Degradation strategy
 
 ```mermaid
 flowchart TD
-    Req["client asks velox for a project page"]:::client
+    Req["client asks velodex for a project page"]:::client
     Cache{"fresh in cache?"}:::dec
     Serve["serve precomputed HTML/JSON"]:::http
     Fetch["single-flight fetch upstream"]:::logic
@@ -479,20 +481,20 @@ flowchart TD
 
 This mirrors the fallbacks pip and uv already ship \[uv registry_client.rs:900-906, pip prepare.py:370-457\]:
 
-| Missing upstream capability | velox behavior                                                                                                                                                                                                                                                                                                                                                           |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| No PEP 691 JSON             | Parse upstream HTML (PEP 503), build the internal model, synthesize JSON downstream.                                                                                                                                                                                                                                                                                     |
-| No PEP 658 `.metadata`      | On first wheel fetch, range-read the wheel (last ~16 KiB central directory, then the `METADATA` member, `Accept-Encoding: identity`, at most two range GETs) or full-download; extract `METADATA`, store it, serve `{file}.metadata`, advertise `core-metadata` with its sha256. Both clients do this; velox does it once so every downstream client gets the fast path. |
-| No hashes / md5-only        | Compute sha256 on first fetch (velox is content-addressed anyway); never propagate md5-only.                                                                                                                                                                                                                                                                             |
-| No PEP 700 fields           | Synthesize `size` from the stored blob and `versions` from the file list; omit `upload-time`, and document that `--exclude-newer` will not work for that upstream (uv#10394).                                                                                                                                                                                            |
-| No serial                   | Time-based TTL plus conditional GET.                                                                                                                                                                                                                                                                                                                                     |
-| No conditional GET          | TTL-only revalidation.                                                                                                                                                                                                                                                                                                                                                   |
-| No full project list        | velox's own `/simple/` lists only observed/cached projects; the upstream is marked non-enumerable.                                                                                                                                                                                                                                                                       |
-| Has serial                  | Adopt bandersnatch's model: reject responses whose serial regressed, which defeats stale CDN reads.                                                                                                                                                                                                                                                                      |
+| Missing upstream capability | velodex behavior                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No PEP 691 JSON             | Parse upstream HTML (PEP 503), build the internal model, synthesize JSON downstream.                                                                                                                                                                                                                                                                                       |
+| No PEP 658 `.metadata`      | On first wheel fetch, range-read the wheel (last ~16 KiB central directory, then the `METADATA` member, `Accept-Encoding: identity`, at most two range GETs) or full-download; extract `METADATA`, store it, serve `{file}.metadata`, advertise `core-metadata` with its sha256. Both clients do this; velodex does it once so every downstream client gets the fast path. |
+| No hashes / md5-only        | Compute sha256 on first fetch (velodex is content-addressed anyway); never propagate md5-only.                                                                                                                                                                                                                                                                             |
+| No PEP 700 fields           | Synthesize `size` from the stored blob and `versions` from the file list; omit `upload-time`, and document that `--exclude-newer` will not work for that upstream (uv#10394).                                                                                                                                                                                              |
+| No serial                   | Time-based TTL plus conditional GET.                                                                                                                                                                                                                                                                                                                                       |
+| No conditional GET          | TTL-only revalidation.                                                                                                                                                                                                                                                                                                                                                     |
+| No full project list        | velodex's own `/simple/` lists only observed/cached projects; the upstream is marked non-enumerable.                                                                                                                                                                                                                                                                       |
+| Has serial                  | Adopt bandersnatch's model: reject responses whose serial regressed, which defeats stale CDN reads.                                                                                                                                                                                                                                                                        |
 
 ### Not reproducing client-breaking bugs
 
-velox's own responses avoid the failure modes that break real clients \[pip#11490, uv#14375/#1754/#5595/#5600/#7273\]:
+velodex's own responses avoid the failure modes that break real clients \[pip#11490, uv#14375/#1754/#5595/#5600/#7273\]:
 404 with no body for missing projects (never 200-HTML), accurate `Content-Type` with no spurious 406 or charset
 rejection, name normalization with a 301 redirect, same-origin download URLs (or re-attached auth on redirect), sha256
 always (never md5-only), auth honored across redirects, and both trailing-slash forms tolerated.
@@ -500,13 +502,13 @@ always (never md5-only), auth honored across redirects, and both trailing-slash 
 ## 7. HTTP API
 
 `axum` handlers, `tower-http` for compression/trace/timeout/limits, streaming file bodies via
-`tokio_util::io::ReaderStream` with range support. velox precomputes responses at index-update time. The PEP 503 HTML
+`tokio_util::io::ReaderStream` with range support. velodex precomputes responses at index-update time. The PEP 503 HTML
 and PEP 691 JSON for a project get serialized once and served as bytes, never rendered per request \[Warehouse renders
 and stores simple detail as a static file for the CDN; same idea\].
 
 ### Two audiences on one URL
 
-The same index and project URLs serve a person and a tool differently. velox negotiates on both `Accept` and
+The same index and project URLs serve a person and a tool differently. velodex negotiates on both `Accept` and
 `User-Agent`, and sets `Vary: Accept, User-Agent` so caches keep the variants apart (devpi does the same with its
 UA-gated installer routes \[devpi views.py `installer_simple`\]; Warehouse varies on Accept).
 
@@ -516,14 +518,14 @@ UA-gated installer routes \[devpi views.py `installer_simple`\]; Warehouse varie
   as bytes, and both go out gzip/zstd-compressed via the `tower-http` compression layer, which shrinks the highly
   repetitive anchor/JSON list to a fraction of its size. Compression applies to index pages only, never to wheels.
 - **A browser** (an `Accept` led by `text/html` with a browser `User-Agent`, and no simple media type) gets the readable
-  view: velox returns the Leptos web UI shell for that index or project ([§10](#10-web-ui)), which renders a styled,
+  view: velodex returns the Leptos web UI shell for that index or project ([§10](#10-web-ui)), which renders a styled,
   human page against the JSON API. The raw anchor list never reaches a person unless they ask for it.
 
 For tool requests the offer order follows Warehouse (`vnd.pypi.simple.v1+json`, `vnd.pypi.simple.v1+html`, `text/html`);
 an unmatchable `Accept` falls back to the machine HTML rather than 406 (the simple API does not 406; the integrity API
 does) [warehouse api/simple.py:23-48].
 
-### Management API (velox-specific)
+### Management API (velodex-specific)
 
 The one surface with no pypi.org precedent. Small, REST-shaped, token-authenticated:
 
@@ -534,14 +536,14 @@ The one surface with no pypi.org precedent. Small, REST-shaped, token-authentica
 - `GET /+api`, `GET /{index}/+api` return discovery: the index/simple/upload URLs and a capability list, so clients and
   tooling negotiate without version sniffing \[devpi `/+api` feature negotiation, a pattern worth keeping\].
 
-`velox config-snippet` prints ready `.pypirc` / `pip.conf` / `uv` config pointing at an index (the JFrog "Set Me Up" and
-devpi `use --set-cfg` pattern), a convenience emitter rather than a stateful client.
+`velodex config-snippet` prints ready `.pypirc` / `pip.conf` / `uv` config pointing at an index (the JFrog "Set Me Up"
+and devpi `use --set-cfg` pattern), a convenience emitter rather than a stateful client.
 
 ## 8. Upload: the standard protocol, no custom client
 
-velox writes no uploader. It accepts the standard PyPI upload protocol, so `twine`, `uv publish`, `flit publish`,
-`hatch publish`, and Poetry all work unmodified; the user only changes the repository URL. There is no velox equivalent
-of `devpi upload`.
+velodex writes no uploader. It accepts the standard PyPI upload protocol, so `twine`, `uv publish`, `flit publish`,
+`hatch publish`, and Poetry all work unmodified; the user only changes the repository URL. There is no velodex
+equivalent of `devpi upload`.
 
 The endpoint is the forklift contract \[warehouse/forklift/legacy.py\]: `POST /{index}/` with `multipart/form-data`,
 dispatched on the `:action=file_upload` field, `protocol_version=1`. Accepted fields and validation match Warehouse so
@@ -562,34 +564,34 @@ client error messages line up:
 - **Content-addressed storage.** The blob gets keyed by digest and written per
   [§5](#5-storage-and-the-filesystem-cache), so a private upload that duplicates a cached wheel costs zero extra bytes.
 
-velox takes Warehouse's blake2b-256 path layout, single-pass triple hashing, and idempotent-reupload semantics verbatim
-[warehouse/forklift/legacy.py:1082-1186, 1558-1585].
+velodex takes Warehouse's blake2b-256 path layout, single-pass triple hashing, and idempotent-reupload semantics
+verbatim [warehouse/forklift/legacy.py:1082-1186, 1558-1585].
 
 ## 9. Authentication and authorization
 
-Standard mechanisms only, so existing client configs work against velox after a URL change. velox accepts, over the read
-and upload paths:
+Standard mechanisms only, so existing client configs work against velodex after a URL change. velodex accepts, over the
+read and upload paths:
 
 - **pypi.org token auth.** HTTP Basic with username `__token__` and an API token as the password \[warehouse
-  macaroons/security_policy.py\]. velox issues its own tokens (opaque, scoped, optionally expiring); it does not require
-  macaroons.
+  macaroons/security_policy.py\]. velodex issues its own tokens (opaque, scoped, optionally expiring); it does not
+  require macaroons.
 - **Artifactory-style auth.** Basic username/password, and Bearer access/identity tokens [JFrog access-token docs]. A
-  client already pointed at Artifactory authenticates against velox unchanged.
-- **Basic username/password** for velox-native users.
-- **`.netrc`, URL-embedded credentials, keyring** stay client-side and work transparently, because velox sees only the
+  client already pointed at Artifactory authenticates against velodex unchanged.
+- **Basic username/password** for velodex-native users.
+- **`.netrc`, URL-embedded credentials, keyring** stay client-side and work transparently, because velodex sees only the
   resulting Basic/Bearer header.
 
 Auth is a compile-time `Authenticator` trait over a stable `credentials → Identity{user, groups}` contract \[devpi's
 pluggable credential extraction, minus pluggy\]. LDAP/OIDC/external auth are future trait impls, not v1.
 
-Upstream auth (velox to a private mirror) is configured per upstream and covers the spread found in the wild: static
+Upstream auth (velodex to a private mirror) is configured per upstream and covers the spread found in the wild: static
 Basic/Bearer, and rotating tokens with a refresh scheduler keyed off an expiry timestamp for CodeArtifact (12h STS
 token, username `aws`, re-minted via SigV4), Google AR (`oauth2accesstoken`, ~1h), and Azure credprovider JWT
 ([§6](#6-upstream-mirror-adapter-and-graceful-degradation) descriptor `AuthKind`).
 
 Authorization is per-index ACLs as pure data, first-match allow/deny [devpi view_auth.py]. Principals: `everyone`,
 `authenticated`, `<user>`, `:<group>`, with special `:ANONYMOUS:` and `:AUTHENTICATED:`. Per-index `acl_upload` controls
-publish. Read defaults to public but is a first-class per-index option, so velox builds in what devpi bolts on via
+publish. Read defaults to public but is a first-class per-index option, so velodex builds in what devpi bolts on via
 devpi-lockdown. `--restrict-modify` narrows who can create or modify users and indexes.
 
 Passwords hash with `argon2` (Argon2id); tokens compare in constant time (`subtle`).
@@ -597,15 +599,16 @@ Passwords hash with `argon2` (Argon2id); tokens compare in constant time (`subtl
 ## 10. Web UI
 
 A modern reactive single-page app written in Rust with **Leptos** (client-side rendering), compiled to WebAssembly with
-**trunk**. The whole frontend stays in the cargo toolchain, so velox builds with `cargo` plus `trunk` and never pulls in
-Node, npm, or vite. This keeps the self-contained, no-foreign-deps ethos while giving a genuinely modern static site.
+**trunk**. The whole frontend stays in the cargo toolchain, so velodex builds with `cargo` plus `trunk` and never pulls
+in Node, npm, or vite. This keeps the self-contained, no-foreign-deps ethos while giving a genuinely modern static site.
 
-- **Static output, embedded.** trunk builds `crates/velox-web` to a hashed `index.html` + `<hash>.wasm` + JS glue + CSS.
-  `rust-embed` bakes those assets into the binary; velox-http serves them as static files with immutable long-cache
-  headers (the hashed filenames make that safe). The WASM loads once and caches; there is no per-request server render.
-- **Data over the JSON API.** The app is a client of velox's own JSON: the PEP 691 simple JSON plus a small read-only UI
-  API (index list, index detail, project and version views, search results). Payloads are small JSON, so pages are fast
-  and the same data powers the CLI clients.
+- **Static output, embedded.** trunk builds `crates/velodex-web` to a hashed `index.html` + `<hash>.wasm` + JS glue +
+  CSS. `rust-embed` bakes those assets into the binary; velodex-http serves them as static files with immutable
+  long-cache headers (the hashed filenames make that safe). The WASM loads once and caches; there is no per-request
+  server render.
+- **Data over the JSON API.** The app is a client of velodex's own JSON: the PEP 691 simple JSON plus a small read-only
+  UI API (index list, index detail, project and version views, search results). Payloads are small JSON, so pages are
+  fast and the same data powers the CLI clients.
 - **Pages:** index list, index detail (bases, ACL, allow-list, package table), project (versions across the SRO),
   version (metadata, file list, rendered README), search, and `/+status`. Client-side routing.
 - **README rendering** happens server-side (`pulldown-cmark` for Markdown, sanitized with `ammonia`) and ships as
@@ -614,7 +617,7 @@ Node, npm, or vite. This keeps the self-contained, no-foreign-deps ethos while g
 - **Search** runs on Tantivy behind the `Indexer` trait seam (Phase 5). Hosting rendered Sphinx sites stays out of
   scope.
 
-uv and ruff ship no web UI, so there is no Astral precedent; devpi-web is the behavioral reference and velox
+uv and ruff ship no web UI, so there is no Astral precedent; devpi-web is the behavioral reference and velodex
 reimplements a leaner version of it in Rust.
 
 ## 11. Rust stack
@@ -650,7 +653,7 @@ pep508_rs      = "0.9"                                     # PEP 508 requirement
 python-pkginfo = "0.6"                                     # METADATA/PKG-INFO parsing (maturin uses it)
 # vendor uv-distribution-filename for wheel/sdist parsing; reimplement PEP 503 normalization
 
-# web UI (crates/velox-web, WASM target, built with trunk — no Node)
+# web UI (crates/velodex-web, WASM target, built with trunk — no Node)
 leptos      = { version = "0.7", features = ["csr"] }      # Rust/WASM reactive SPA
 rust-embed  = { version = "8", features = ["compression"] } # embed the built static assets
 pulldown-cmark = "0.12"                                     # server-side README render (Markdown)
@@ -681,16 +684,16 @@ rstest = "0.26"; insta = "1"; wiremock = "0.6"; proptest = "1"
 Rationale: axum/tower/tokio is the tokio-rs serving trio; reqwest with rustls and reqwest-retry is uv's verified proxy
 stack; redb is the one pure-Rust crash-safe store covering read-heavy index serving, the append-only serial log, and the
 HTTP cache index; rkyv for zero-copy hot records is uv's design; moka `get_with` gives request coalescing; pep440_rs and
-pep508_rs are semver-stable over a frozen spec, so reuse is safe. velox vendors wheel/sdist filename parsing from uv (no
-good standalone crate) and patches its imports to the standalone pep440/pep508 crates so types unify. Release builds at
-`opt-level=3` because sha2's soft backend needs it.
+pep508_rs are semver-stable over a frozen spec, so reuse is safe. velodex vendors wheel/sdist filename parsing from uv
+(no good standalone crate) and patches its imports to the standalone pep440/pep508 crates so types unify. Release builds
+at `opt-level=3` because sha2's soft backend needs it.
 
 ### Logging and observability
 
-velox logs through `tracing` with structured, leveled events and per-request spans (a `request_id`, the index, the
+velodex logs through `tracing` with structured, leveled events and per-request spans (a `request_id`, the index, the
 package), so behaviour is debuggable in production. The level comes from `tracing-subscriber`'s `EnvFilter`, set by
-`RUST_LOG`/`VELOX_LOG` or `--log-level {error,warn,info,debug,trace}` and overridable per module (for example
-`velox_upstream=debug`), so an operator raises verbosity for one subsystem without a rebuild or restart-wide noise.
+`RUST_LOG`/`VELODEX_LOG` or `--log-level {error,warn,info,debug,trace}` and overridable per module (for example
+`velodex_upstream=debug`), so an operator raises verbosity for one subsystem without a rebuild or restart-wide noise.
 Output routes to one or more sinks, selected by TOML/CLI/env: stdout (pretty for a TTY, JSON for log aggregation), a
 rolling log file (`tracing-appender`, non-blocking, daily or size rotation), and the system log via `tracing-journald`
 (systemd journal) or `syslog-tracing` (classic syslog). Metrics run alongside on the `metrics` facade with a Prometheus
@@ -698,17 +701,17 @@ exporter at `/metrics`. The CLI carries a `--verbose`/`-v` shortcut that bumps t
 
 ## 12. Distribution: pip-installable and self-contained
 
-velox ships the same binary through the channels uv uses, from one build \[uv pyproject.toml, dist-workspace.toml,
-.github/workflows/build-release-binaries.yml\]. Every build first runs `trunk build --release` for `crates/velox-web` so
-the WASM/HTML/CSS assets exist for `rust-embed` to bake in; both trunk and cargo come from the Rust toolchain, so the
+velodex ships the same binary through the channels uv uses, from one build \[uv pyproject.toml, dist-workspace.toml,
+.github/workflows/build-release-binaries.yml\]. Every build first runs `trunk build --release` for `crates/velodex-web`
+so the WASM/HTML/CSS assets exist for `rust-embed` to bake in; both trunk and cargo come from the Rust toolchain, so the
 pipeline adds no Node.
 
 ### PyPI wheels (maturin `bindings = "bin"`)
 
 A root `pyproject.toml` with `build-backend = "maturin"`, `[tool.maturin] bindings = "bin"`, `manifest-path` pointing at
-the `velox` crate, and `python-source = "python"`. This produces fat per-platform wheels: the native binary lands in the
-wheel's `scripts/` dir, so `pip install velox` and `uv tool install velox` put `velox` on PATH, and a small
-`python/velox/` launcher (`__main__.py` plus `_find_velox.py`) makes `python -m velox` work [uv python/uv/\*]. CI
+the `velodex` crate, and `python-source = "python"`. This produces fat per-platform wheels: the native binary lands in
+the wheel's `scripts/` dir, so `pip install velodex` and `uv tool install velodex` put `velodex` on PATH, and a small
+`python/velodex/` launcher (`__main__.py` plus `_find_velodex.py`) makes `python -m velodex` work [uv python/uv/\*]. CI
 matrix: manylinux2014, musllinux_1_1, macOS x86_64 and aarch64, windows msvc, always `--compatibility pypi`, each wheel
 smoke-tested with `pip install --no-index --find-links`. PyPI publish uses Trusted Publishing (OIDC): `id-token: write`,
 no stored token.
@@ -734,7 +737,7 @@ bumps `pyproject.toml` and the Cargo manifests together [uv rooster / bump-works
 
 ## 13. Testing and conformance
 
-velox runs a layered test suite through `cargo nextest` (one process per test, scheduled in parallel across binaries;
+velodex runs a layered test suite through `cargo nextest` (one process per test, scheduled in parallel across binaries;
 the integration tests share a single binary to keep link time down). Coverage runs through `cargo llvm-cov` and gates at
 **100% lines and functions**. Region and branch coverage is reported but not gated: it counts compiler- and
 macro-generated branches (`tracing` expansions, drop glue, panic edges) that no test reaches on stable, and the
@@ -750,9 +753,9 @@ The layers, fast to slow:
   auth-dropping redirects, ETag/304, timeouts). A real ephemeral port is used only for range requests and
   redirect-follow. Single-flight is asserted with `wiremock`'s `.expect(1)` under concurrent load, and TTL/staleness
   with `tokio`'s paused clock.
-- **End-to-end.** Real `pip`/`uv`/`twine` driven by `assert_cmd` against a running velox whose upstream is an in-process
-  mock that synthesizes tiny wheels and sdists in memory (uv's own model), with pinned upload times for deterministic
-  snapshots.
+- **End-to-end.** Real `pip`/`uv`/`twine` driven by `assert_cmd` against a running velodex whose upstream is an
+  in-process mock that synthesizes tiny wheels and sdists in memory (uv's own model), with pinned upload times for
+  deterministic snapshots.
 - **Fuzz.** `cargo-fuzz` targets for the multipart upload parser, the wheel/zip archive validator (zip bombs, path
   traversal, malformed `RECORD`), and the version/specifier/filename parsers.
 
@@ -760,57 +763,57 @@ The fast lint-and-unit job blocks every other job; e2e and container tests run i
 
 ### Conformance harness: the real acceptance bar
 
-Every pip/uv feature that works against pypi.org works against velox. No official Simple API conformance suite exists,
-so velox builds its own, modeled on `packse` [uv's resolver test tool].
+Every pip/uv feature that works against pypi.org works against velodex. No official Simple API conformance suite exists,
+so velodex builds its own, modeled on `packse` [uv's resolver test tool].
 
-- **Tier A, synthetic and deterministic.** Generate packages from declarative scenarios, serve them through velox, drive
-  real `pip` and `uv` CLIs in throwaway venvs, and assert identical resolution (versions, selected filenames, hashes).
-  Scenarios: pure-Python trees; manylinux/musllinux C-extension wheels (numpy, cryptography, pydantic-core) for tag
-  selection; sdists that build; extras and environment markers; `requires-python` filtering; yanked handling (skip
+- **Tier A, synthetic and deterministic.** Generate packages from declarative scenarios, serve them through velodex,
+  drive real `pip` and `uv` CLIs in throwaway venvs, and assert identical resolution (versions, selected filenames,
+  hashes). Scenarios: pure-Python trees; manylinux/musllinux C-extension wheels (numpy, cryptography, pydantic-core) for
+  tag selection; sdists that build; extras and environment markers; `requires-python` filtering; yanked handling (skip
   unless only match or pinned); `--require-hashes`; constraints/overrides; PEP 658 metadata-only resolution (assert the
   served `.metadata` bytes hash-match the wheel); `uv lock` plus `uv sync --locked` reproducibility; `--index-url` vs
   `--extra-index-url` and uv index priority, including the dependency-confusion no-fallthrough case.
 - **Tier B, golden baseline vs pypi.org.** For a curated project set, snapshot the real `pypi.org/simple/<project>/`
-  JSON keyed by its `_last-serial`, then assert velox's output matches modulo URL-host rewriting and `.metadata`
+  JSON keyed by its `_last-serial`, then assert velodex's output matches modulo URL-host rewriting and `.metadata`
   backfill. Pinning to a serial makes the diff deterministic despite CDN caching.
 - **Regression guards from real client bugs.** Missing project returns 404-no-body (pip#11490); correct `Content-Type`
   with no spurious 406 (uv#14375) or charset rejection (uv#1754); auth re-attached across redirects (uv#5595) and reused
   on the download URL (uv#5600); name-normalization redirect; trailing-slash tolerance both ways; an empty or group
   index does not cause early-exit (uv#7273).
-- **Upstream degradation tests.** Spin up a no-PEP-658 upstream and confirm velox synthesizes `.metadata` whose hash
+- **Upstream degradation tests.** Spin up a no-PEP-658 upstream and confirm velodex synthesizes `.metadata` whose hash
   matches the wheel METADATA; a no-hash upstream, and confirm sha256 is computed and stable; a no-serial upstream, and
   confirm TTL revalidation fires; the capability probe detects each.
 
-### Final validation: devpi vs velox
+### Final validation: devpi vs velodex
 
 The release bar is a side-by-side against devpi, the closest existing tool. A harness bootstraps both a devpi server and
-velox pointed at the same upstream, then runs one integration workload against each: install a set of popular PyPI
+velodex pointed at the same upstream, then runs one integration workload against each: install a set of popular PyPI
 packages and their dependency trees (numpy, pandas, requests, flask, cryptography, boto3, …) with pip and uv, upload and
 re-download private packages, and exercise the overlay and promotion flow. Functionality is checked first: identical
 resolution, hashes, and install success, and matching simple-index and JSON output modulo host rewriting.
 
 The headline is a single table that puts **size and performance next to each other for each package**, because they move
 together: a smaller cached footprint is what makes the warm path fast. One row per package (plus an aggregate row),
-devpi vs velox side by side:
+devpi vs velodex side by side:
 
-| Package   | Cold install (s) | Warm install (s) | Req/s (concurrent) | Peak RSS (MB) | Cache on disk (MB) |
-| --------- | ---------------- | ---------------- | ------------------ | ------------- | ------------------ |
-| numpy     | devpi / velox    | devpi / velox    | devpi / velox      | devpi / velox | devpi / velox      |
-| …         |                  |                  |                    |               |                    |
-| **total** |                  |                  |                    |               |                    |
+| Package   | Cold install (s) | Warm install (s) | Req/s (concurrent) | Peak RSS (MB)   | Cache on disk (MB) |
+| --------- | ---------------- | ---------------- | ------------------ | --------------- | ------------------ |
+| numpy     | devpi / velodex  | devpi / velodex  | devpi / velodex    | devpi / velodex | devpi / velodex    |
+| …         |                  |                  |                    |                 |                    |
+| **total** |                  |                  |                    |                 |                    |
 
 The size columns (peak RSS, on-disk cache) sit beside the latency and throughput columns so a reader sees directly that
-velox's content-addressed, deduplicated cache and small resident set buy the faster cold and warm numbers. The server's
-own binary size and idle RSS are reported alongside. The target is functional parity with devpi and a clear win across
-every column.
+velodex's content-addressed, deduplicated cache and small resident set buy the faster cold and warm numbers. The
+server's own binary size and idle RSS are reported alongside. The target is functional parity with devpi and a clear win
+across every column.
 
-## 14. What velox changes vs devpi
+## 14. What velodex changes vs devpi
 
-devpi is the closest existing tool and the main behavioral reference. velox keeps its valuable domain logic (the
+devpi is the closest existing tool and the main behavioral reference. velodex keeps its valuable domain logic (the
 SRO/overlay model, the mirror allow-list, the permanent artifact cache, `push` promotion, the serial/changelog concept)
 and replaces its architectural liabilities:
 
-| devpi                                                                                                                                                                                 | velox                                                                                                                   |
+| devpi                                                                                                                                                                                 | velodex                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Python + Pyramid + waitress, thread-per-request pool, a separate asyncio-loop-in-a-thread for HTTP [devpi main.py]                                                                    | One async Rust process (axum/tokio); no GIL, no thread pool, no loop bridge.                                            |
 | keyfs stores values inside serialized changelog BLOBs; `kv` holds only pointers; the bespoke marshal-like format doubles as the replication wire format [devpi keyfs.py, fileutil.py] | redb (MVCC B-tree) for typed metadata; the on-disk format stays decoupled from any future replication wire format.      |
@@ -823,11 +826,11 @@ and replaces its architectural liabilities:
 | Read-open by default; read-auth needs devpi-lockdown plus nginx                                                                                                                       | Per-index read ACL is a first-class native option.                                                                      |
 | Most functionality ships as external pluggy plugins (tokens, lockdown, ldap, jenkins, slack)                                                                                          | Token auth and read ACLs native; CI/webhook and external auth collapse into one event/webhook seam plus the auth trait. |
 
-velox does not carry devpi's export/import dump format. Replication rides the serial log and ships in Phase 5.
+velodex does not carry devpi's export/import dump format. Replication rides the serial log and ships in Phase 5.
 
 ## 15. Project conventions
 
-House style from toml-fmt [toml-fmt CONTRIBUTING, Cargo.toml, .rustfmt.toml], adapted for a standalone binary (velox
+House style from toml-fmt [toml-fmt CONTRIBUTING, Cargo.toml, .rustfmt.toml], adapted for a standalone binary (velodex
 adds clap, real error enums, and tuned release profiles that the PyO3-library toml-fmt does not need):
 
 - **Modern, latest-stable Rust.** Edition 2024, `rust-toolchain.toml` pinned to current stable (1.93.x), built
@@ -850,7 +853,7 @@ adds clap, real error enums, and tuned release profiles that the PyO3-library to
 
 ## 16. Phased implementation plan
 
-velox gets built in one effort and lands in one PR. The work splits into six phases so it can be validated and resumed
+velodex gets built in one effort and lands in one PR. The work splits into six phases so it can be validated and resumed
 at each step, not so it ships piecemeal. Each phase names its scope, its deliverables, and a validation gate: a
 concrete, runnable check that proves the phase works. A phase is done when its gate passes on a clean checkout. The
 gates are the resume points, so a later phase starts from a validated base, and the final PR contains all six.
@@ -861,7 +864,7 @@ flowchart LR
     G0 --> P1["Phase 1<br/>read-through cache"]:::p --> G1{{"pip/uv install + offline"}}:::g
     G1 --> P2["Phase 2<br/>upstream adapter"]:::p --> G2{{"HTML-only upstream + Tier A"}}:::g
     G2 --> P3["Phase 3<br/>overlay + upload"]:::p --> G3{{"twine/uv publish + SRO"}}:::g
-    G3 --> P4["Phase 4<br/>UI + distribution"]:::p --> G4{{"pip install velox + Tier B"}}:::g
+    G3 --> P4["Phase 4<br/>UI + distribution"]:::p --> G4{{"pip install velodex + Tier B"}}:::g
     G4 --> P5["Phase 5<br/>attest · replicate · search"]:::p --> G5{{"attest + replica + search"}}:::g
 
     classDef p fill:#cfe8fb,stroke:#0072b2,color:#08324a;
@@ -875,18 +878,18 @@ are not restated per phase.
 
 Scope: the workspace and its guardrails, no product logic.
 
-- Cargo workspace (`resolver = "2"`), `rust-toolchain.toml` pinned to stable 1.93.x, crate split (a `velox` binary plus
-  library crates for `core`, `storage`, `upstream`, `http`).
+- Cargo workspace (`resolver = "2"`), `rust-toolchain.toml` pinned to stable 1.93.x, crate split (a `velodex` binary
+  plus library crates for `core`, `storage`, `upstream`, `http`).
 - `[workspace.lints]`, `.rustfmt.toml` (`max_width = 120`), committed `Cargo.lock`.
 - CI: per-crate path-filtered workflows, clippy `-D warnings`, `cargo fmt --check`, `cargo llvm-cov` 100% gate,
   SHA-pinned actions, an `all-pass` gate.
-- `clap` skeleton (`velox serve`, `velox init`, `--help`) and `config` loading (defaults, env, file) with the precedence
-  tests.
+- `clap` skeleton (`velodex serve`, `velodex init`, `--help`) and `config` loading (defaults, env, file) with the
+  precedence tests.
 - The `tracing` logging setup: `EnvFilter` level control, `--log-level`/`--verbose`, and the stdout/rolling-file/syslog
   sinks selectable by config, with tests for filter parsing and sink selection.
 
 Validation gate: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and the coverage gate
-all pass in CI; `velox --help` runs and `velox serve --log-level debug` emits structured logs to the chosen sink.
+all pass in CI; `velodex --help` runs and `velodex serve --log-level debug` emits structured logs to the chosen sink.
 
 ### Phase 1: read-through cache
 
@@ -901,7 +904,7 @@ Scope: a working mirror of `root/pypi`, the storage core, the read path.
 - moka hot tier (project names, hot simple pages, etag/serial map).
 
 Validation gate: `pip install` and `uv pip install` a pure-Python package (e.g. `flask`) and a manylinux C-extension
-wheel (e.g. `numpy`) through velox pointed at pypi.org succeed; a second run with the network cut still installs from
+wheel (e.g. `numpy`) through velodex pointed at pypi.org succeed; a second run with the network cut still installs from
 cache; `insta` snapshots pin the HTML/JSON bytes; a wiremock-backed test proves single-flight (N concurrent misses
 trigger one upstream GET).
 
@@ -930,8 +933,8 @@ Scope: the overlay system and the standard upload protocol.
   `push` promotion as a zero-byte clone.
 - The forklift upload endpoint with the full validation gauntlet; content-addressed storage of uploads with the
   durable-upload recovery path.
-- Auth: velox tokens plus Artifactory-style Basic/Bearer; per-index ACLs including a read ACL; `--restrict-modify`. The
-  management API (index/user CRUD, `/+api`).
+- Auth: velodex tokens plus Artifactory-style Basic/Bearer; per-index ACLs including a read ACL; `--restrict-modify`.
+  The management API (index/user CRUD, `/+api`).
 
 Validation gate: `twine upload`, `uv publish`, `flit publish`, and `hatch publish` to a private index all succeed
 unmodified; a re-upload of identical content returns 200 and of different content returns a 400 whose body starts with
@@ -941,17 +944,17 @@ failures return 401/403 with the right challenge.
 
 ### Phase 4: web UI, distribution, polish
 
-Scope: the surfaces that make velox shippable and usable.
+Scope: the surfaces that make velodex shippable and usable.
 
-- Leptos/WASM web UI (`crates/velox-web`, built with trunk, no Node), consuming the JSON API, embedded via `rust-embed`;
-  the small read-only UI JSON API behind it.
-- Legacy JSON API (`/pypi/{project}/json`); `velox cache gc|prune|fsck`; `velox config-snippet`; nginx offload docs.
+- Leptos/WASM web UI (`crates/velodex-web`, built with trunk, no Node), consuming the JSON API, embedded via
+  `rust-embed`; the small read-only UI JSON API behind it.
+- Legacy JSON API (`/pypi/{project}/json`); `velodex cache gc|prune|fsck`; `velodex config-snippet`; nginx offload docs.
 - Distribution: maturin `bindings = "bin"` fat wheels across the CI matrix, Trusted Publishing, `cargo-dist`
   shell/PowerShell installers, static musl linking, Docker `FROM scratch`.
 
-Validation gate: `pip install velox` from a locally built wheel puts `velox` on PATH and `python -m velox --help` runs;
-the shell installer produces a working static binary; the web UI loads and every page renders against the JSON API
-(index list, project, version, search); `velox fsck` detects a deliberately corrupted blob. Conformance Tier B
+Validation gate: `pip install velodex` from a locally built wheel puts `velodex` on PATH and `python -m velodex --help`
+runs; the shell installer produces a working static binary; the web UI loads and every page renders against the JSON API
+(index list, project, version, search); `velodex fsck` detects a deliberately corrupted blob. Conformance Tier B
 (golden-baseline diff vs pypi.org) and the regression guards are green.
 
 ### Phase 5: attestations, replication, search, extensibility
@@ -967,8 +970,8 @@ Scope: the remaining capabilities, all delivered in the same PR.
   jenkins/slack plugin use cases.
 
 Validation gate: a `twine upload` carrying a valid attestation is accepted and its provenance serves at the advertised
-URL; a quarantined project returns 404 from the simple API; a second velox process configured as a replica catches up to
-the primary's serial and serves the same bytes; full-text search returns a known project; an OIDC-backed login
+URL; a quarantined project returns 404 from the simple API; a second velodex process configured as a replica catches up
+to the primary's serial and serves the same bytes; full-text search returns a known project; an OIDC-backed login
 authenticates; a configured webhook fires on upload.
 
 ## 17. References

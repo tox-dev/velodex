@@ -4,7 +4,7 @@ description = "Every TOML key, flag, and default. Precedence is defaults < TOML 
 weight = 1
 +++
 
-velox reads one TOML file, passed with `--config <path>`. A few operational settings double as flags, which override
+velodex reads one TOML file, passed with `--config <path>`. A few operational settings double as flags, which override
 the file. Precedence is `defaults < TOML file < flags`.
 
 ## Top level
@@ -13,7 +13,7 @@ the file. Precedence is `defaults < TOML file < flags`.
 | ------------------------- | ----------------- | ---------------- | ------------ |
 | Bind host                 | `--host`          | `host`           | `127.0.0.1`  |
 | Bind port                 | `--port`          | `port`           | `4433`       |
-| Data directory            | `--data-dir`      | `data_dir`       | `velox-data` |
+| Data directory            | `--data-dir`      | `data_dir`       | `velodex-data` |
 | Config file               | `--config` / `-c` | (n/a)            | (none)       |
 | Cache freshness (seconds) | (file only)       | `cache_ttl_secs` | `1800`       |
 | Indexes                   | (file only)       | `[[index]]`      | (see below)  |
@@ -21,7 +21,7 @@ the file. Precedence is `defaults < TOML file < flags`.
 ## `[[index]]`
 
 Each `[[index]]` table declares one index. `name` is required; exactly one of `mirror`, `local`, or `layers` selects
-the kind. velox rejects unknown keys.
+the kind. velodex rejects unknown keys.
 
 | Key            | Applies to | Meaning                                                              | Default        |
 | -------------- | ---------- | -------------------------------------------------------------------- | -------------- |

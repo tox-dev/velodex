@@ -1,5 +1,5 @@
 {
-  "name": "velox-frontend-tests",
+  "name": "velodex-frontend-tests",
   "private": true,
   "scripts": {
     "test": "playwright test"

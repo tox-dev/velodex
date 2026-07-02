@@ -1,5 +1,5 @@
 // Functional tests of the hydrated web UI: every reactive feature is driven the way a person would
-// drive it, against a real velox with a real uploaded package.
+// drive it, against a real velodex with a real uploaded package.
 import { expect, test } from "@playwright/test";
 
 const PROJECT_URL = "/browse?index=root%2Fpypi&project=veloxdemo";

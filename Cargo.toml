@@ -7,7 +7,7 @@ version = "0.0.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
-repository = "https://github.com/tox-dev/velox"
+repository = "https://github.com/tox-dev/velodex"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -18,11 +18,11 @@ nursery = { level = "warn", priority = -1 }
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-velox-core = { path = "crates/velox-core" }
-velox-storage = { path = "crates/velox-storage" }
-velox-upstream = { path = "crates/velox-upstream" }
-velox-http = { path = "crates/velox-http" }
-velox-web = { path = "crates/velox-web" }
+velodex-core = { path = "crates/velodex-core" }
+velodex-storage = { path = "crates/velodex-storage" }
+velodex-upstream = { path = "crates/velodex-upstream" }
+velodex-http = { path = "crates/velodex-http" }
+velodex-web = { path = "crates/velodex-web" }
 axum = { version = "0.8", features = ["multipart"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
@@ -30,10 +30,15 @@ http = "1"
 http-body-util = "0.1"
 sha2 = "0.11"
 tempfile = "3"
+mimalloc = "0.1"
 redb = "4.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "rustls-native-certs", "http2", "stream", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "rustls-native-certs", "http2", "stream", "gzip", "zstd"] }
 bytes = "1"
+futures-core = "0.3"
+futures-util = "0.3"
+moka = { version = "0.12", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
 base64 = "0.22"
 url = "2"
 wiremock = "0.6"
@@ -69,14 +74,14 @@ strip = true
 lto = "fat"
 
 # cargo-leptos builds the web UI's browser bundle: `cargo leptos build --release` compiles
-# velox-web to wasm and writes ui/pkg/, which the server serves at /pkg. The server itself renders
+# velodex-web to wasm and writes ui/pkg/, which the server serves at /pkg. The server itself renders
 # pages without the bundle, so this step is only needed for the interactive UI.
 [[workspace.metadata.leptos]]
-name = "velox"
-bin-package = "velox"
-lib-package = "velox-web"
+name = "velodex"
+bin-package = "velodex"
+lib-package = "velodex-web"
 lib-features = ["hydrate"]
 lib-default-features = false
-output-name = "velox_web"
+output-name = "velodex_web"
 site-root = "ui"
 site-pkg-dir = "pkg"

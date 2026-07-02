@@ -9,10 +9,10 @@ file. `-v` raises the level to debug and `-vv` to trace. A directive can target 
 the output quiet:
 
 ```shell
-velox --log-level "info,velox_upstream=debug" serve
+velodex --log-level "info,velodex_upstream=debug" serve
 ```
 
-velox logs each HTTP request with its method, path, status, and latency at info, the default level, so you can watch
+velodex logs each HTTP request with its method, path, status, and latency at info, the default level, so you can watch
 pip and uv take the [PEP 658](https://peps.python.org/pep-0658/) `.metadata` path without raising verbosity.
 
 ## Sinks
@@ -32,7 +32,7 @@ In the config file:
 level = "info"
 format = "json"
 sink = "file"
-file = "/var/log/velox/velox.log"
+file = "/var/log/velodex/velodex.log"
 ```
 
-velox validates the combination at startup and refuses, for example, a `file` sink without a path.
+velodex validates the combination at startup and refuses, for example, a `file` sink without a path.

@@ -6,5 +6,5 @@ template = "redoc.html"
 +++
 
 Each endpoint below carries its parameters, an example request, and example responses per status code. The
-`velox openapi` subcommand generates this document from the source, so it cannot drift from the server; a running
-velox serves its own copy at `/api-docs/openapi.json`.
+`velodex openapi` subcommand generates this document from the source, so it cannot drift from the server; a running
+velodex serves its own copy at `/api-docs/openapi.json`.

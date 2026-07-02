@@ -12,5 +12,5 @@ template = "index.html"
   path pip and uv use to resolve without downloading wheels.
 - **One small binary** Async Rust ([axum](https://github.com/tokio-rs/axum)/tokio), an embedded crash-safe store ([redb](https://www.redb.org/)), no external services, and a
   single TOML file for configuration.
-- **Proven with real clients** The test suite drives actual pip, uv, and twine against a live velox and holds 100%
+- **Proven with real clients** The test suite drives actual pip, uv, and twine against a live velodex and holds 100%
   line and function coverage.

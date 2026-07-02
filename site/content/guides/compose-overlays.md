@@ -5,7 +5,7 @@ weight = 2
 +++
 
 An overlay lists other indexes as `layers` and serves them under one route. Resolution is first-match per filename:
-velox walks the layers in order and keeps the first occurrence of each file, so a file in an earlier layer shadows
+velodex walks the layers in order and keeps the first occurrence of each file, so a file in an earlier layer shadows
 the same filename in a later one. Versions union across layers.
 
 ## A private layer over each mirror
@@ -53,7 +53,7 @@ upload = "staging-local"
 
 ## Where uploads land
 
-`upload` names the local layer that receives POSTs to the overlay's route. Omit it and velox picks the overlay's
+`upload` names the local layer that receives POSTs to the overlay's route. Omit it and velodex picks the overlay's
 first local layer; an overlay of only mirrors rejects uploads with `405`.
 
 ## Failure behavior

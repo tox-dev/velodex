@@ -1,11 +1,11 @@
 +++
 title = "Command line"
-description = "The velox binary's commands and flags."
+description = "The velodex binary's commands and flags."
 weight = 4
 +++
 
 ```
-velox [OPTIONS] <COMMAND>
+velodex [OPTIONS] <COMMAND>
 ```
 
 ## Commands
@@ -21,7 +21,7 @@ velox [OPTIONS] <COMMAND>
 | ------------------- | ---------------------------------------------------------- | ------------- |
 | `--host <addr>`     | Bind address                                               | `127.0.0.1`   |
 | `--port <port>`     | Bind port                                                  | `4433`        |
-| `--data-dir <path>` | Data directory (redb store and blob cache)                 | `velox-data`  |
+| `--data-dir <path>` | Data directory (redb store and blob cache)                 | `velodex-data`  |
 | `--config <path>`   | TOML configuration file                                    | (none)        |
 | `--log-level <dir>` | [`tracing` directive](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html): `error`, `warn`, `info`, `debug`, `trace`, or per-module | `info` |
 | `-v`, `-vv`         | Raise the level to debug / trace                           |               |

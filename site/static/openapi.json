@@ -1,11 +1,11 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "velox",
+    "title": "velodex",
     "description": "PyPI-compatible read-through cache and private index. Every configured index route serves the same surface; `{route}` is the index's route, for example `root/pypi`. Write operations authenticate with HTTP Basic where the password is the target local index's upload token and the username is ignored.",
     "contact": {
       "name": "tox-dev",
-      "url": "https://github.com/tox-dev/velox"
+      "url": "https://github.com/tox-dev/velodex"
     },
     "license": {
       "name": "MIT"
@@ -15,7 +15,7 @@
   "servers": [
     {
       "url": "http://127.0.0.1:4433",
-      "description": "A local velox with the default configuration"
+      "description": "A local velodex with the default configuration"
     }
   ],
   "paths": {
@@ -96,7 +96,7 @@
             "description": "Prometheus text exposition",
             "content": {
               "text/plain; version=0.0.4": {
-                "example": "# HELP velox_requests_total Total HTTP requests served.\n# TYPE velox_requests_total counter\nvelox_requests_total 128\n# HELP velox_metadata_requests_total PEP 658 .metadata siblings served.\n# TYPE velox_metadata_requests_total counter\nvelox_metadata_requests_total 37\n"
+                "example": "# HELP velodex_requests_total Total HTTP requests served.\n# TYPE velodex_requests_total counter\nvelodex_requests_total 128\n# HELP velodex_metadata_requests_total PEP 658 .metadata siblings served.\n# TYPE velodex_metadata_requests_total counter\nvelodex_metadata_requests_total 37\n"
               }
             }
           }
@@ -126,7 +126,7 @@
               "example": {
                 ":action": "file_upload",
                 "content": "<the distribution file>",
-                "name": "veloxpkg",
+                "name": "velodexpkg",
                 "requires_python": ">=3.8",
                 "sha256_digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                 "version": "1.0"
@@ -194,7 +194,7 @@
             "name": "filename",
             "in": "path",
             "required": true,
-            "example": "veloxpkg-1.0-py3-none-any.whl"
+            "example": "velodexpkg-1.0-py3-none-any.whl"
           }
         ],
         "responses": {
@@ -242,7 +242,7 @@
             "name": "filename",
             "in": "path",
             "required": true,
-            "example": "veloxpkg-1.0-py3-none-any.whl.metadata"
+            "example": "velodexpkg-1.0-py3-none-any.whl.metadata"
           }
         ],
         "responses": {
@@ -250,7 +250,7 @@
             "description": "The core-metadata document",
             "content": {
               "application/octet-stream": {
-                "example": "Metadata-Version: 2.1\nName: veloxpkg\nVersion: 1.0\nRequires-Python: >=3.8\n"
+                "example": "Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\nRequires-Python: >=3.8\n"
               }
             }
           },
@@ -286,7 +286,7 @@
             "name": "filename",
             "in": "path",
             "required": true,
-            "example": "veloxpkg-1.0-py3-none-any.whl"
+            "example": "velodexpkg-1.0-py3-none-any.whl"
           }
         ],
         "responses": {
@@ -295,14 +295,14 @@
             "content": {
               "application/json": {
                 "example": {
-                  "filename": "veloxpkg-1.0-py3-none-any.whl",
+                  "filename": "velodexpkg-1.0-py3-none-any.whl",
                   "members": [
                     {
-                      "path": "veloxpkg/__init__.py",
+                      "path": "velodexpkg/__init__.py",
                       "size": 20
                     },
                     {
-                      "path": "veloxpkg-1.0.dist-info/METADATA",
+                      "path": "velodexpkg-1.0.dist-info/METADATA",
                       "size": 653
                     }
                   ]
@@ -348,13 +348,13 @@
             "name": "filename",
             "in": "path",
             "required": true,
-            "example": "veloxpkg-1.0-py3-none-any.whl"
+            "example": "velodexpkg-1.0-py3-none-any.whl"
           },
           {
             "name": "member",
             "in": "path",
             "required": true,
-            "example": "veloxpkg-1.0.dist-info/METADATA"
+            "example": "velodexpkg-1.0.dist-info/METADATA"
           }
         ],
         "responses": {
@@ -362,7 +362,7 @@
             "description": "The member content",
             "content": {
               "text/plain; charset=utf-8": {
-                "example": "Metadata-Version: 2.1\nName: veloxpkg\nVersion: 1.0\n"
+                "example": "Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n"
               }
             }
           },
@@ -381,7 +381,7 @@
           "simple"
         ],
         "summary": "List projects",
-        "description": "The projects velox has observed on this index: everything uploaded, plus every mirrored project a client has asked for. An overlay unions its layers. JSON or HTML by `Accept`.",
+        "description": "The projects velodex has observed on this index: everything uploaded, plus every mirrored project a client has asked for. An overlay unions its layers. JSON or HTML by `Accept`.",
         "parameters": [
           {
             "name": "route",
@@ -412,7 +412,7 @@
                       "name": "requests"
                     },
                     {
-                      "name": "veloxpkg"
+                      "name": "velodexpkg"
                     }
                   ]
                 }
@@ -431,7 +431,7 @@
           "simple"
         ],
         "summary": "Project detail",
-        "description": "All files of one project, merged across overlay layers (first match per filename wins, versions union). File URLs point back at velox's own `files/` route; `core-metadata` advertises the PEP 658 sibling.",
+        "description": "All files of one project, merged across overlay layers (first match per filename wins, versions union). File URLs point back at velodex's own `files/` route; `core-metadata` advertises the PEP 658 sibling.",
         "parameters": [
           {
             "name": "route",
@@ -466,20 +466,20 @@
                       "core-metadata": {
                         "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
                       },
-                      "filename": "veloxpkg-1.0-py3-none-any.whl",
+                      "filename": "velodexpkg-1.0-py3-none-any.whl",
                       "hashes": {
                         "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
                       },
                       "requires-python": ">=3.8",
                       "size": 1832,
-                      "url": "/root/pypi/files/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/veloxpkg-1.0-py3-none-any.whl",
+                      "url": "/root/pypi/files/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08/velodexpkg-1.0-py3-none-any.whl",
                       "yanked": false
                     }
                   ],
                   "meta": {
                     "api-version": "1.1"
                   },
-                  "name": "veloxpkg",
+                  "name": "velodexpkg",
                   "versions": [
                     "1.0"
                   ]

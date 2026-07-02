@@ -1,10 +1,10 @@
 +++
 title = "Getting started"
-description = "Install velox, serve your first packages through it, publish a private package, and remove it again."
+description = "Install velodex, serve your first packages through it, publish a private package, and remove it again."
 weight = 1
 +++
 
-In this tutorial you will build velox from source, start it with no configuration, install packages through it with
+In this tutorial you will build velodex from source, start it with no configuration, install packages through it with
 pip and uv, publish a package of your own, then yank and delete it. It takes about ten minutes.
 
 ## Prerequisites
@@ -13,13 +13,13 @@ You need a [Rust toolchain](https://rustup.rs) (the exact version is pinned by t
 `rust-toolchain.toml`, so rustup selects it for you) and Python with `pip` or [`uv`](https://docs.astral.sh/uv/)
 to act as the client.
 
-## Build and start velox
+## Build and start velodex
 
 Clone and build the release binary:
 
 ```shell
-git clone https://github.com/tox-dev/velox.git
-cd velox
+git clone https://github.com/tox-dev/velodex.git
+cd velodex
 cargo build --release
 ```
 
@@ -27,10 +27,10 @@ Start the server. It needs no configuration; the defaults give you a pypi.org mi
 overlaid in front of it, served at `root/pypi`:
 
 ```shell
-./target/release/velox serve
+./target/release/velodex serve
 ```
 
-velox is now listening on `127.0.0.1:4433`. Leave it running and use a second terminal for the rest of the tutorial.
+velodex is now listening on `127.0.0.1:4433`. Leave it running and use a second terminal for the rest of the tutorial.
 
 ## Install through the cache
 
@@ -47,7 +47,7 @@ or with pip:
 python -m venv demo && demo/bin/pip install --index-url http://127.0.0.1:4433/root/pypi/simple/ requests
 ```
 
-Both clients use the [PEP 658](https://peps.python.org/pep-0658/) metadata fast path through velox: they resolve dependency trees by fetching small
+Both clients use the [PEP 658](https://peps.python.org/pep-0658/) metadata fast path through velodex: they resolve dependency trees by fetching small
 `.metadata` files rather than whole wheels. You can see this on the metrics endpoint:
 
 ```shell
@@ -56,17 +56,17 @@ curl -s http://127.0.0.1:4433/metrics | grep metadata
 
 ## Browse the web UI
 
-velox serves its own web interface on the same port. Open [http://127.0.0.1:4433/](http://127.0.0.1:4433/) for a live
+velodex serves its own web interface on the same port. Open [http://127.0.0.1:4433/](http://127.0.0.1:4433/) for a live
 dashboard of the configured indexes and request counters, click an index to get a searchable project list, and click a
 project for a pypi.org-style page: description, dependencies, classifiers, files with hashes, and a browser for the
 contents of each archive.
 
 ## Publish a private package
 
-Uploads are disabled until you set a token. Stop velox, write a minimal config that adds one, and restart:
+Uploads are disabled until you set a token. Stop velodex, write a minimal config that adds one, and restart:
 
 ```toml
-# velox.toml
+# velodex.toml
 [[index]]
 name = "pypi"
 mirror = "https://pypi.org/simple/"
@@ -82,7 +82,7 @@ upload = "local"
 ```
 
 ```shell
-./target/release/velox --config velox.toml serve
+./target/release/velodex --config velodex.toml serve
 ```
 
 Now publish a wheel with [twine](https://twine.readthedocs.io/) or uv (any username; the token is the password):

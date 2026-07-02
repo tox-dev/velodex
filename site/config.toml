@@ -1,5 +1,5 @@
-base_url = "https://velox.readthedocs.io"
-title = "velox"
+base_url = "https://velodex.readthedocs.io"
+title = "velodex"
 description = "A PyPI-compatible read-through cache and private index, written in Rust."
 compile_sass = true
 build_search_index = false
@@ -9,4 +9,4 @@ generate_feeds = false
 highlighting = { theme = "ayu-dark" }
 
 [extra]
-repo = "https://github.com/tox-dev/velox"
+repo = "https://github.com/tox-dev/velodex"

@@ -5,7 +5,7 @@ weight = 2
 +++
 
 Every configured index route serves the same surface; `{route}` below is the index's `route`, for example
-`root/pypi`. velox resolves a request to the index with the longest matching route prefix. The
+`root/pypi`. velodex resolves a request to the index with the longest matching route prefix. The
 [API explorer](@/reference/api.md) breaks each endpoint down with copyable example requests and responses.
 
 | Method and path                                    | Purpose                                              |
@@ -51,6 +51,6 @@ which includes the [PEP 700](https://peps.python.org/pep-0700/) `versions`, `siz
 
 `GET /metrics` exposes Prometheus counters:
 
-- `velox_requests_total`: HTTP requests served.
-- `velox_metadata_requests_total`: PEP 658 `.metadata` siblings served; a rising value proves clients resolve via
+- `velodex_requests_total`: HTTP requests served.
+- `velodex_metadata_requests_total`: PEP 658 `.metadata` siblings served; a rising value proves clients resolve via
   the metadata fast path rather than by downloading wheels.

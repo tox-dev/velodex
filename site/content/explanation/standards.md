@@ -1,14 +1,14 @@
 +++
 title = "Standards"
-description = "The packaging PEPs and specifications velox implements, and how they fit together."
+description = "The packaging PEPs and specifications velodex implements, and how they fit together."
 weight = 3
 +++
 
-velox targets the interoperability standards a modern index and its clients rely on. The
+velodex targets the interoperability standards a modern index and its clients rely on. The
 [Simple Repository API](https://packaging.python.org/en/latest/specifications/simple-repository-api/) is the living
-consolidation of most of them; velox serves `meta.api-version` 1.1.
+consolidation of most of them; velodex serves `meta.api-version` 1.1.
 
-| Standard | Role in velox |
+| Standard | Role in velodex |
 | -------- | ------------- |
 | [PEP 503](https://peps.python.org/pep-0503/) | The HTML simple index and project-name normalization; served to clients that do not ask for JSON, and parsed from HTML-only upstreams |
 | [PEP 691](https://peps.python.org/pep-0691/) | The JSON simple index and its content negotiation; the primary wire format both directions |
@@ -25,13 +25,13 @@ consolidation of most of them; velox serves `meta.api-version` 1.1.
 ## PEP 714 and the `core-metadata` key
 
 PEP 658 shipped with a bug in its `dist-info-metadata` key name, and PEP 714 renamed it to `core-metadata`. Indexes
-such as pypi.org emit both keys for compatibility. velox reads only `core-metadata` and ignores the legacy key,
+such as pypi.org emit both keys for compatibility. velodex reads only `core-metadata` and ignores the legacy key,
 because accepting both as aliases would make a strict parser reject the duplicate; downstream it emits both HTML
 attributes for older clients, matching pypi.org's behavior.
 
 ## Graceful degradation
 
-Some upstreams implement only part of the stack; Artifactory and GitLab serve HTML alone. velox negotiates
+Some upstreams implement only part of the stack; Artifactory and GitLab serve HTML alone. velodex negotiates
 JSON first, parses PEP 503 HTML as the fallback, and re-serves the modern formats downstream, so a client
 gets api-version 1.1 with PEP 700 fields regardless of what the upstream offered. Features the upstream cannot
 express (a missing `.metadata` sibling, absent sizes) degrade per file rather than per index.

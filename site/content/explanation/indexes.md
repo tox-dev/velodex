@@ -1,10 +1,10 @@
 +++
 title = "The index model"
-description = "Mirrors, locals, and overlays; what velox borrowed from [devpi](https://devpi.net/docs/), [Artifactory](https://jfrog.com/help/r/jfrog-artifactory-documentation/virtual-repositories), and [Nexus](https://help.sonatype.com/en/repository-types.html)."
+description = "Mirrors, locals, and overlays; what velodex borrowed from [devpi](https://devpi.net/docs/), [Artifactory](https://jfrog.com/help/r/jfrog-artifactory-documentation/virtual-repositories), and [Nexus](https://help.sonatype.com/en/repository-types.html)."
 weight = 2
 +++
 
-The index servers teams run in production converged on the same shape, and velox adopts it.
+The index servers teams run in production converged on the same shape, and velodex adopts it.
 
 ## Prior art
 
@@ -18,7 +18,7 @@ The index servers teams run in production converged on the same shape, and velox
 The shared pattern: a read-through proxy primitive, a writable hosted primitive, and an ordered composition served
 at one URL where local content wins over remote.
 
-## velox's three shapes
+## velodex's three shapes
 
 - A **mirror** proxies and caches one upstream, with its own credentials.
 - A **local** stores uploads; `upload_token` gates writes and `volatile` gates deletion, devpi's safety flag.
@@ -31,7 +31,7 @@ while its sdist and its other wheels continue to come from the mirror.
 
 ## Removal semantics
 
-PyPI distinguishes hiding a release from destroying it, and velox keeps both:
+PyPI distinguishes hiding a release from destroying it, and velodex keeps both:
 
 - **Yank** ([PEP 592](https://peps.python.org/pep-0592/)) marks a file so resolvers skip it while exact-pin installs
   still succeed. It is reversible and is the right tool for a bad release that someone may already depend on.
@@ -44,6 +44,6 @@ PyPI distinguishes hiding a release from destroying it, and velox keeps both:
 
 ## The default topology
 
-Out of the box velox runs a pypi.org mirror plus an empty local, overlaid at `root/pypi`. One URL therefore serves
+Out of the box velodex runs a pypi.org mirror plus an empty local, overlaid at `root/pypi`. One URL therefore serves
 the whole public index, and the day you need to host a private package you add a token; nothing about the client
 setup changes.

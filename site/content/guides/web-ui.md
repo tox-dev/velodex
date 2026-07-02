@@ -4,7 +4,7 @@ description = "Browse indexes, read package pages, inspect archive contents, and
 weight = 5
 +++
 
-velox serves a reactive web interface on its own port: server-rendered pages that hydrate in the browser, in the same
+velodex serves a reactive web interface on its own port: server-rendered pages that hydrate in the browser, in the same
 visual style as this site.
 
 ## Dashboard

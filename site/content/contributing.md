@@ -2,7 +2,7 @@
 title = "Contributing"
 +++
 
-velox lives at [github.com/tox-dev/velox](https://github.com/tox-dev/velox). Bug reports, feature discussions, and
+velodex lives at [github.com/tox-dev/velodex](https://github.com/tox-dev/velodex). Bug reports, feature discussions, and
 pull requests are welcome there.
 
 ## Setting up
@@ -35,29 +35,29 @@ stable Rust can reach compiler-generated branches (async expansions, drop glue).
 
 ## End-to-end tests
 
-The e2e suite drives real pip, uv, and twine against a spawned velox binary:
+The e2e suite drives real pip, uv, and twine against a spawned velodex binary:
 
 ```shell
-cargo test -p velox --features e2e                    # hermetic: local fixture index, no network
-cargo test -p velox --features e2e-live -- e2e_live   # live smoke tests against pypi.org
+cargo test -p velodex --features e2e                    # hermetic: local fixture index, no network
+cargo test -p velodex --features e2e-live -- e2e_live   # live smoke tests against pypi.org
 ```
 
 Each test owns an isolated server, fixture, and virtualenv on ephemeral ports, so the suite runs in parallel and
 finishes in about two seconds. New index features need a matching e2e test; a client exit code alone does not count
-as proof, so assert on velox's own state or metrics.
+as proof, so assert on velodex's own state or metrics.
 
 ## The web UI
 
 `cargo leptos build` compiles the UI's wasm bundle into `ui/pkg/` (mise provides cargo-leptos and node). The
-Playwright suite drives the hydrated UI against a real velox with an uploaded fixture package:
+Playwright suite drives the hydrated UI against a real velodex with an uploaded fixture package:
 
 ```shell
-cargo build -p velox && cargo leptos build
+cargo build -p velodex && cargo leptos build
 cd tests/frontend && npm ci && npx playwright install chromium && npx playwright test
 ```
 
 The UI crate sits outside the `llvm-cov` gate: wasm cannot be coverage-instrumented and event handlers only run in a
-browser, so the Playwright suite and velox's server-side render tests are its gates instead.
+browser, so the Playwright suite and velodex's server-side render tests are its gates instead.
 
 ## The documentation site
 

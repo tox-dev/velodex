@@ -1,4 +1,4 @@
-// Start a velox configured with an upload token, then upload the fixture wheel so the UI has a
+// Start a velodex configured with an upload token, then upload the fixture wheel so the UI has a
 // metadata-rich package to show. Playwright polls /+status for readiness.
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
-const binary = ["release", "debug"].map((profile) => join(repo, "target", profile, "velox")).find(existsSync);
+const binary = ["release", "debug"].map((profile) => join(repo, "target", profile, "velodex")).find(existsSync);
 if (!binary) {
-  console.error("build velox first: cargo build -p velox");
+  console.error("build velodex first: cargo build -p velodex");
   process.exit(1);
 }
 
-const data = mkdtempSync(join(tmpdir(), "velox-frontend-"));
-const config = join(data, "velox.toml");
+const data = mkdtempSync(join(tmpdir(), "velodex-frontend-"));
+const config = join(data, "velodex.toml");
 writeFileSync(
   config,
   `[[index]]
@@ -33,15 +33,15 @@ upload = "local"
 `,
 );
 
-const velox = spawn(binary, ["--port", "4455", "--data-dir", data, "--config", config, "serve"], {
+const velodex = spawn(binary, ["--port", "4455", "--data-dir", data, "--config", config, "serve"], {
   cwd: repo, // the /pkg asset route serves ui/pkg relative to the working directory
   stdio: "inherit",
 });
-process.on("exit", () => velox.kill());
+process.on("exit", () => velodex.kill());
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
-  // A plain signal skips the exit handler, which leaks velox on the port; forward and quit.
+  // A plain signal skips the exit handler, which leaks velodex on the port; forward and quit.
   process.on(signal, () => {
-    velox.kill();
+    velodex.kill();
     process.exit(0);
   });
 }
@@ -66,4 +66,4 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
-console.log("velox ready with the fixture uploaded");
+console.log("velodex ready with the fixture uploaded");
