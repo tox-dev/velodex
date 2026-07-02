@@ -938,13 +938,15 @@ async fn test_file_digest_mismatch_fails_the_body_and_never_persists() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.into_body().collect().await.is_err());
-    // …the corrupt blob is never admitted into the store, and the rejection is counted.
+    // …the corrupt blob is never admitted into the store, and the rejection is counted. The poll
+    // must yield to the runtime: the detached transfer task records the rejection, and a blocking
+    // sleep would starve it on the single-threaded test runtime.
     for _ in 0..500 {
         let totals = h.state.metrics.index_totals();
         if totals.get("pypi").is_some_and(|t| t.rejected == 1) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
     assert!(!h.state.blobs.exists(&digest));
     assert_eq!(h.state.metrics.index_totals()["pypi"].rejected, 1);
