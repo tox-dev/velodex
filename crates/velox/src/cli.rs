@@ -57,6 +57,8 @@ pub enum Command {
     Serve,
     /// Initialize a data directory.
     Init,
+    /// Print the `OpenAPI` description of the HTTP API as JSON.
+    Openapi,
 }
 
 impl Cli {

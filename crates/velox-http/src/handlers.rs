@@ -331,6 +331,12 @@ fn upload_error_response(err: &UploadError) -> Response {
     }
 }
 
+/// `GET /api-docs/openapi.json` — the `OpenAPI` description of this server.
+pub async fn openapi_spec() -> Response {
+    static SPEC: std::sync::LazyLock<String> = std::sync::LazyLock::new(crate::api::openapi_json);
+    ([(header::CONTENT_TYPE, "application/json")], SPEC.as_str()).into_response()
+}
+
 /// `GET /+status` — health and identity.
 pub async fn status(State(state): State<Arc<AppState>>) -> Response {
     let serial = state.meta.current_serial().unwrap_or(0);

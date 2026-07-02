@@ -986,3 +986,13 @@ async fn test_upload_target_resolving_to_non_local_is_not_found() {
     let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
     assert_eq!(upload_veloxpkg(&state, "/ov/", b"x").await, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_openapi_endpoint_serves_the_document() {
+    let h = harness().await;
+    let (status, headers, body) = get(&h.state, "/api-docs/openapi.json", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/json");
+    let spec: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(spec["openapi"], "3.1.0");
+}

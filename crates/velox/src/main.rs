@@ -103,5 +103,9 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         velox::cli::Command::Serve => run_server(&config),
         velox::cli::Command::Init => app::init(&config),
+        velox::cli::Command::Openapi => {
+            print!("{}", velox_http::api::openapi_json());
+            Ok(())
+        }
     }
 }

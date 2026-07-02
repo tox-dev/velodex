@@ -1,0 +1,32 @@
+use crate::api::{openapi, openapi_json};
+
+#[test]
+fn test_openapi_document_covers_every_endpoint() {
+    let spec = serde_json::to_value(openapi()).unwrap();
+    let paths = spec["paths"].as_object().unwrap();
+    for path in [
+        "/{route}/simple/",
+        "/{route}/simple/{project}/",
+        "/{route}/files/{sha256}/{filename}",
+        "/{route}/files/{sha256}/{filename}.metadata",
+        "/{route}/",
+        "/{route}/{project}/{version}/yank",
+        "/{route}/{project}/{version}/",
+        "/{route}/{project}/",
+        "/+status",
+        "/metrics",
+        "/api-docs/openapi.json",
+    ] {
+        assert!(paths.contains_key(path), "missing path {path}");
+    }
+    assert_eq!(paths.len(), 11);
+    assert_eq!(spec["info"]["version"], env!("CARGO_PKG_VERSION"));
+}
+
+// The documentation site serves a checked-in copy rendered by ReDoc; regenerate it with
+// `cargo run -p velox -- openapi > site/static/openapi.json` whenever this test fails.
+#[test]
+fn test_site_openapi_copy_is_current() {
+    let site_copy = include_str!("../../../../site/static/openapi.json");
+    assert_eq!(site_copy, openapi_json(), "site/static/openapi.json is stale");
+}
