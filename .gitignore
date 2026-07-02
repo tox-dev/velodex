@@ -4,3 +4,4 @@ crates/velox-web/dist/
 # coverage artifacts
 /lcov.info
 *.profraw
+site/public/

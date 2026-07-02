@@ -1,0 +1,38 @@
++++
+title = "Configure logging"
+description = "Choose a level, a format, and a sink: stdout, rotating file, journald, or syslog."
+weight = 5
++++
+
+The log level comes from `--log-level {error,warn,info,debug,trace}` or the `level` key under `[log]` in the config
+file. `-v` raises the level to debug and `-vv` to trace. A directive can target one module, which keeps the rest of
+the output quiet:
+
+```shell
+velox --log-level "info,velox_upstream=debug" serve
+```
+
+At debug level velox traces each HTTP request with its method, path, and status; this is how you observe pip and uv
+taking the [PEP 658](https://peps.python.org/pep-0658/) `.metadata` path.
+
+## Sinks
+
+Output goes to one sink, selected with `--log-sink` or `[log] sink`:
+
+- `stdout` (default): pretty for a terminal, or one JSON object per line with `--log-format json` for log
+  aggregation.
+- `file`: a daily-rotating file at `--log-file <path>`.
+- `journald`: the systemd journal (Linux only).
+- `syslog`: the local syslog daemon (Unix only).
+
+In the config file:
+
+```toml
+[log]
+level = "info"
+format = "json"
+sink = "file"
+file = "/var/log/velox/velox.log"
+```
+
+velox validates the combination at startup and refuses, for example, a `file` sink without a path.
