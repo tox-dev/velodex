@@ -1,4 +1,5 @@
-{%- set feed = load_data(path="data/bench/" ~ file ~ ".json") -%}
+{%- set report = load_data(path="data/bench/report.toml") -%}
+{%- set feed = report.tables[file] -%}
 <div class="bench">
   <table class="bench-table">
     <caption>{{ feed.label }}{% if feed.baseline %} (ratios vs {{ feed.baseline }}){% endif %}</caption>

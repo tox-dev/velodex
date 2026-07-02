@@ -58,7 +58,7 @@ jobs:
       # whose browser-event closures only execute as wasm (uninstrumentable) — its server rendering
       # is asserted by velodex's UI tests and its interactivity by the Playwright suite.
       - run: >
-          cargo llvm-cov nextest --workspace --ignore-filename-regex '(main\.rs|crates/velodex-web/)' --fail-under-lines 100 --fail-under-functions 100 --lcov --output-path lcov.info
+          cargo llvm-cov nextest --workspace --ignore-filename-regex '(main\.rs|crates/velodex-web/|crates/velodex-bench/)' --fail-under-lines 100 --fail-under-functions 100 --lcov --output-path lcov.info
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           files: lcov.info

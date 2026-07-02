@@ -1,15 +1,8 @@
-"""The install workload: a snapshot of PyPI's most-downloaded packages that resolves as one set.
+//! The workloads' package sets.
 
-The list follows hugovk's top-pypi-packages ranking (June 2026 snapshot), trimmed of entries that
-cannot co-resolve in one environment (pinned dependents of each other are kept; true conflicts and
-Python-version-gated names are dropped) so one `uv pip install` covers the whole set.
-"""
-
-from typing import Final
-
-__all__ = ["TOP_PACKAGES"]
-
-TOP_PACKAGES: Final = (
+/// The top of `PyPI`'s most-downloaded list, snapshotted so runs stay comparable over time; torch is
+/// included for one large wheel.
+pub const TOP_PACKAGES: &[&str] = &[
     "boto3",
     "urllib3",
     "botocore",
@@ -61,4 +54,10 @@ TOP_PACKAGES: Final = (
     "greenlet",
     "requests-toolbelt",
     "torch",
-)
+];
+
+/// The stress wheel's project: the largest of the top packages.
+pub const STRESS_PROJECT: &str = "torch";
+
+/// A heavy single-wheel install a CI fleet grabs over and over.
+pub const FLEET_PACKAGE: &str = "polars";
