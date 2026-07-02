@@ -4,30 +4,35 @@ description = "Install velodex, serve your first packages through it, publish a 
 weight = 1
 +++
 
-In this tutorial you will build velodex from source, start it with no configuration, install packages through it with
+In this tutorial you will install velodex, start it with no configuration, install packages through it with
 pip and uv, publish a package of your own, then yank and delete it. It takes about ten minutes.
 
 ## Prerequisites
 
-You need Python with `pip` or [`uv`](https://docs.astral.sh/uv/) to act as the client, and a velodex binary. Once the
-first release is published, pick whichever install channel fits (see [installation](@/reference/installation.md)):
+You need Python with `pip` or [`uv`](https://docs.astral.sh/uv/) to act as the client, and a velodex binary. Pick
+whichever install channel fits; [installation](@/reference/installation.md) lists them all:
 
+{% tabs(names="installer, uv, pip, from source") %}
 ```shell
 # standalone binary, no Python involved
 curl -LsSf https://github.com/tox-dev/velodex/releases/latest/download/velodex-installer.sh | sh
-# or from PyPI
+```
+%%%
+```shell
 uv tool install velodex
+```
+%%%
+```shell
 pip install velodex
 ```
-
-Until then, build from source with a [Rust toolchain](https://rustup.rs) (the exact version is pinned by the
-repository's `rust-toolchain.toml`, so rustup selects it for you):
-
+%%%
 ```shell
+# needs a Rust toolchain (https://rustup.rs); rust-toolchain.toml pins the version
 git clone https://github.com/tox-dev/velodex.git
 cd velodex
 cargo build --release
 ```
+{% end %}
 
 ## Start velodex
 
@@ -46,13 +51,15 @@ Point any installer at the index URL. The first install fetches from pypi.org, v
 sha256, and caches it; repeat installs come from disk.
 
 ```shell
-uv venv demo && VIRTUAL_ENV=demo uv pip install --index-url http://127.0.0.1:4433/root/pypi/simple/ requests
+uv venv demo
+VIRTUAL_ENV=demo uv pip install --index-url http://127.0.0.1:4433/root/pypi/simple/ requests
 ```
 
 or with pip:
 
 ```shell
-python -m venv demo && demo/bin/pip install --index-url http://127.0.0.1:4433/root/pypi/simple/ requests
+python -m venv demo
+demo/bin/pip install --index-url http://127.0.0.1:4433/root/pypi/simple/ requests
 ```
 
 Both clients use the [PEP 658](https://peps.python.org/pep-0658/) metadata fast path through velodex: they resolve dependency trees by fetching small

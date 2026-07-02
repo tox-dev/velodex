@@ -1,7 +1,7 @@
 +++
 title = "Monitor usage and cache health"
 description = "Read the usage counters, drill down to files, watch for upstream changes, and scrape Prometheus."
-weight = 6
+weight = 8
 +++
 
 velodex counts everything it serves, off the request path. Three surfaces show the same numbers: the dashboard, the
@@ -36,3 +36,10 @@ digest; the blob was not cached |
 
 A steady `refreshes` with zero `changed` is the normal idle state. `rejected` above zero deserves attention: either the
 upstream served corrupt bytes or something rewrote them in transit.
+
+
+## Related
+
+- Where the counters come from: [architecture](@/explanation/architecture.md)
+- The endpoint and counter reference: [HTTP endpoints](@/reference/endpoints.md)
+- The counters in a browser: [the web UI](@/guides/web-ui.md)

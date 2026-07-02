@@ -52,8 +52,12 @@ as proof, so assert on velodex's own state or metrics.
 Playwright suite drives the hydrated UI against a real velodex with an uploaded fixture package:
 
 ```shell
-cargo build -p velodex && cargo leptos build
-cd tests/frontend && npm ci && npx playwright install chromium && npx playwright test
+cargo build -p velodex
+cargo leptos build
+cd tests/frontend
+npm ci
+npx playwright install chromium
+npx playwright test
 ```
 
 The UI crate sits outside the `llvm-cov` gate: wasm cannot be coverage-instrumented and event handlers only run in a

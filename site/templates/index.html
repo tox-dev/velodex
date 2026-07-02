@@ -5,11 +5,12 @@
   <div class="glow" aria-hidden="true"></div>
   <div class="container hero-grid">
     <div class="hero-copy">
-      <p class="eyebrow">PyPI mirror · cache · private index</p>
-      <h1>Serve Python packages <span class="gradient-text">in milliseconds</span>.</h1>
+      <p class="eyebrow">PyPI cache · private index · one binary</p>
+      <h1>Your packages, <span class="gradient-text">served from next door</span>.</h1>
       <p class="tagline">
-        velodex is a PyPI-compatible read-through cache and private index in one small Rust binary. Point pip,
-        uv, or twine at it; the only change a client needs is the index URL.
+        velodex is a PyPI-compatible read-through cache and private package index in a single Rust binary.
+        Point pip, uv, or twine at it; the only change a client needs is the index URL. First install runs at
+        upstream speed while the cache fills, every one after comes from your own disk.
       </p>
       <div class="actions">
         <a class="button primary" href="{{ get_url(path='@/tutorials/getting-started.md') }}">Get started</a>
@@ -17,7 +18,24 @@
       </div>
     </div>
     <div class="hero-visual">
-      <img class="hero-mark" src="{{ get_url(path='lockup-stacked.svg') }}" alt="velodex logo: an overlay stack" width="200" height="188">
+      <!-- Inline so the wordmark's currentColor follows the page theme; an <img> would keep it black. -->
+      <svg class="hero-mark" width="200" height="188" viewBox="0 0 160 150" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="velodex logo, an overlay stack">
+        <defs>
+          <linearGradient id="rust" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#F74C00"/>
+            <stop offset="1" stop-color="#FFB600"/>
+          </linearGradient>
+        </defs>
+        <g transform="translate(30,14)">
+          <rect x="0"  y="40" width="80" height="28" rx="7" fill="#33383E"/>
+          <rect x="11" y="27" width="80" height="28" rx="7" fill="#4B5058"/>
+          <rect x="22" y="14" width="80" height="28" rx="7" fill="url(#rust)"/>
+          <circle cx="77" cy="28" r="6" fill="#2B5B84"/>
+        </g>
+        <text x="80" y="128" text-anchor="middle"
+              font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+              font-size="34" font-weight="500" letter-spacing="-0.3" fill="currentColor">velodex</text>
+      </svg>
       <div class="terminal">
         <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
         <pre><code><span class="prompt">$</span> velodex serve
@@ -33,6 +51,7 @@
 <section class="stats">
   <div class="container stats-grid">
     <div><strong>1</strong><span>binary, zero services</span></div>
+    <a href="{{ get_url(path='@/explanation/performance.md') }}"><strong>0.7s</strong><span>warm <code>uv pip install pandas polars</code></span></a>
     <a href="{{ config.extra.repo }}/actions/workflows/ci.yml"><strong>100%</strong><span>line &amp; function coverage</span></a>
     <div>
       <strong>

@@ -1,7 +1,7 @@
 +++
 title = "Use the web UI"
 description = "Browse indexes, read package pages, inspect archive contents, and manage uploads from the browser."
-weight = 5
+weight = 7
 +++
 
 velodex serves a reactive web interface on its own port: server-rendered pages that hydrate in the browser, in the same
@@ -36,3 +36,9 @@ deleted.
 The interactive layer is a wasm bundle built by [cargo-leptos](https://github.com/leptos-rs/cargo-leptos)
 (`cargo leptos build --release`, output in `ui/pkg/`, served at `/pkg`). Without the bundle every page still renders
 server-side; filtering, live counters, and the admin buttons need it.
+
+
+## Related
+
+- The endpoints the UI reads: [HTTP endpoints](@/reference/endpoints.md)
+- How the UI is built and tested: [architecture](@/explanation/architecture.md)

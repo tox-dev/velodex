@@ -1,7 +1,7 @@
 +++
 title = "Proxy a private mirror"
 description = "Point velodex at Artifactory, GitLab, or any other PEP 503 index, with credentials."
-weight = 1
+weight = 3
 +++
 
 Declare a mirror index whose `mirror` key is the upstream's simple-index URL. Two authentication styles cover the
@@ -44,3 +44,10 @@ not configure this; it happens per response.
   fetch reuses that mirror's authentication.
 - `cache_ttl_secs` (default 1800) controls how long a cached project page is served before velodex revalidates it
   against the upstream with `If-None-Match`.
+
+
+## Related
+
+- Why one URL with shadowing beats `--extra-index-url`: [the index model](@/explanation/indexes.md)
+- Serve a network with no internet route: [air-gapped](@/guides/air-gapped.md)
+- Upstream capability differences velodex papers over: [standards](@/explanation/standards.md)

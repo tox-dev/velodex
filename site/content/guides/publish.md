@@ -1,7 +1,7 @@
 +++
 title = "Publish packages"
 description = "Upload distributions with twine or uv publish, authenticated by a shared token."
-weight = 3
+weight = 5
 +++
 
 velodex accepts the [legacy upload API](https://docs.pypi.org/api/upload/), the wire protocol both [twine](https://twine.readthedocs.io/) and
@@ -52,3 +52,10 @@ password = <secret>
 ```
 
 `twine upload -r velodex dist/*` then works without flags.
+
+
+## Related
+
+- What shadowing an upstream name buys you: [the index model](@/explanation/indexes.md)
+- Undo a bad release: [yank and delete](@/guides/remove.md)
+- The upload protocol itself: [HTTP endpoints](@/reference/endpoints.md)

@@ -419,7 +419,7 @@ a {
   padding: 2.5rem 1.25rem 4rem;
 
   article {
-    max-width: 47rem;
+    max-width: none;
   }
 
   h1 {
@@ -485,6 +485,8 @@ pre {
   border-radius: 10px;
   padding: 1rem 1.2rem;
   overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 
   code {
     background: none;
@@ -577,4 +579,74 @@ table {
       margin: 0;
     }
   }
+}
+
+pre.mermaid {
+  background: transparent !important;
+  border: none;
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 0;
+  white-space: pre;
+
+  svg {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+pre {
+  position: relative;
+}
+.copy-snippet {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-soft);
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  padding: 0.15rem 0.55rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+pre:hover .copy-snippet,
+.copy-snippet:focus-visible {
+  opacity: 1;
+}
+.copy-snippet:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.tabs {
+  margin: 1rem 0;
+}
+.tab-bar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.tab-button {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab-button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-pane {
+  display: none;
+}
+.tab-pane.active {
+  display: block;
 }

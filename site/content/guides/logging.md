@@ -1,7 +1,7 @@
 +++
 title = "Configure logging"
 description = "Choose a level, a format, and a sink: stdout, rotating file, journald, or syslog."
-weight = 5
+weight = 9
 +++
 
 The log level comes from `--log-level {error,warn,info,debug,trace}` or the `level` key under `[log]` in the config
@@ -36,3 +36,9 @@ file = "/var/log/velodex/velodex.log"
 ```
 
 velodex validates the combination at startup and refuses, for example, a `file` sink without a path.
+
+
+## Related
+
+- Every logging flag and TOML key: [configuration](@/reference/configuration.md)
+- Numbers instead of lines: [monitoring](@/guides/monitor.md)

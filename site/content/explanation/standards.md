@@ -1,12 +1,35 @@
 +++
 title = "Standards"
 description = "The packaging PEPs and specifications velodex implements, and how they fit together."
-weight = 3
+weight = 4
 +++
 
 velodex targets the interoperability standards a modern index and its clients rely on. The
 [Simple Repository API](https://packaging.python.org/en/latest/specifications/simple-repository-api/) is the living
 consolidation of most of them; velodex serves `meta.api-version` 1.1.
+
+## What a pip install actually asks for
+
+Knowing the request sequence makes the table below concrete. For `pip install requests` against any
+standards-compliant index:
+
+{% mermaid() %}
+sequenceDiagram
+  participant P as pip / uv
+  participant I as index
+  P->>+I: GET /simple/requests/ (Accept: PEP 691 JSON)
+  I-->>-P: file list: names, URLs, sha256, yanked, core-metadata
+  P->>+I: GET …requests-2.32.5…whl.metadata (PEP 658)
+  I-->>-P: core metadata: dependencies, requires-python
+  Note over P: resolve; repeat metadata fetches<br/>for candidates as needed
+  P->>+I: GET …requests-2.32.5…whl
+  I-->>-P: the wheel; pip verifies its sha256
+{% end %}
+
+Every hop names a standard: the page format is PEP 503/691, its fields are PEP 700, the yank markers are PEP 592,
+the metadata shortcut is PEP 658/714, and the filename pip parsed to pick a wheel is PEP 427. velodex sits on both
+sides of this conversation — a server to your clients, a client to its upstreams — which is why the table below
+mixes "served" and "parsed".
 
 | Standard | Role in velodex |
 | -------- | ------------- |
@@ -35,3 +58,9 @@ Some upstreams implement only part of the stack; Artifactory and GitLab serve HT
 JSON first, parses PEP 503 HTML as the fallback, and re-serves the modern formats downstream, so a client
 gets api-version 1.1 with PEP 700 fields regardless of what the upstream offered. Features the upstream cannot
 express (a missing `.metadata` sibling, absent sizes) degrade per file rather than per index.
+
+
+## In practice
+
+- The machinery that serves these: [architecture](@/explanation/architecture.md)
+- The endpoints they map to: [HTTP endpoints](@/reference/endpoints.md)

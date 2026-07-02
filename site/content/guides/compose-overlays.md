@@ -1,7 +1,7 @@
 +++
 title = "Compose overlays"
 description = "Serve several indexes under one URL, give each mirror its own private layer, and chain overlays."
-weight = 2
+weight = 4
 +++
 
 An overlay lists other indexes as `layers` and serves them under one route. Resolution is first-match per filename:
@@ -61,3 +61,10 @@ first local layer; an overlay of only mirrors rejects uploads with `405`.
 A layer that cannot answer (a down mirror with a cold cache) is skipped with a warning rather than failing the whole
 page, so your local packages stay installable during an upstream outage. A mirror with a warm cache serves its cached
 copy instead.
+
+
+## Related
+
+- The semantics behind layering and shadowing: [the index model](@/explanation/indexes.md)
+- Every `[[index]]` key: [configuration](@/reference/configuration.md)
+- Publish into the overlay you built: [publish](@/guides/publish.md)
