@@ -40,7 +40,7 @@ Clients using `/team/dev/simple/` see the team's uploads in front of the corpora
 
 ## Chaining
 
-A layer can itself be an overlay, so [devpi-style](https://devpi.net/docs/) inheritance chains work:
+A layer can itself be an overlay, so inheritance chains work:
 
 ```toml
 [[index]]

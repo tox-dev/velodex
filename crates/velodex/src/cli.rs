@@ -59,6 +59,18 @@ pub enum Command {
     Init,
     /// Print the `OpenAPI` description of the HTTP API as JSON.
     Openapi,
+    /// Manage this velodex installation.
+    #[cfg(feature = "self-update")]
+    #[command(subcommand, name = "self")]
+    SelfManage(SelfCommand),
+}
+
+/// Actions on the velodex installation itself.
+#[cfg(feature = "self-update")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum SelfCommand {
+    /// Update velodex to the latest release.
+    Update,
 }
 
 impl Cli {

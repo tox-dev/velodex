@@ -15,8 +15,13 @@ default-run = "velodex"
 # `e2e-live` adds smoke tests against the real pypi.org.
 e2e = []
 e2e-live = ["e2e"]
+# `velodex self update`, for binaries installed by the release installers (curl / PowerShell).
+# Only the dist release builds enable it: pip- and cargo-installed copies update through their own
+# package manager, mirroring how uv gates its self-update.
+self-update = ["dep:axoupdater"]
 
 [dependencies]
+axoupdater = { version = "0.10", default-features = false, features = ["github_releases", "blocking"], optional = true }
 velodex-core.workspace = true
 velodex-storage.workspace = true
 velodex-upstream.workspace = true

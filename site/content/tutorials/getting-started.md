@@ -9,13 +9,19 @@ pip and uv, publish a package of your own, then yank and delete it. It takes abo
 
 ## Prerequisites
 
-You need a [Rust toolchain](https://rustup.rs) (the exact version is pinned by the repository's
-`rust-toolchain.toml`, so rustup selects it for you) and Python with `pip` or [`uv`](https://docs.astral.sh/uv/)
-to act as the client.
+You need Python with `pip` or [`uv`](https://docs.astral.sh/uv/) to act as the client, and a velodex binary. Once the
+first release is published, pick whichever install channel fits (see [installation](@/reference/installation.md)):
 
-## Build and start velodex
+```shell
+# standalone binary, no Python involved
+curl -LsSf https://github.com/tox-dev/velodex/releases/latest/download/velodex-installer.sh | sh
+# or from PyPI
+uv tool install velodex
+pip install velodex
+```
 
-Clone and build the release binary:
+Until then, build from source with a [Rust toolchain](https://rustup.rs) (the exact version is pinned by the
+repository's `rust-toolchain.toml`, so rustup selects it for you):
 
 ```shell
 git clone https://github.com/tox-dev/velodex.git
@@ -23,11 +29,13 @@ cd velodex
 cargo build --release
 ```
 
+## Start velodex
+
 Start the server. It needs no configuration; the defaults give you a pypi.org mirror with a private local store
 overlaid in front of it, served at `root/pypi`:
 
 ```shell
-./target/release/velodex serve
+velodex serve            # ./target/release/velodex serve when built from source
 ```
 
 velodex is now listening on `127.0.0.1:4433`. Leave it running and use a second terminal for the rest of the tutorial.

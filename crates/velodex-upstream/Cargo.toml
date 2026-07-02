@@ -9,6 +9,7 @@ description = "Upstream index client for velodex: fetch and revalidate simple pa
 
 [dependencies]
 reqwest.workspace = true
+rustls.workspace = true
 url.workspace = true
 bytes.workspace = true
 futures-core.workspace = true

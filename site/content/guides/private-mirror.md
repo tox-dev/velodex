@@ -1,6 +1,6 @@
 +++
 title = "Proxy a private mirror"
-description = "Point velodex at Artifactory, GitLab, devpi, or any other PEP 503 index, with credentials."
+description = "Point velodex at Artifactory, GitLab, or any other PEP 503 index, with credentials."
 weight = 1
 +++
 

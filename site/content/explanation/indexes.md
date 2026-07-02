@@ -1,6 +1,6 @@
 +++
 title = "The index model"
-description = "Mirrors, locals, and overlays; what velodex borrowed from [devpi](https://devpi.net/docs/), [Artifactory](https://jfrog.com/help/r/jfrog-artifactory-documentation/virtual-repositories), and [Nexus](https://help.sonatype.com/en/repository-types.html)."
+description = "Mirrors, locals, and overlays; the composition model velodex shares with [Artifactory](https://jfrog.com/help/r/jfrog-artifactory-documentation/virtual-repositories) and [Nexus](https://help.sonatype.com/en/repository-types.html)."
 weight = 2
 +++
 
@@ -8,8 +8,6 @@ The index servers teams run in production converged on the same shape, and velod
 
 ## Prior art
 
-- **devpi** builds indexes from `bases`: a stage index inherits from a mirror, uploads go to the stage, and a
-  `volatile` flag guards destructive operations.
 - **Artifactory** aggregates *local* and *remote* repositories into a *virtual* repository behind one URL, with a
   default deployment target for writes and local-before-remote resolution.
 - **Nexus** groups *hosted* and *proxy* repositories the same way; the member order decides who wins, and the
@@ -21,10 +19,10 @@ at one URL where local content wins over remote.
 ## velodex's three shapes
 
 - A **mirror** proxies and caches one upstream, with its own credentials.
-- A **local** stores uploads; `upload_token` gates writes and `volatile` gates deletion, devpi's safety flag.
+- A **local** stores uploads; `upload_token` gates writes and `volatile` gates deletion.
 - An **overlay** serves an ordered list of other indexes under one route. Resolution is first-match per filename;
   versions union. Uploads land in the overlay's designated local layer. A layer can be another overlay, which gives
-  devpi-style inheritance chains.
+  inheritance chains.
 
 Filename-level (rather than project-level) shadowing means you can override one broken wheel of an upstream release
 while its sdist and its other wheels continue to come from the mirror.

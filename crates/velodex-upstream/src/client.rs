@@ -106,6 +106,9 @@ impl UpstreamClient {
     /// Returns [`UpstreamError::Url`] if `base` is not a valid URL, or [`UpstreamError::Http`] if
     /// the HTTP client cannot be built.
     pub fn with_auth(base: &str, auth: Auth) -> Result<Self, UpstreamError> {
+        // Pin the ring crypto provider: unlike aws-lc it is pure Rust plus portable assembly, so
+        // every release target cross-compiles without a C toolchain. Err means already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let mut base = Url::parse(base)?;
         if !base.path().ends_with('/') {
             let with_slash = format!("{}/", base.path());

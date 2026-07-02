@@ -5,10 +5,10 @@ throughput. velodex proxies and caches pypi.org (or any PEP 503 index), lets tea
 indexes that shadow the upstream mirror, and serves every modern Python packaging client (pip, uv, twine, Poetry, hatch,
 flit) over the standard wire protocols.
 
-devpi, Warehouse (pypi.org), and uv are the primary references for behavior. velodex is a clean-slate design, not a
-port. Where devpi's architecture shows its age (Python per-request overhead, the bespoke keyfs changelog format, one
-global write lock, the `--requests-only` worker split, pluggy on the hot path), velodex picks a simpler faster structure
-and says so in [§14](#14-what-velodex-changes-vs-devpi).
+Warehouse (pypi.org), uv, and the established index servers are the primary references for behavior. velodex is a
+clean-slate design, not a port. Where prior art's architecture shows its age (interpreter overhead per request, bespoke
+changelog formats, global write locks, split worker processes, plugin dispatch on the hot path), velodex picks a simpler
+faster structure and says so in [§14](#14-design-departures-from-prior-art).
 
 ## Contents
 
@@ -25,7 +25,7 @@ and says so in [§14](#14-what-velodex-changes-vs-devpi).
 1. [Rust stack](#11-rust-stack)
 1. [Distribution: pip-installable and self-contained](#12-distribution-pip-installable-and-self-contained)
 1. [Testing and conformance](#13-testing-and-conformance)
-1. [What velodex changes vs devpi](#14-what-velodex-changes-vs-devpi)
+1. [Design departures from prior art](#14-design-departures-from-prior-art)
 1. [Project conventions](#15-project-conventions)
 1. [Roadmap](#16-roadmap)
 1. [References](#17-references)
@@ -37,11 +37,10 @@ and says so in [§14](#14-what-velodex-changes-vs-devpi).
 - **Zero-config read-through cache.** Run the binary, point pip/uv/twine at it, and it proxies and permanently caches
   pypi.org. Cached artifacts stay immutable and serve forever; only index pages revalidate. pypi.org is the default
   upstream; a TOML config file or CLI flags (with matching env vars, precedence defaults < file < env < flags) repoint
-  the mirror at any other index instead, such as a private Artifactory or an internal devpi, and configure additional
-  mirrors alongside it.
+  the mirror at any other index instead, such as a private Artifactory or another internal index, and configure
+  additional mirrors alongside it.
 - **Private overlay indexes.** Teams publish private packages into indexes that inherit from the mirror and from each
-  other. A locally published project shadows the upstream one, which gives dependency-confusion defense by default, as
-  in devpi \[devpi model.py:1229 `sro()`\].
+  other. A locally published project shadows the upstream one, which gives dependency-confusion defense by default.
 - **Standard protocols only.** velodex speaks the wire contracts pip/uv/twine already use against pypi.org and
   Artifactory. No velodex-specific client, no bespoke upload tool.
 - **Full modern JSON APIs, not HTML-only.** velodex serves the complete JSON surface uv and pip prefer, not just a raw
@@ -55,8 +54,8 @@ and says so in [§14](#14-what-velodex-changes-vs-devpi).
   dedup, a pure-Rust embedded metadata store, and an in-memory hot tier. Target: single-digit-millisecond cached
   responses and tens of MB RSS at idle.
 - **Handles non-feature-complete upstreams.** Proxy Artifactory, Nexus, GitLab, CodeArtifact, Azure Artifacts, Google
-  Artifact Registry, devpi, and plain static indexes. Most of these serve only PEP 503 HTML, so velodex probes
-  capabilities and degrades gracefully, backfilling the PEP 658 metadata and sha256 hashes that upstreams omit
+  Artifact Registry, and plain static indexes. Most of these serve only PEP 503 HTML, so velodex probes capabilities and
+  degrades gracefully, backfilling the PEP 658 metadata and sha256 hashes that upstreams omit
   ([§6](#6-upstream-mirror-adapter-and-graceful-degradation)).
 - **pip/uv behavioral parity.** The acceptance bar: every pip/uv feature that works against pypi.org works against
   velodex, verified by a conformance harness ([§13](#13-testing-and-conformance)).
@@ -67,9 +66,9 @@ and says so in [§14](#14-what-velodex-changes-vs-devpi).
 
 velodex does not build these at all (as opposed to the phased plan, which delivers everything it lists):
 
-- Sphinx documentation hosting and doc-zip serving (a devpi-web feature). The indexer trait seam covers full-text search
-  of package metadata; hosting rendered Sphinx sites is out.
-- `devpi test` / tox-result storage.
+- Sphinx documentation hosting and doc-zip serving. The indexer trait seam covers full-text search of package metadata;
+  hosting rendered Sphinx sites is out.
+- Test-result storage for CI runs.
 - PEP 694 Upload API 2.0 (draft, unimplemented anywhere), PEP 708 tracks (rejected), wheel-variant serving (PEP 817/825,
   draft). The filename and endpoint parsers tolerate these rather than implement them.
 - A dynamic plugin system (pluggy/entry-points). velodex uses compile-time traits for the real extension seams (storage,
@@ -87,45 +86,44 @@ from Warehouse [warehouse/api/simple.py, warehouse/packaging/utils.py], and the 
 
 ### PEPs and specs
 
-| Spec                                                  | Status          | velodex obligation                                                                                                                          |
-| ----------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PEP 503** Simple HTML                               | Final           | Must. `/simple/`, `/simple/<name>/`, name normalization `re.sub(r"[-_.]+","-",name).lower()`, `#sha256=` fragments, `data-requires-python`. |
-| **PEP 691** JSON Simple                               | Final           | Must. `application/vnd.pypi.simple.v1+json`, `Accept` negotiation, `Vary: Accept`.                                                          |
-| **PEP 629** API versioning                            | Final           | Must. `meta.api-version`, `<meta name="pypi:repository-version">`.                                                                          |
-| **PEP 700** size/upload-time/versions                 | Final           | Must. JSON `versions[]`, per-file `size`, `upload-time`.                                                                                    |
-| **PEP 592** yank                                      | Final           | Must. `data-yanked` / `yanked`.                                                                                                             |
-| **PEP 658 + 714** `.metadata`                         | Accepted        | Must (high value). Serve `{file}.metadata`; emit `core-metadata` plus legacy `data-dist-info-metadata`; backfill when upstream lacks it.    |
-| **PEP 440** versions/specifiers                       | Final           | Must. Parse, normalize, sort, match. Reuse `pep440_rs`.                                                                                     |
-| **PEP 508** requirements                              | Final           | Must (store/serve). Reuse `pep508_rs`.                                                                                                      |
-| **PEP 427 / 425 / 600 / 656** wheel + tags            | Final           | Must. Parse wheel filenames and platform tags; validate on upload.                                                                          |
-| **PEP 625** sdist naming                              | Accepted        | Must. Enforce `{name}-{version}.tar.gz` with `_`-normalized name.                                                                           |
-| **Core Metadata 1.0–2.5** (PEP 566/643/639/685/753)   | Final           | Must. Accept the full `Metadata-Version` set 1.0–2.5; enforce License/License-Expression exclusivity (PEP 639); normalize extras (PEP 685). |
-| **PEP 740** attestations/provenance                   | Final (API 1.3) | Must (Phase 5). Accept `attestations` on upload, serve `{file}.provenance` and `/integrity/.../provenance`.                                 |
-| **PEP 792** project status                            | Final (API 1.4) | Must (Phase 5). `project-status` JSON key and meta; gate upload/download per status.                                                        |
-| **PEP 694** Upload API 2.0                            | Draft           | Skip. Keep legacy `/legacy/`.                                                                                                               |
-| **PEP 708** tracks                                    | Rejected        | Skip. Do not gate on API 1.2.                                                                                                               |
-| PEP 817/825/777 wheel variants, PEP 819 JSON metadata | Draft           | Skip, tolerate. The filename and extension parser must not crash on `.whlx` or an extra filename component.                                 |
-| PEP 751 lock file, PEP 766 index priority             | Final / Draft   | Client-side. No server work; serving PEP 691/700/658 well makes velodex a good lock source.                                                 |
+| Spec | Status | velodex obligation | | ----------------------------------------------------- | --------------- |
+\-------------------------------------------------------------------------------------------------------------------------------------------
+| | **PEP 503** Simple HTML | Final | Must. `/simple/`, `/simple/<name>/`, name normalization
+`re.sub(r"[-_.]+","-",name).lower()`, `#sha256=` fragments, `data-requires-python`. | | **PEP 691** JSON Simple | Final
+| Must. `application/vnd.pypi.simple.v1+json`, `Accept` negotiation, `Vary: Accept`. | | **PEP 629** API versioning |
+Final | Must. `meta.api-version`, `<meta name="pypi:repository-version">`. | | **PEP 700** size/upload-time/versions |
+Final | Must. JSON `versions[]`, per-file `size`, `upload-time`. | | **PEP 592** yank | Final | Must. `data-yanked` /
+`yanked`. | | **PEP 658 + 714** `.metadata` | Accepted | Must (high value). Serve `{file}.metadata`; emit
+`core-metadata` plus legacy `data-dist-info-metadata`; backfill when upstream lacks it. | | **PEP 440**
+versions/specifiers | Final | Must. Parse, normalize, sort, match. Reuse `pep440_rs`. | | **PEP 508** requirements |
+Final | Must (store/serve). Reuse `pep508_rs`. | | **PEP 427 / 425 / 600 / 656** wheel + tags | Final | Must. Parse
+wheel filenames and platform tags; validate on upload. | | **PEP 625** sdist naming | Accepted | Must. Enforce
+`{name}-{version}.tar.gz` with `_`-normalized name. | | **Core Metadata 1.0–2.5** (PEP 566/643/639/685/753) | Final |
+Must. Accept the full `Metadata-Version` set 1.0–2.5; enforce License/License-Expression exclusivity (PEP 639);
+normalize extras (PEP 685). | | **PEP 740** attestations/provenance | Final (API 1.3) | Must (Phase 5). Accept
+`attestations` on upload, serve `{file}.provenance` and `/integrity/.../provenance`. | | **PEP 792** project status |
+Final (API 1.4) | Must (Phase 5). `project-status` JSON key and meta; gate upload/download per status. | | **PEP 694**
+Upload API 2.0 | Draft | Skip. Keep legacy `/legacy/`. | | **PEP 708** tracks | Rejected | Skip. Do not gate on API 1.2.
+| | PEP 817/825/777 wheel variants, PEP 819 JSON metadata | Draft | Skip, tolerate. The filename and extension parser
+must not crash on `.whlx` or an extra filename component. | | PEP 751 lock file, PEP 766 index priority | Final / Draft
+| Client-side. No server work; serving PEP 691/700/658 well makes velodex a good lock source. |
 
 ### Endpoint matrix
 
 Read endpoints follow Warehouse [warehouse/routes.py]; the write endpoint is the standard forklift contract
 [warehouse/forklift/legacy.py].
 
-| Path                                               | Method           | Content-Type                            | Spec                        | Status in velodex  |
-| -------------------------------------------------- | ---------------- | --------------------------------------- | --------------------------- | ------------------ |
-| `/{index}/simple/`                                 | GET              | html / `vnd.pypi.simple.v1+{html,json}` | 503/691/700                 | Required           |
-| `/{index}/simple/{project}/`                       | GET              | same                                    | 503/691/700/592/658/714/792 | Required           |
-| `/{index}/{file}` (blob)                           | GET/HEAD         | octet-stream, ranges                    | 503                         | Required           |
-| `/{index}/{file}.metadata`                         | GET              | octet-stream                            | 658/714                     | Required (wheels)  |
-| `/{index}/{file}.provenance`                       | GET              | json                                    | 740                         | Nice               |
-| `/{index}/` (upload)                               | POST             | multipart to text                       | forklift                    | Required           |
-| `/{index}/pypi/{project}/json`                     | GET              | json                                    | legacy JSON API             | Nice (widely used) |
-| `/{index}/pypi/{project}/{version}/json`           | GET              | json                                    | legacy JSON API             | Nice               |
-| `/integrity/{project}/{version}/{file}/provenance` | GET              | `vnd.pypi.integrity.v1+json`            | 740                         | Nice               |
-| `/+api`, `/{index}/+api`                           | GET              | json                                    | discovery/capabilities      | Required           |
-| `/+status`, `/metrics`                             | GET              | json / prometheus                       | health/obs                  | Required           |
-| management API (index, user CRUD)                  | PUT/PATCH/DELETE | json                                    | velodex-specific            | Required           |
+| Path | Method | Content-Type | Spec | Status in velodex | | -------------------------------------------------- |
+\---------------- | --------------------------------------- | --------------------------- | ------------------ | |
+`/{index}/simple/` | GET | html / `vnd.pypi.simple.v1+{html,json}` | 503/691/700 | Required | |
+`/{index}/simple/{project}/` | GET | same | 503/691/700/592/658/714/792 | Required | | `/{index}/{file}` (blob) |
+GET/HEAD | octet-stream, ranges | 503 | Required | | `/{index}/{file}.metadata` | GET | octet-stream | 658/714 |
+Required (wheels) | | `/{index}/{file}.provenance` | GET | json | 740 | Nice | | `/{index}/` (upload) | POST | multipart
+to text | forklift | Required | | `/{index}/pypi/{project}/json` | GET | json | legacy JSON API | Nice (widely used) | |
+`/{index}/pypi/{project}/{version}/json` | GET | json | legacy JSON API | Nice | |
+`/integrity/{project}/{version}/{file}/provenance` | GET | `vnd.pypi.integrity.v1+json` | 740 | Nice | | `/+api`,
+`/{index}/+api` | GET | json | discovery/capabilities | Required | | `/+status`, `/metrics` | GET | json / prometheus |
+health/obs | Required | | management API (index, user CRUD) | PUT/PATCH/DELETE | json | velodex-specific | Required |
 
 pypi.org exposes no machine API for account or index management, so that is the one place velodex designs its own
 contract [warehouse management is web-UI plus CSRF only]. The contract stays small and REST-shaped ([§7](#7-http-api)).
@@ -138,8 +136,7 @@ responses.
 ## 3. Architecture
 
 One async process, `tokio` multi-thread runtime with a capped worker count, `axum` on `hyper` for HTTP. No GIL, no
-thread-per-request pool, and no separate asyncio-loop bridge, all of which devpi carries \[devpi main.py XOM,
-AsyncioLoopThread\].
+thread-per-request pool, and no separate asyncio-loop bridge.
 
 ```mermaid
 flowchart TD
@@ -179,7 +176,7 @@ Layers:
 - **HTTP.** Routing, content negotiation, range serving, compression (index pages only, never wheels), auth extraction,
   request tracing.
 - **Index resolver.** The overlay/SRO engine ([§4](#4-index-model-overlays-and-resolution-order)). This is the domain
-  logic worth taking from devpi, reimplemented cleanly.
+  logic that makes an index server more than a cache.
 - **Upload handler.** The standard forklift multipart protocol and its validation gauntlet
   ([§8](#8-upload-the-standard-protocol-no-custom-client)).
 - **Upstream adapter.** A per-mirror capability descriptor, read-through fetch with single-flight coalescing, and
@@ -188,7 +185,7 @@ Layers:
   for the RAM hot tier ([§5](#5-storage-and-the-filesystem-cache)).
 
 Extension seams are compile-time traits, not a runtime plugin system: `Storage`, `Authenticator`, `UpstreamAdapter`,
-`Indexer`. Most of what devpi implements as pluggy hooks is core in velodex and monomorphized.
+`Indexer`. Most of what incumbent servers expose as runtime plugin hooks is core in velodex and monomorphized.
 
 ### Project layout
 
@@ -224,26 +221,25 @@ version/name/metadata logic tests run fast and deterministically.
 
 ## 4. Index model: overlays and resolution order
 
-The overlay system is velodex's reason to exist beyond a dumb cache. It follows devpi's model \[devpi model.py,
-mirror.py\] with a cleaner implementation.
+The overlay system is velodex's reason to exist beyond a dumb cache. It follows the composition model the established
+index servers converged on, with a cleaner implementation.
 
 ### Index kinds
 
 - **Mirror index.** A read-only caching proxy to an upstream PEP 503/691 index. `root/pypi` mirrors
-  `https://pypi.org/simple/`, created on init \[devpi main.py:776 `_pypi_ixconfig_default`\]. You can configure any
-  number of extra mirrors: a private Artifactory, an internal devpi, piwheels.
+  `https://pypi.org/simple/`, created on init. You can configure any number of extra mirrors: a private Artifactory,
+  piwheels, another velodex.
 - **Private index.** Read/write, owned by a user, publishable via the standard upload protocol. It has `bases` (a list
   of parent indexes) and a `volatile` flag.
 
 ### Bases and stage resolution order (SRO)
 
-An index resolves a project by walking its stage resolution order, modeled on Python's MRO \[devpi glossary "sro"\]:
-breadth-first over non-mirror bases, deduped, with all mirror bases yielded last \[devpi model.py:1229 `sro()`\]. Two
-consequences follow:
+An index resolves a project by walking its stage resolution order, modeled on Python's MRO: breadth-first over
+non-mirror bases, deduped, with all mirror bases yielded last. Two consequences follow:
 
 - A private file shadows an upstream file of the same name, which gives the dependency-confusion defense on by default.
 - `get_simplelinks(project)` merges files across the SRO, first-wins by filename, then sorts newest-first by
-  `(version, name, ext)` [devpi model.py:1032].
+  `(version, name, ext)`.
 
 ```mermaid
 flowchart LR
@@ -262,8 +258,7 @@ flowchart LR
 ### Mirror allow-list
 
 Once a project is published privately, upstream versions of that name stay hidden unless the name is allow-listed
-(`mirror_whitelist` in devpi; velodex calls it `allow_upstream`) \[devpi model.py:1177
-`op_sro_check_mirror_whitelist`\]. velodex copies this inverted default because it is the security-critical behavior.
+(velodex calls it `allow_upstream`). The inverted default is the security-critical behavior.
 
 ### Volatile vs non-volatile
 
@@ -274,17 +269,16 @@ Once a project is published privately, upstream versions of that name stay hidde
 
 ### Promotion
 
-`push` copies a release (files plus metadata) from one index to another without a rebuild \[devpi views.py
-`_push_links`\]. Because blobs are content-addressed, promotion is a zero-byte copy-on-write clone
-([§5](#5-storage-and-the-filesystem-cache)). Pushing to an external real PyPI is a re-upload over the standard protocol,
-so velodex exposes it as a server-side action that POSTs to a configured upstream's `/legacy/`.
+`push` copies a release (files plus metadata) from one index to another without a rebuild. Because blobs are
+content-addressed, promotion is a zero-byte copy-on-write clone ([§5](#5-storage-and-the-filesystem-cache)). Pushing to
+an external real PyPI is a re-upload over the standard protocol, so velodex exposes it as a server-side action that
+POSTs to a configured upstream's `/legacy/`.
 
 ## 5. Storage and the filesystem cache
 
-The defining pattern, which devpi's filestore and uv's cache reached independently: immutable content-addressed blobs,
-small versioned control records, atomic temp-rename, and single-flight read-through. Control metadata and blob bytes
-split apart. redb stays authoritative for what exists and its hash; the filesystem holds bytes \[devpi filestore_fs.py
-vs filestore_db.py; uv crates/uv-cache\].
+The defining pattern, which mature package caches (uv's among them) reached independently: immutable content-addressed
+blobs, small versioned control records, atomic temp-rename, and single-flight read-through. Control metadata and blob
+bytes split apart. redb stays authoritative for what exists and its hash; the filesystem holds bytes.
 
 ### On-disk layout
 
@@ -303,14 +297,12 @@ require it. velodex checks this at startup by comparing device ids.
 ```
 
 Blob sharding uses 2 levels of 2 hex chars (65,536 leaf dirs); 10M blobs give roughly 150 files per leaf, well under any
-directory cliff [devpi filestore.py:418 uses 3 chars for the same reason; uv and cacache shard similarly]. The full
-64-hex digest is the filename, so the path is the integrity proof.
+directory cliff. The full 64-hex digest is the filename, so the path is the integrity proof.
 
 ### Content addressing and copy-on-write dedup
 
 `blobs/sha256/<ab>/<cd>/<digest>` is the single physical copy of any artifact. Every other reference (a mirror cache
-entry, a private upload, a `push` target, an overlay member) is a link to that inode \[devpi filestore_hash_hl.py
-hard-link dedup\].
+entry, a private upload, a `push` target, an overlay member) is a link to that inode.
 
 - **Primary mechanism: hard links.** Blobs stay immutable, so shared-inode semantics are safe and cost zero bytes. redb
   tracks refcounts explicitly (a referrer set per digest) rather than reading `st_nlink`, so refcounting survives
@@ -338,21 +330,18 @@ flowchart TD
     classDef ref fill:#d7f0e3,stroke:#009e73,color:#063d2e;
 ```
 
-redb itself is a copy-on-write B-tree with MVCC [redb design], so snapshot-isolation-at-a-serial comes for free. devpi
-hand-builds that property in keyfs.
+redb itself is a copy-on-write B-tree with MVCC [redb design], so snapshot-isolation-at-a-serial comes for free.
 
 ### Crash safety
 
 The write recipe: stream to `tmp/<unique>-tmp`, hash while streaming, verify the digest before commit, `fsync` the file,
 atomic-rename into `blobs/`, `fsync` the parent dir. A truncated download only ever exists under the temp name and never
-gets renamed in unless the hash matches, so anything in `blobs/` is complete and correct by construction \[devpi
-DirtyFile.commit, filestore_fs.py:85-98\].
+gets renamed in unless the hash matches, so anything in `blobs/` is complete and correct by construction.
 
 - **Mirror recovery.** Sweep orphan `tmp/` files at startup. Re-fetch on miss is always safe, so cached content needs no
-  changelog replay, a large simplification over devpi's `rel_renames` machinery \[devpi filestore_fs_base.py:226
-  `perform_crash_recovery`\].
+  changelog replay, a large simplification over changelog-replay designs.
 - **Durable-upload recovery.** The rename intent goes into the redb transaction alongside the metadata and replays at
-  startup. This is the one place velodex keeps devpi's rigor, because uploads cannot be re-fetched.
+  startup. This is the one place velodex pays for full write-ahead rigor, because uploads cannot be re-fetched.
 
 ### Read-through revalidation
 
@@ -364,17 +353,17 @@ DirtyFile.commit, filestore_fs.py:85-98\].
   (uv's heuristic mirroring PyPI's `max-age=600`); nothing at all revalidates every fetch. velodex reads
   `X-PyPI-Last-Serial` as a cheap change-detector when upstream provides it and never depends on it.
 - **Serve-stale-on-error.** Upstream 5xx or unreachable plus a stale entry serves stale (RFC 5861). velodex favors
-  availability over freshness, as devpi does [devpi mirror.py].
+  availability over freshness.
 
 ### Concurrency and coalescing
 
 - **Single-flight fetch.** N concurrent misses for one URL trigger one upstream fetch, via moka `try_get_with` for
-  cached results and a `dashmap<Key, Arc<Mutex<()>>>` of per-key async locks for streamed blobs \[devpi's
-  WeakValueDictionary of per-project locks maps directly\]. velodex never holds a lock across an unrelated `.await`.
+  cached results and a `dashmap<Key, Arc<Mutex<()>>>` of per-key async locks for streamed blobs. velodex never holds a
+  lock across an unrelated `.await`.
 - **Streaming tee.** Bytes from upstream fan out to the client response, the sha256 hasher, and the temp file in one
   pass, so one network read serves the client and warms the cache.
-- **Single-writer metadata.** redb's MVCC gives one writer and many readers with no global mutex. This replaces devpi's
-  global write lock and removes the reason for its `--requests-only` worker split.
+- **Single-writer metadata.** redb's MVCC gives one writer and many readers with no global mutex: no global write lock,
+  and no reason to split serving across worker processes.
 
 ### Eviction, GC, quotas
 
@@ -391,23 +380,21 @@ crates/uv-cache/src/lib.rs\]. `velodex fsck` recomputes digests and reconciles r
 ### nginx offload
 
 The blob path stays reverse-proxy-friendly: a front nginx can `try_files` into `blobs/sha256/...` or use
-`X-Accel-Redirect` to serve wheel bytes in kernel space, leaving velodex to handle index pages and revalidation \[devpi
-ships an nginx caching config for this\]. This is the highest-leverage throughput move, designed in from day one.
+`X-Accel-Redirect` to serve wheel bytes in kernel space, leaving velodex to handle index pages and revalidation. This is
+the highest-leverage throughput move, designed in from day one.
 
 ## 6. Upstream mirror adapter and graceful degradation
 
 Most upstreams are not feature-complete. The confirmed picture (primary-source vendor docs plus pip/uv issue trackers):
 
-| Capability           | pypi.org | Artifactory    | Nexus ≥3.94 | GitLab     | CodeArtifact | Azure     | Google AR | devpi  | static  |
-| -------------------- | -------- | -------------- | ----------- | ---------- | ------------ | --------- | --------- | ------ | ------- |
-| PEP 691 JSON         | yes      | opt-in         | yes         | no         | no           | no        | no        | yes    | some    |
-| PEP 658 metadata     | yes      | no             | yes         | no         | no           | no        | no        | opt-in | some    |
-| Hashes (sha256)      | always   | varies         | yes         | in-path    | varies       | varies    | varies    | yes    | yes     |
-| Name normalization   | strict   | off by default | yes         | aggressive | yes          | pip-side  | pip-side  | yes    | varies  |
-| Full `/simple/` list | yes      | varies         | yes         | no         | no           | feed-only | gated     | yes    | some    |
-| PEP 700 fields       | yes      | no             | yes         | no         | no           | no        | ?         | ~      | no      |
-| `X-PyPI-Last-Serial` | yes      | no             | no          | no         | no           | no        | no        | own    | no      |
-| Conditional GET      | yes      | ?              | ?           | ?          | ?            | ?         | ?         | ~      | web-dep |
+| Capability | pypi.org | Artifactory | Nexus ≥3.94 | GitLab | CodeArtifact | Azure | Google AR | static | |
+\-------------------- | -------- | -------------- | ----------- | ---------- | ------------ | --------- | --------- |
+------- | | PEP 691 JSON | yes | opt-in | yes | no | no | no | no | some | | PEP 658 metadata | yes | no | yes | no | no
+| no | no | some | | Hashes (sha256) | always | varies | yes | in-path | varies | varies | varies | yes | | Name
+normalization | strict | off by default | yes | aggressive | yes | pip-side | pip-side | varies | | Full `/simple/` list
+| yes | varies | yes | no | no | feed-only | gated | some | | PEP 700 fields | yes | no | yes | no | no | no | ? | no |
+| `X-PyPI-Last-Serial` | yes | no | no | no | no | no | no | no | | Conditional GET | yes | ? | ? | ? | ? | ? | ? |
+web-dep |
 
 Sources: JFrog PyPI docs (JSON is opt-in via "Enable simple json format", normalization off by default so `jfrog.pypi`
 differs from `jfrog_pypi`), GitLab PyPI docs (HTML-only, aggressive normalization, request-forwarding on by default),
@@ -481,16 +468,18 @@ flowchart TD
 
 This mirrors the fallbacks pip and uv already ship \[uv registry_client.rs:900-906, pip prepare.py:370-457\]:
 
-| Missing upstream capability | velodex behavior                                                                                                                                                                                                                                                                                                                                                           |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No PEP 691 JSON             | Parse upstream HTML (PEP 503), build the internal model, synthesize JSON downstream.                                                                                                                                                                                                                                                                                       |
-| No PEP 658 `.metadata`      | On first wheel fetch, range-read the wheel (last ~16 KiB central directory, then the `METADATA` member, `Accept-Encoding: identity`, at most two range GETs) or full-download; extract `METADATA`, store it, serve `{file}.metadata`, advertise `core-metadata` with its sha256. Both clients do this; velodex does it once so every downstream client gets the fast path. |
-| No hashes / md5-only        | Compute sha256 on first fetch (velodex is content-addressed anyway); never propagate md5-only.                                                                                                                                                                                                                                                                             |
-| No PEP 700 fields           | Synthesize `size` from the stored blob and `versions` from the file list; omit `upload-time`, and document that `--exclude-newer` will not work for that upstream (uv#10394).                                                                                                                                                                                              |
-| No serial                   | Time-based TTL plus conditional GET.                                                                                                                                                                                                                                                                                                                                       |
-| No conditional GET          | TTL-only revalidation.                                                                                                                                                                                                                                                                                                                                                     |
-| No full project list        | velodex's own `/simple/` lists only observed/cached projects; the upstream is marked non-enumerable.                                                                                                                                                                                                                                                                       |
-| Has serial                  | Adopt bandersnatch's model: reject responses whose serial regressed, which defeats stale CDN reads.                                                                                                                                                                                                                                                                        |
+| Missing upstream capability | velodex behavior | | --------------------------- |
+\--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| | No PEP 691 JSON | Parse upstream HTML (PEP 503), build the internal model, synthesize JSON downstream. | | No PEP
+658 `.metadata` | On first wheel fetch, range-read the wheel (last ~16 KiB central directory, then the `METADATA`
+member, `Accept-Encoding: identity`, at most two range GETs) or full-download; extract `METADATA`, store it, serve
+`{file}.metadata`, advertise `core-metadata` with its sha256. Both clients do this; velodex does it once so every
+downstream client gets the fast path. | | No hashes / md5-only | Compute sha256 on first fetch (velodex is
+content-addressed anyway); never propagate md5-only. | | No PEP 700 fields | Synthesize `size` from the stored blob and
+`versions` from the file list; omit `upload-time`, and document that `--exclude-newer` will not work for that upstream
+(uv#10394). | | No serial | Time-based TTL plus conditional GET. | | No conditional GET | TTL-only revalidation. | | No
+full project list | velodex's own `/simple/` lists only observed/cached projects; the upstream is marked non-enumerable.
+| | Has serial | Adopt bandersnatch's model: reject responses whose serial regressed, which defeats stale CDN reads. |
 
 ### Not reproducing client-breaking bugs
 
@@ -509,8 +498,8 @@ and stores simple detail as a static file for the CDN; same idea\].
 ### Two audiences on one URL
 
 The same index and project URLs serve a person and a tool differently. velodex negotiates on both `Accept` and
-`User-Agent`, and sets `Vary: Accept, User-Agent` so caches keep the variants apart (devpi does the same with its
-UA-gated installer routes \[devpi views.py `installer_simple`\]; Warehouse varies on Accept).
+`User-Agent`, and sets `Vary: Accept, User-Agent` so caches keep the variants apart (Warehouse likewise varies on
+Accept).
 
 - **A tool** (uv, pip, twine, Poetry, pdm, pex, or any client sending
   `Accept: application/vnd.pypi.simple.v1+json`/`+html`, or a known installer `User-Agent`, or plain `curl`) gets the
@@ -530,20 +519,20 @@ does) [warehouse api/simple.py:23-48].
 The one surface with no pypi.org precedent. Small, REST-shaped, token-authenticated:
 
 - `PUT /{user}/{index}` creates an index (`bases`, `volatile`, `allow_upstream`, `mirror_url`).
-- `PATCH /{user}/{index}` modifies it (JSON, or `key+=val` / `key-=val` list ops as devpi does).
+- `PATCH /{user}/{index}` modifies it (JSON, or `key+=val` / `key-=val` list ops).
 - `DELETE /{user}/{index}` is refused on non-volatile indexes unless forced.
 - `PUT/PATCH/DELETE /{user}` manages users.
 - `GET /+api`, `GET /{index}/+api` return discovery: the index/simple/upload URLs and a capability list, so clients and
-  tooling negotiate without version sniffing \[devpi `/+api` feature negotiation, a pattern worth keeping\].
+  tooling negotiate without version sniffing.
 
 `velodex config-snippet` prints ready `.pypirc` / `pip.conf` / `uv` config pointing at an index (the JFrog "Set Me Up"
-and devpi `use --set-cfg` pattern), a convenience emitter rather than a stateful client.
+pattern), a convenience emitter rather than a stateful client.
 
 ## 8. Upload: the standard protocol, no custom client
 
 velodex writes no uploader. It accepts the standard PyPI upload protocol, so `twine`, `uv publish`, `flit publish`,
-`hatch publish`, and Poetry all work unmodified; the user only changes the repository URL. There is no velodex
-equivalent of `devpi upload`.
+`hatch publish`, and Poetry all work unmodified; the user only changes the repository URL. There is no bespoke velodex
+upload client.
 
 The endpoint is the forklift contract \[warehouse/forklift/legacy.py\]: `POST /{index}/` with `multipart/form-data`,
 dispatched on the `:action=file_upload` field, `protocol_version=1`. Accepted fields and validation match Warehouse so
@@ -581,18 +570,18 @@ read and upload paths:
 - **`.netrc`, URL-embedded credentials, keyring** stay client-side and work transparently, because velodex sees only the
   resulting Basic/Bearer header.
 
-Auth is a compile-time `Authenticator` trait over a stable `credentials → Identity{user, groups}` contract \[devpi's
-pluggable credential extraction, minus pluggy\]. LDAP/OIDC/external auth are future trait impls, not v1.
+Auth is a compile-time `Authenticator` trait over a stable `credentials → Identity{user, groups}` contract.
+LDAP/OIDC/external auth are future trait impls, not v1.
 
 Upstream auth (velodex to a private mirror) is configured per upstream and covers the spread found in the wild: static
 Basic/Bearer, and rotating tokens with a refresh scheduler keyed off an expiry timestamp for CodeArtifact (12h STS
 token, username `aws`, re-minted via SigV4), Google AR (`oauth2accesstoken`, ~1h), and Azure credprovider JWT
 ([§6](#6-upstream-mirror-adapter-and-graceful-degradation) descriptor `AuthKind`).
 
-Authorization is per-index ACLs as pure data, first-match allow/deny [devpi view_auth.py]. Principals: `everyone`,
-`authenticated`, `<user>`, `:<group>`, with special `:ANONYMOUS:` and `:AUTHENTICATED:`. Per-index `acl_upload` controls
-publish. Read defaults to public but is a first-class per-index option, so velodex builds in what devpi bolts on via
-devpi-lockdown. `--restrict-modify` narrows who can create or modify users and indexes.
+Authorization is per-index ACLs as pure data, first-match allow/deny. Principals: `everyone`, `authenticated`, `<user>`,
+`:<group>`, with special `:ANONYMOUS:` and `:AUTHENTICATED:`. Per-index `acl_upload` controls publish. Read defaults to
+public but is a first-class per-index option, so read protection is built in rather than bolted on. `--restrict-modify`
+narrows who can create or modify users and indexes.
 
 Passwords hash with `argon2` (Argon2id); tokens compare in constant time (`subtle`).
 
@@ -617,8 +606,8 @@ in Node, npm, or vite. This keeps the self-contained, no-foreign-deps ethos whil
 - **Search** runs on Tantivy behind the `Indexer` trait seam (Phase 5). Hosting rendered Sphinx sites stays out of
   scope.
 
-uv and ruff ship no web UI, so there is no Astral precedent; devpi-web is the behavioral reference and velodex
-reimplements a leaner version of it in Rust.
+uv and ruff ship no web UI, so there is no Astral precedent; velodex's UI takes its cues from pypi.org's project pages
+and keeps the implementation lean and in Rust.
 
 ## 11. Rust stack
 
@@ -784,49 +773,54 @@ so velodex builds its own, modeled on `packse` [uv's resolver test tool].
   matches the wheel METADATA; a no-hash upstream, and confirm sha256 is computed and stable; a no-serial upstream, and
   confirm TTL revalidation fires; the capability probe detects each.
 
-### Final validation: devpi vs velodex
+### Final validation: velodex vs an incumbent
 
-The release bar is a side-by-side against devpi, the closest existing tool. A harness bootstraps both a devpi server and
-velodex pointed at the same upstream, then runs one integration workload against each: install a set of popular PyPI
-packages and their dependency trees (numpy, pandas, requests, flask, cryptography, boto3, …) with pip and uv, upload and
-re-download private packages, and exercise the overlay and promotion flow. Functionality is checked first: identical
-resolution, hashes, and install success, and matching simple-index and JSON output modulo host rewriting.
+The release bar is a side-by-side against an established index server. A harness bootstraps both servers pointed at the
+same upstream, then runs one integration workload against each: install a set of popular PyPI packages and their
+dependency trees (numpy, pandas, requests, flask, cryptography, boto3, …) with pip and uv, upload and re-download
+private packages, and exercise the overlay and promotion flow. Functionality is checked first: identical resolution,
+hashes, and install success, and matching simple-index and JSON output modulo host rewriting.
 
 The headline is a single table that puts **size and performance next to each other for each package**, because they move
 together: a smaller cached footprint is what makes the warm path fast. One row per package (plus an aggregate row),
-devpi vs velodex side by side:
+incumbent vs velodex side by side:
 
-| Package   | Cold install (s) | Warm install (s) | Req/s (concurrent) | Peak RSS (MB)   | Cache on disk (MB) |
-| --------- | ---------------- | ---------------- | ------------------ | --------------- | ------------------ |
-| numpy     | devpi / velodex  | devpi / velodex  | devpi / velodex    | devpi / velodex | devpi / velodex    |
-| …         |                  |                  |                    |                 |                    |
-| **total** |                  |                  |                    |                 |                    |
+| Package | Cold install (s) | Warm install (s) | Req/s (concurrent) | Peak RSS (MB) | Cache on disk (MB) | | ---------
+| ---------------- | ---------------- | ------------------- | ------------------- | ------------------- | | numpy | both
+servers | both servers | both servers | both servers | both servers | | … | | | | | | | **total** | | | | | |
 
 The size columns (peak RSS, on-disk cache) sit beside the latency and throughput columns so a reader sees directly that
 velodex's content-addressed, deduplicated cache and small resident set buy the faster cold and warm numbers. The
-server's own binary size and idle RSS are reported alongside. The target is functional parity with devpi and a clear win
-across every column.
+server's own binary size and idle RSS are reported alongside. The target is functional parity and a clear win across
+every column.
 
-## 14. What velodex changes vs devpi
+## 14. Design departures from prior art
 
-devpi is the closest existing tool and the main behavioral reference. velodex keeps its valuable domain logic (the
-SRO/overlay model, the mirror allow-list, the permanent artifact cache, `push` promotion, the serial/changelog concept)
-and replaces its architectural liabilities:
+velodex keeps the domain logic the established index servers proved out (the SRO/overlay model, the mirror allow-list,
+the permanent artifact cache, `push` promotion, the serial/changelog concept) and replaces their architectural
+liabilities:
 
-| devpi                                                                                                                                                                                 | velodex                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Python + Pyramid + waitress, thread-per-request pool, a separate asyncio-loop-in-a-thread for HTTP [devpi main.py]                                                                    | One async Rust process (axum/tokio); no GIL, no thread pool, no loop bridge.                                            |
-| keyfs stores values inside serialized changelog BLOBs; `kv` holds only pointers; the bespoke marshal-like format doubles as the replication wire format [devpi keyfs.py, fileutil.py] | redb (MVCC B-tree) for typed metadata; the on-disk format stays decoupled from any future replication wire format.      |
-| One global serial gives one global write lock; SQLite `BEGIN IMMEDIATE` serializes all writes [devpi keyfs_sqlite.py]                                                                 | redb single-writer/many-reader MVCC; no global mutex; per-key async locks only where fetches coalesce.                  |
-| The "main instance + `--requests-only` workers" split exists only because SQLite allows one writer [devpi adminman/server.rst]                                                        | No split; the concurrency model removes the reason for it.                                                              |
-| pluggy hook dispatch on the hot path (auth, SRO, simple-page gen), even for built-in modules [devpi hookspecs.py]                                                                     | Compile-time traits for the few real seams (storage, auth, upstream); everything else monomorphized.                    |
-| A bespoke `devpi upload` client and client-state machinery [devpi-client]                                                                                                             | No custom client; standard twine/uv-publish protocol only.                                                              |
-| hash_hl hard-link dedup [devpi filestore_hash_hl.py]                                                                                                                                  | Content-addressed CAS with reflink CoW plus explicit redb refcounts; hard-link fallback.                                |
-| Whoosh full-text search (pure-Python, pinned `<3`) [devpi-web]                                                                                                                        | Tantivy behind an indexer trait seam (Phase 5).                                                                         |
-| Read-open by default; read-auth needs devpi-lockdown plus nginx                                                                                                                       | Per-index read ACL is a first-class native option.                                                                      |
-| Most functionality ships as external pluggy plugins (tokens, lockdown, ldap, jenkins, slack)                                                                                          | Token auth and read ACLs native; CI/webhook and external auth collapse into one event/webhook seam plus the auth trait. |
+| Prior art | velodex | |
+\-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+|
+\-----------------------------------------------------------------------------------------------------------------------
+| | An interpreted web stack with a thread-per-request pool and a separate event-loop bridge for HTTP | One async Rust
+process (axum/tokio); no GIL, no thread pool, no loop bridge. | | A changelog store that keeps values inside serialized
+BLOBs, in a bespoke format doubling as the replication wire format | redb (MVCC B-tree) for typed metadata; the on-disk
+format stays decoupled from any future replication wire format. | | One global serial gives one global write lock;
+SQLite `BEGIN IMMEDIATE` serializes all writes | redb single-writer/many-reader MVCC; no global mutex; per-key async
+locks only where fetches coalesce. | | The "main instance + `--requests-only` workers" split exists only because SQLite
+allows one writer | No split; the concurrency model removes the reason for it. | | pluggy hook dispatch on the hot path
+(auth, SRO, simple-page gen), even for built-in modules | Compile-time traits for the few real seams (storage, auth,
+upstream); everything else monomorphized. | | A bespoke upload client and client-state machinery | No custom client;
+standard twine/uv-publish protocol only. | | Hard-link dedup | Content-addressed CAS with reflink CoW plus explicit redb
+refcounts; hard-link fallback. | | Whoosh full-text search (pure-Python, pinned `<3`) | Tantivy behind an indexer trait
+seam (Phase 5). | | Read-open by default; read-auth needs an external plugin plus a fronting proxy | Per-index read ACL
+is a first-class native option. | | Most functionality ships as external runtime plugins (tokens, lockdown, ldap,
+jenkins, slack) | Token auth and read ACLs native; CI/webhook and external auth collapse into one event/webhook seam
+plus the auth trait. |
 
-velodex does not carry devpi's export/import dump format. Replication rides the serial log and ships in Phase 5.
+velodex does not carry an export/import dump format. Replication rides the serial log and ships in Phase 5.
 
 ## 15. Project conventions
 
@@ -966,8 +960,8 @@ Scope: the remaining capabilities, all delivered in the same PR.
 - Master/replica replication over the serial log: the replica protocol, read-your-writes on proxied writes, file
   replication out of band.
 - Tantivy full-text search behind the indexer trait seam; the search UI page.
-- External auth (LDAP/OIDC) as `Authenticator` trait impls; an upload/change webhook seam that absorbs the devpi
-  jenkins/slack plugin use cases.
+- External auth (LDAP/OIDC) as `Authenticator` trait impls; an upload/change webhook seam that absorbs the CI-trigger
+  and chat-notification plugin use cases.
 
 Validation gate: a `twine upload` carrying a valid attestation is accepted and its provenance serves at the advertised
 URL; a quarantined project returns 404 from the simple API; a second velodex process configured as a replica catches up
@@ -978,9 +972,6 @@ authenticates; a configured webhook fires on upload.
 
 ### Source codebases read
 
-- **devpi** `/Volumes/T9Mini/git/devpi`:
-  `server/devpi_server/{model,mirror,keyfs,keyfs_sqlite,filestore_fs,filestore_hash_hl,replica,views,config,main,hookspecs,auth,view_auth}.py`,
-  `doc/{userman,adminman,devguide}`, `web/`, `postgresql/`.
 - **Warehouse (pypi.org)** `/Volumes/T9Mini/git/warehouse`: `warehouse/api/simple.py`, `warehouse/packaging/utils.py`,
   `warehouse/forklift/{legacy,forms,metadata}.py`, `warehouse/macaroons/`, `warehouse/api/integrity.py`,
   `warehouse/legacy/api/{json,xmlrpc}`, `warehouse/routes.py`, `warehouse/cache/origin/fastly.py`.

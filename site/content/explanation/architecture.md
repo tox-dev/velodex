@@ -68,6 +68,16 @@ sibling, fetches it from the upstream on first use, verifies it against the dige
 it like any blob. The `velodex_metadata_requests_total` metric counts these; the end-to-end tests assert on it to
 prove real clients take this path.
 
+## Distribution
+
+velodex ships one static binary through two channels. GitHub releases carry per-platform archives and installer
+scripts (built by [dist](https://axodotdev.github.io/cargo-dist/)); these copies carry the `self-update` feature and
+an install receipt, so `velodex self update` can replace them in place. PyPI carries the same binary wrapped in a
+`bindings = "bin"` wheel: Python-shop operators get velodex through the tooling they already run (`uv tool install`,
+a `requirements.txt` line, an internal mirror) without a second artifact channel, and since no Python ABI is
+involved, one wheel per platform serves every interpreter. Wheel installs have no self-update: pip owns
+that file, and the updater refuses copies without a receipt rather than fight it.
+
 ## The web UI
 
 The UI is a [Leptos](https://leptos.dev/) application compiled twice from one codebase: natively into the server,

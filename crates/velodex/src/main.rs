@@ -145,5 +145,24 @@ fn main() -> anyhow::Result<()> {
             print!("{}", velodex_http::api::openapi_json());
             Ok(())
         }
+        #[cfg(feature = "self-update")]
+        velodex::cli::Command::SelfManage(velodex::cli::SelfCommand::Update) => self_update(),
     }
+}
+
+/// Replace this binary with the newest GitHub release, through the receipt the shell or PowerShell
+/// installer wrote. Copies installed by pip or cargo have no receipt and are refused, so each
+/// install method updates through its own package manager.
+#[cfg(feature = "self-update")]
+fn self_update() -> anyhow::Result<()> {
+    let mut updater = axoupdater::AxoUpdater::new_for("velodex");
+    updater.load_receipt().context(
+        "no install receipt found; `self update` serves installer-based installs only \
+         (reinstall with the install script, or update via the tool that installed velodex)",
+    )?;
+    match updater.run_sync()? {
+        Some(result) => println!("updated to {}", result.new_version_tag),
+        None => println!("velodex is already up to date"),
+    }
+    Ok(())
 }
