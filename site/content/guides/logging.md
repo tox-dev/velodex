@@ -12,8 +12,8 @@ the output quiet:
 velox --log-level "info,velox_upstream=debug" serve
 ```
 
-At debug level velox traces each HTTP request with its method, path, and status; this is how you observe pip and uv
-taking the [PEP 658](https://peps.python.org/pep-0658/) `.metadata` path.
+velox logs each HTTP request with its method, path, status, and latency at info, the default level, so you can watch
+pip and uv take the [PEP 658](https://peps.python.org/pep-0658/) `.metadata` path without raising verbosity.
 
 ## Sinks
 

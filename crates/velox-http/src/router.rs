@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::get;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 
 use crate::handlers;
 use crate::state::AppState;
@@ -13,7 +13,7 @@ use crate::state::AppState;
 ///
 /// All index traffic lands on a catch-all path that the handlers resolve to a configured index by
 /// longest route prefix, so routes are data, not hardcoded. Every request is traced (method, path,
-/// status) at debug level, which is how the `.metadata` fast path can be observed in the logs.
+/// status) at info level, so the default log level already shows the `.metadata` fast path.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api-docs/openapi.json", get(handlers::openapi_spec))
@@ -26,6 +26,10 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .put(handlers::dispatch_put)
                 .delete(handlers::dispatch_delete),
         )
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+                .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
