@@ -89,7 +89,8 @@ jobs:
 
   # Build and packages all the platform-specific things
   build-local-artifacts:
-    name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
+    # No explicit name: GitHub then renders each matrix leg with its values and the
+    # skipped-on-PR entry stays a clean job name instead of an unexpanded template.
     # Let the initial task tell us to not run (currently very blunt)
     needs:
       - plan
