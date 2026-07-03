@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use tl::{HTMLTag, ParserOptions};
 use url::Url;
 
-use super::simple::{CoreMetadata, File, Meta, ParsedDetail, Provenance, SimpleError, Yanked};
+use super::simple::{
+    CoreMetadata, File, Meta, ParsedDetail, ProjectList, ProjectListEntry, Provenance, SimpleError, Yanked,
+};
 
 /// Parse the HTML detail page for `project`, resolving relative file links against `base`.
 ///
@@ -30,6 +32,24 @@ pub fn parse_detail_html(project: &str, html: &str, base: &Url) -> Result<Parsed
         versions: Vec::new(),
         files,
     })
+}
+
+/// Parse the HTML root project list, resolving anchors the same way a PEP 503 client would.
+///
+/// # Errors
+/// Returns an error when the HTML page advertises an unsupported Simple API major version.
+pub fn parse_index_html(html: &str, base: &Url) -> Result<ProjectList, SimpleError> {
+    let dom = tl::parse(html, ParserOptions::default())?;
+    let meta = parse_meta(&dom)?;
+    let base = link_base(&dom, base);
+    let projects = dom
+        .nodes()
+        .iter()
+        .filter_map(|node| node.as_tag())
+        .filter(|tag| is_tag(tag, b"a"))
+        .filter_map(|tag| anchor_to_project(tag, &base, dom.parser()))
+        .collect();
+    Ok(ProjectList { meta, projects })
 }
 
 fn parse_meta(dom: &tl::VDom<'_>) -> Result<Meta, SimpleError> {
@@ -64,6 +84,28 @@ fn link_base(dom: &tl::VDom<'_>, base: &Url) -> Url {
         .and_then(|tag| attr_string(tag, "href"))
         .and_then(|href| base.join(&href).ok())
         .unwrap_or_else(|| base.clone())
+}
+
+fn anchor_to_project(tag: &HTMLTag, base: &Url, parser: &tl::Parser<'_>) -> Option<ProjectListEntry> {
+    let href = attr_string(tag, "href").filter(|href| !href.is_empty())?;
+    let resolved = base.join(&href).ok()?;
+    let name = tag.inner_text(parser);
+    let name = decode_entities(name.trim());
+    let name = if name.is_empty() {
+        project_from_url(&resolved)?
+    } else {
+        name
+    };
+    Some(ProjectListEntry { name })
+}
+
+fn project_from_url(url: &Url) -> Option<String> {
+    url.path()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(percent_decode)
 }
 
 fn anchor_to_file(tag: &HTMLTag, base: &Url) -> Option<File> {

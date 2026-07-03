@@ -20,6 +20,7 @@ velodex <COMMAND>
 | `restore`        | Restore an offline backup into a data directory                                       |
 | `import-dir`     | Import local wheels and sdists into a hosted repository                               |
 | `policy`         | Preview repository policy decisions against cached records                            |
+| `mirror`         | Plan, populate, and verify mirror cache contents                                      |
 | `openapi`        | Print the OpenAPI description of the HTTP API as JSON                                 |
 | `self update`    | Replace the binary with the newest release (installer-managed builds only; see below) |
 
@@ -31,6 +32,7 @@ velodex <COMMAND>
 | `--host <addr>`     | Bind address                               | `127.0.0.1`    |
 | `--port <port>`     | Bind port                                  | `4433`         |
 | `--data-dir <path>` | Data directory (redb store and blob cache) | `velodex-data` |
+| `--offline`         | Serve configured mirrors from cache only   | `false`        |
 
 ### Logging
 
@@ -63,6 +65,41 @@ velodex config-snippet --base-url https://packages.example --index root/pypi .py
 `pip.conf` and `uv.toml` are available for read-only and writable indexes. `.pypirc` is available only when the route
 has a configured local upload target with an `upload_token`; the output uses `<upload-token>` instead of the configured
 secret.
+
+## `mirror`
+
+Mirror commands read the same config, `--data-dir`, and logging flags as `serve`. The repository argument is a
+configured index name or route. It may point at a mirror directly, or at an overlay with one mirror layer.
+
+```shell
+velodex mirror plan root/pypi --package "requests>=2,<3"
+velodex mirror sync root/pypi --requirements requirements.txt
+velodex mirror sync pypi --mode all --python-tag py3 --abi-tag none --platform-tag any
+velodex mirror verify pypi --mode all
+```
+
+`plan` prints the selected projects and files without writing cache records. `sync` stores selected Simple pages, PEP
+658 metadata siblings, and artifacts. `verify` checks cached pages and blob digests for the selected set. Output is
+tab-separated with one row per page, metadata sibling, file, or summary count.
+
+Selection starts from `[index.prefetch]` in the config and the CLI flags add or override it:
+
+| Flag                           | Meaning                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `--mode selected`              | Use configured and CLI package selectors                      |
+| `--mode all`                   | Read the upstream root Simple project list and visit projects |
+| `--mode metadata-only`         | Select packages and skip artifact downloads                   |
+| `--package <selector>` / `-p`  | Add a package selector such as `flask>=3,<4`                  |
+| `--requirements <path>` / `-r` | Read selectors from a requirements or constraints file        |
+| `--metadata-only`              | Fetch pages and metadata siblings, skip artifacts             |
+| `--no-wheels`                  | Skip wheel files                                              |
+| `--no-sdists`                  | Skip source distributions                                     |
+| `--python-tag <tag>`           | Keep wheels with this Python tag; repeat for more tags        |
+| `--abi-tag <tag>`              | Keep wheels with this ABI tag; repeat for more tags           |
+| `--platform-tag <tag>`         | Keep wheels with this platform tag; repeat for more tags      |
+| `--max-file-size-bytes <n>`    | Skip files larger than `n` when upstream reports a size       |
+
+`--mode all` can walk a large upstream. Pair it with artifact filters when you only need part of the wheel matrix.
 
 ## `cache`
 

@@ -52,7 +52,7 @@ pub fn init(config: &Config) -> anyhow::Result<()> {
 /// snippet needs uploads on a read-only index.
 pub fn config_snippet(config: &Config, route: &str, base_url: &str, kind: SnippetKind) -> anyhow::Result<String> {
     let base = BaseUrl::parse(base_url)?;
-    let index = velodex_http::describe_indexes(&server::build_indexes(&config.indexes)?)
+    let index = velodex_http::describe_indexes(&server::build_indexes(&config.indexes, config.offline)?)
         .into_iter()
         .find(|index| index.route == route)
         .with_context(|| format!("unknown index route {route:?}"))?;
@@ -77,7 +77,7 @@ pub fn cache(config: &Config, command: &CacheCommand, out: &mut dyn Write) -> an
 /// output fails.
 pub fn policy(config: &Config, command: &PolicyCommand, out: &mut dyn Write) -> anyhow::Result<()> {
     let stores = CacheStores::open(config)?;
-    let indexes = server::build_indexes(&config.indexes)?;
+    let indexes = server::build_indexes(&config.indexes, config.offline)?;
     match command {
         PolicyCommand::DryRun(args) => policy_dry_run(config, &stores, &indexes, args, out),
     }

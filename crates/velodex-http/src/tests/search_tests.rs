@@ -71,6 +71,50 @@ async fn test_search_filters_repository_policy_denials() {
 }
 
 #[tokio::test]
+async fn test_search_collects_direct_mirror_and_local_projects() {
+    let h = harness().await;
+    put_cached_package(
+        &h.state,
+        "pypi/direct-mirror",
+        "pypi",
+        "direct-mirror",
+        &ProjectDetail {
+            meta: Meta::default(),
+            name: "DirectMirror".to_owned(),
+            versions: vec!["1.0".to_owned()],
+            files: vec![file_with_hash(
+                "direct-mirror-1.0-py3-none-any.whl",
+                Digest::of(b"direct-mirror").as_str(),
+                None,
+            )],
+        },
+    );
+    put_uploaded_package(&h.state, "LocalOnly", "local-only", "Local search package");
+
+    let (status, _headers, body) = get(
+        &h.state,
+        "/pypi/+search?q=direct-mirror&type=upstream&page_size=25",
+        Some("application/json"),
+    )
+    .await;
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["results"][0]["display_name"], "DirectMirror");
+
+    let (status, _headers, body) = get(
+        &h.state,
+        "/local/+search?q=local-only&type=hosted&page_size=25",
+        Some("application/json"),
+    )
+    .await;
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["results"][0]["display_name"], "LocalOnly");
+}
+
+#[tokio::test]
 async fn test_search_handles_empty_queries_and_fallback_params() {
     let h = harness().await;
 
@@ -578,8 +622,11 @@ fn overlay_state_without_upload() -> (tempfile::TempDir, Arc<AppState>) {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: UpstreamClient::new("https://example.test/simple/").unwrap(),
+                offline: false,
+            },
             policy: Policy::default(),
-            kind: IndexKind::Mirror(UpstreamClient::new("https://example.test/simple/").unwrap()),
         },
         Index {
             name: "root/pypi".to_owned(),

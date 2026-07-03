@@ -14,6 +14,7 @@ the file. Precedence is `defaults < TOML file < flags`.
 | Bind host                 | `--host`          | `host`           | `127.0.0.1`    |
 | Bind port                 | `--port`          | `port`           | `4433`         |
 | Data directory            | `--data-dir`      | `data_dir`       | `velodex-data` |
+| Offline mode              | `--offline`       | `offline`        | `false`        |
 | Config file               | `--config` / `-c` | (n/a)            | (none)         |
 | Cache freshness (seconds) | (file only)       | `cache_ttl_secs` | `300`          |
 | Indexes                   | (file only)       | `[[index]]`      | (see below)    |
@@ -23,6 +24,11 @@ the file. Precedence is `defaults < TOML file < flags`.
 `max-age`), that lifetime governs the page instead. The fallback applies when the header is absent,
 `no-cache`/`no-store`, or zero. Artifacts never expire; they are content-addressed by sha256, so a changed upstream file
 is a new entry on the page rather than a mutation.
+
+`offline = true` disables upstream network access for configured mirrors. Cached project pages, PEP 658 metadata
+siblings, and artifacts serve from disk. A cold mirror miss returns `503`; overlay routes still serve any local layer
+that can answer. Use `velodex mirror sync` before enabling offline mode on a machine that must run without network
+access.
 
 ## `[[index]]`
 
@@ -38,6 +44,8 @@ kind. velodex rejects unknown keys.
 | `password`             | mirror     | Basic-auth password for the upstream                              | (none)            |
 | `token`                | mirror     | Bearer token; takes precedence over username/password             | (none)            |
 | `upstream_concurrency` | mirror     | Concurrent upstream fetches for this mirror; `0` disables the cap | `8`               |
+| `offline`              | mirror     | Serve this mirror from cache only                                 | `false`           |
+| `prefetch`             | mirror     | Package and artifact selection for `velodex mirror`               | (see below)       |
 | `local`                | local      | `true` marks a hosted store (implied by `upload_token`)           | `false`           |
 | `upload_token`         | local      | Basic-auth password uploads must present; unset disables uploads  | (none)            |
 | `volatile`             | local      | Allow delete and overwrite                                        | `true`            |
@@ -112,6 +120,45 @@ max_project_size_bytes = 1073741824
 File and project size rules require declared sizes. A file without `size` is denied by `max_file_size_bytes`; a project
 page with any retained file lacking `size` is denied by `max_project_size_bytes`. Active policies use the buffered
 Simple-page path so file lists and PEP 691 `versions` are filtered together before velodex serves bytes.
+
+### `[index.prefetch]`
+
+Mirror indexes can declare the default selection for `velodex mirror plan`, `velodex mirror sync`, and
+`velodex mirror verify`. CLI flags add package selectors and override booleans or `mode` for one run.
+
+```toml
+[[index]]
+name = "pypi"
+mirror = "https://pypi.org/simple/"
+
+[index.prefetch]
+mode = "selected"
+packages = ["requests>=2,<3"]
+requirements = ["requirements.txt"]
+include_wheels = true
+include_sdists = true
+python_tags = ["py3", "cp312"]
+abi_tags = ["none", "abi3"]
+platform_tags = ["any", "manylinux_2_28_x86_64"]
+max_file_size_bytes = 524288000
+metadata_only = false
+```
+
+| Key                   | Values                               | Default    |
+| --------------------- | ------------------------------------ | ---------- |
+| `mode`                | `selected`, `all`, `metadata-only`   | `selected` |
+| `packages`            | package selectors such as `flask>=3` | `[]`       |
+| `requirements`        | requirements or constraints files    | `[]`       |
+| `include_wheels`      | boolean                              | `true`     |
+| `include_sdists`      | boolean                              | `true`     |
+| `python_tags`         | wheel Python tags                    | `[]`       |
+| `abi_tags`            | wheel ABI tags                       | `[]`       |
+| `platform_tags`       | wheel platform tags                  | `[]`       |
+| `max_file_size_bytes` | positive integer                     | (none)     |
+| `metadata_only`       | boolean                              | `false`    |
+
+`mode = "all"` reads the upstream root Simple project list and then visits matching projects. Artifact filters apply
+after a project page is fetched. `mode = "metadata-only"` implies `metadata_only = true`.
 
 ## `[rate_limit]`
 

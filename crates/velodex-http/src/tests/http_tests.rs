@@ -58,8 +58,11 @@ pub(super) async fn harness_with_policies(
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: mirror_policy,
-            kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "local".to_owned(),
@@ -111,7 +114,10 @@ async fn promotion_harness() -> Harness {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
-            kind: IndexKind::Mirror(upstream),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
         },
         Index {
@@ -604,8 +610,11 @@ async fn test_legacy_json_unavailable_upstream_is_bad_gateway() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
-            kind: IndexKind::Mirror(upstream),
         }],
     ));
 
@@ -1075,8 +1084,11 @@ async fn test_mirror_detail_upstream_unreachable_is_bad_gateway() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        kind: IndexKind::Mirror {
+            client: upstream,
+            offline: false,
+        },
         policy: Policy::default(),
-        kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
     let (status, ..) = get(&state, "/pypi/simple/flask/", None).await;
@@ -1111,13 +1123,88 @@ async fn test_mirror_detail_stale_on_upstream_error() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        kind: IndexKind::Mirror {
+            client: upstream,
+            offline: false,
+        },
         policy: Policy::default(),
-        kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 100_000)));
     let (status, _, served) = get(&state, "/pypi/simple/flask/", Some("application/json")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(served.contains("flask"));
+}
+
+#[tokio::test]
+async fn test_offline_mirror_cold_project_miss_is_unavailable() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    let upstream = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+    let indexes = vec![Index {
+        name: "pypi".to_owned(),
+        route: "pypi".to_owned(),
+        kind: IndexKind::Mirror {
+            client: upstream,
+            offline: true,
+        },
+        policy: Policy::default(),
+    }];
+    let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
+    let (status, _, body) = get(&state, "/pypi/simple/flask/", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body.contains("offline mode has no cached project page"));
+}
+
+#[tokio::test]
+async fn test_offline_mirror_serves_stale_cached_page() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    let body = velodex_core::pypi::to_json(&velodex_core::pypi::ProjectDetail {
+        meta: velodex_core::pypi::Meta::default(),
+        name: "flask".to_owned(),
+        versions: vec!["1.0".to_owned()],
+        files: vec![],
+    });
+    meta.put_index(
+        "pypi/flask",
+        &CachedIndex {
+            etag: None,
+            last_serial: None,
+            fetched_at_unix: 0,
+            content_type: None,
+            fresh_secs: Some(1),
+            body: body.into_bytes(),
+        },
+    )
+    .unwrap();
+    let upstream = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+    let indexes = vec![Index {
+        name: "pypi".to_owned(),
+        route: "pypi".to_owned(),
+        kind: IndexKind::Mirror {
+            client: upstream,
+            offline: true,
+        },
+        policy: Policy::default(),
+    }];
+    let state = Arc::new(AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 100_000)));
+    let (status, _, body) = get(&state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"name\":\"flask\""));
 }
 
 #[tokio::test]
@@ -1192,8 +1279,11 @@ async fn test_file_download_status_store_error_is_server_error() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        kind: IndexKind::Mirror {
+            client: upstream,
+            offline: false,
+        },
         policy: Policy::default(),
-        kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
 
@@ -2061,8 +2151,11 @@ async fn test_overlay_tolerates_unavailable_layer() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
-            kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "local".to_owned(),
@@ -2995,14 +3088,15 @@ async fn test_status_redacts_upstream_and_upload_secrets() {
         Index {
             name: "private".to_owned(),
             route: "private".to_owned(),
-            policy: Policy::default(),
-            kind: IndexKind::Mirror(
-                UpstreamClient::with_auth(
+            kind: IndexKind::Mirror {
+                client: UpstreamClient::with_auth(
                     "https://user:pass@example.invalid/simple/?token=url-secret#frag",
                     Auth::Bearer("bearer-secret".to_owned()),
                 )
                 .unwrap(),
-            ),
+                offline: false,
+            },
+            policy: Policy::default(),
         },
         Index {
             name: "local".to_owned(),
@@ -3251,8 +3345,11 @@ async fn test_upload_target_resolving_to_non_local_is_not_found() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
-            kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "ov".to_owned(),
@@ -4506,8 +4603,11 @@ async fn test_overlay_without_upload_layer_serves_merged_page() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
-            kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "ov".to_owned(),

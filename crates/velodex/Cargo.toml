@@ -69,6 +69,7 @@ sha2.workspace = true
 tar.workspace = true
 flate2.workspace = true
 redb.workspace = true
+wiremock.workspace = true
 
 [lints]
 workspace = true

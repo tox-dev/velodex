@@ -484,6 +484,36 @@ pub fn parse_meta(bytes: &[u8]) -> Result<Meta, SimpleError> {
     meta.into_meta()
 }
 
+#[derive(Deserialize)]
+struct IncomingProjectListEntry {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct IncomingProjectList {
+    #[serde(default)]
+    meta: IncomingMeta,
+    #[serde(default)]
+    projects: Vec<IncomingProjectListEntry>,
+}
+
+/// Parse an upstream PEP 691 JSON root project list.
+///
+/// # Errors
+/// Returns an error when `bytes` is not a valid PEP 691 project list document, or when the
+/// upstream advertises a Simple API major version velodex does not support.
+pub fn parse_index(bytes: &[u8]) -> Result<ProjectList, SimpleError> {
+    let list: IncomingProjectList = serde_json::from_slice(bytes)?;
+    Ok(ProjectList {
+        meta: list.meta.into_meta()?,
+        projects: list
+            .projects
+            .into_iter()
+            .map(|entry| ProjectListEntry { name: entry.name })
+            .collect(),
+    })
+}
+
 /// A project's detail response (`/simple/<project>/`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProjectDetail {

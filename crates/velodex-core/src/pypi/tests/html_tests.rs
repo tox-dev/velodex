@@ -2,10 +2,31 @@ use std::collections::BTreeMap;
 
 use url::Url;
 
-use crate::pypi::{CoreMetadata, Meta, Provenance, SimpleError, Yanked, parse_detail_html};
+use crate::pypi::{CoreMetadata, Meta, Provenance, SimpleError, Yanked, parse_detail_html, parse_index_html};
 
 fn base() -> Url {
     Url::parse("https://pypi.org/simple/flask/").unwrap()
+}
+
+#[test]
+fn test_parse_index_html_uses_anchor_text_and_href_fallback() {
+    let html = r#"<!DOCTYPE html><html><head>
+        <base href="https://files.example/simple/">
+        <meta name="pypi:repository-version" content="1.4">
+        </head><body>
+        <a href="Flask/"> Flask </a>
+        <a href="zope.interface/"></a>
+        <a>skip</a>
+        </body></html>"#;
+    let parsed = parse_index_html(html, &Url::parse("https://pypi.org/simple/").unwrap()).unwrap();
+    assert_eq!(
+        parsed
+            .projects
+            .iter()
+            .map(|project| project.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Flask", "zope.interface"]
+    );
 }
 
 #[test]

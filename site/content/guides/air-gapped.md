@@ -29,18 +29,18 @@ velodex's upstream client.
 
 ## True air gap: warm, carry, serve
 
-With no route at all, populate the cache on a connected network and move the data directory across the gap:
+With no route at all, populate the cache on a connected network and move the data directory across the gap. For a
+requirements-bounded mirror:
 
 ```shell
-# connected side: install the working set through a scratch velodex
-velodex serve --data-dir ./velodex-data &
-export UV_INDEX_URL=http://127.0.0.1:4433/root/pypi/simple/
-uv pip install --dry-run -r requirements.txt   # resolve pulls pages and metadata
-uv pip install -r requirements.txt             # download pulls the wheels
+# connected side
+velodex mirror plan root/pypi --data-dir ./velodex-data --requirements requirements.txt
+velodex mirror sync root/pypi --data-dir ./velodex-data --requirements requirements.txt
+velodex mirror verify root/pypi --data-dir ./velodex-data --requirements requirements.txt
 ```
 
-The installs leave pages, PEP 658 metadata, and wheels under `./velodex-data`. Create a backup, verify it, carry the
-backup directory across the gap, and restore it on the isolated side:
+Everything selected (pages, PEP 658 metadata, wheels, and sdists) now sits under `./velodex-data`. Create a backup,
+verify it, carry the backup directory across the gap, restore it, and serve it in offline mode:
 
 ```shell
 # connected side
@@ -49,20 +49,30 @@ velodex backup verify ./velodex-backup
 
 # isolated side
 velodex restore ./velodex-backup --data-dir ./velodex-data
-velodex serve --data-dir ./velodex-data
+velodex serve --data-dir ./velodex-data --offline
 ```
 
 The backup includes the metadata store, a config snapshot, and only the blob files referenced by metadata records.
-Artifacts serve straight from the restored store. Cached pages past their freshness window serve stale when the upstream
-is unreachable, which on an air-gapped network is the permanent state, so the index keeps answering with what was
-carried over. Repeat the warm-and-carry cycle whenever the requirement set changes.
+Offline mode never tries the upstream. Artifacts and cached project pages serve straight from the store; a project or
+file that was not carried over returns a resolver-visible miss. Repeat the warm-and-carry cycle whenever the requirement
+set changes.
 
 Resolve against a lock file (`uv.lock`, `requirements.txt` with hashes) on the connected side, so the isolated side asks
 only for things the carry-over contains.
 
+For a full upstream walk, use `--mode all` instead of a requirements file:
+
+```shell
+velodex mirror sync pypi --data-dir ./velodex-data --mode all
+velodex mirror verify pypi --data-dir ./velodex-data --mode all
+```
+
+Full PyPI consumes many terabytes. Use `--python-tag`, `--abi-tag`, `--platform-tag`, and `--max-file-size-bytes` when
+your clients need a bounded wheel set.
+
 ## What to check
 
 - `curl http://<host>:4433/+status` shows the index list and counters.
+- `curl http://<host>:4433/+status | jq '.indexes[].upstream?.offline'` shows which mirrors run offline.
 - `curl 'http://<host>:4433/+stats?index=root/pypi'` shows what the cache is serving.
-- The `stale_served` counter climbing on the gapped side is normal; `upstream_errors` above zero means a client asked
-  for something the cache has never seen.
+- A `503` from a mirror route means a client asked for something the offline cache does not contain.

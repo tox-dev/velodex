@@ -39,7 +39,7 @@ pub fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
     let meta_path = config.data_dir.join("velodex.redb");
     let meta = MetaStore::open(&meta_path).with_context(|| format!("open metadata store {}", meta_path.display()))?;
     let blobs = BlobStore::new(config.data_dir.join("blobs"));
-    let indexes = build_indexes(&config.indexes)?;
+    let indexes = build_indexes(&config.indexes, config.offline)?;
     let webhooks = build_webhooks(&config.indexes)?;
     let search_path = config.data_dir.join("search-v1");
     let state = Arc::new(
@@ -72,7 +72,7 @@ pub fn router_for(state: Arc<AppState>) -> Router {
 
 /// Resolve configured indexes into their runtime form, mapping overlay layer names to positions and
 /// building each mirror's authenticated upstream client.
-pub(crate) fn build_indexes(configs: &[IndexConfig]) -> anyhow::Result<Vec<Index>> {
+pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::Result<Vec<Index>> {
     let mut positions = HashMap::with_capacity(configs.len());
     let mut routes = HashMap::with_capacity(configs.len());
     for (pos, index) in configs.iter().enumerate() {
@@ -90,7 +90,7 @@ pub(crate) fn build_indexes(configs: &[IndexConfig]) -> anyhow::Result<Vec<Index
             Ok(Index {
                 name: index.name.clone(),
                 route: index.route.clone(),
-                kind: build_kind(index, configs, &positions)?,
+                kind: build_kind(index, configs, &positions, offline)?,
                 policy: Policy::compile(&index.policy).with_context(|| format!("compile policy for {}", index.name))?,
             })
         })
@@ -126,6 +126,7 @@ fn build_kind(
     index: &IndexConfig,
     configs: &[IndexConfig],
     positions: &HashMap<&str, usize>,
+    global_offline: bool,
 ) -> anyhow::Result<IndexKind> {
     match &index.kind {
         ConfigKind::Mirror {
@@ -133,18 +134,20 @@ fn build_kind(
             username,
             password,
             token,
+            offline,
             ..
         } => {
             let auth = mirror_auth(token.as_deref(), username.as_deref(), password.as_deref());
-            Ok(IndexKind::Mirror(
-                UpstreamClient::with_auth(upstream, auth).with_context(|| {
+            Ok(IndexKind::Mirror {
+                client: UpstreamClient::with_auth(upstream, auth).with_context(|| {
                     format!(
                         "build mirror index {} with upstream {}",
                         index.name,
                         redact_url(upstream)
                     )
                 })?,
-            ))
+                offline: global_offline || *offline,
+            })
         }
         ConfigKind::Local { upload_token, volatile } => Ok(IndexKind::Local {
             upload_token: upload_token.clone(),

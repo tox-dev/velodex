@@ -517,7 +517,7 @@ fn tokenizers() -> TokenizerManager {
 
 fn collect_projects(state: &AppState, index: &Index, projects: &mut BTreeSet<String>) -> Result<(), SearchError> {
     match &index.kind {
-        IndexKind::Mirror(_) => {
+        IndexKind::Mirror { .. } => {
             state.meta.scan_index_records(|key, _value| {
                 if let Some(project) = project_key(key, &index.name) {
                     projects.insert(project.to_owned());
@@ -578,7 +578,7 @@ fn cached_detail(
     serve_route: &str,
 ) -> Result<ProjectDetail, SearchError> {
     let detail = match &index.kind {
-        IndexKind::Mirror(_) => mirror_detail(state, index, normalized, serve_route),
+        IndexKind::Mirror { .. } => mirror_detail(state, index, normalized, serve_route),
         IndexKind::Local { .. } => local_detail(state, &index.name, normalized, serve_route),
         IndexKind::Overlay { layers, upload } => overlay_detail(state, layers, *upload, normalized, serve_route),
     }?;
@@ -737,7 +737,7 @@ fn apply_project_status(detail: &mut ProjectDetail) {
 fn package_source(state: &AppState, index: &Index, normalized: &str) -> Result<PackageSource, SearchError> {
     Ok(match &index.kind {
         IndexKind::Local { .. } => PackageSource::Hosted,
-        IndexKind::Mirror(_) => PackageSource::Upstream,
+        IndexKind::Mirror { .. } => PackageSource::Upstream,
         IndexKind::Overlay { upload, .. } => {
             let Some(upload) = upload else {
                 return Ok(PackageSource::Upstream);

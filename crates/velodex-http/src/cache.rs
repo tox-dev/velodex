@@ -43,6 +43,8 @@ pub enum CacheError {
     Archive(#[from] crate::archive::ArchiveError),
     #[error("upstream unreachable and nothing cached")]
     Unavailable,
+    #[error("offline mode has no cached {0}")]
+    OfflineMissing(&'static str),
     #[error("index is not volatile; delete is disabled")]
     NotVolatile,
     #[error("no known source for this file")]
@@ -100,6 +102,7 @@ impl CacheError {
             Self::Simple(err) => format!("unsupported simple API response: {err}"),
             Self::Archive(err) => err.to_string(),
             Self::Unavailable => "upstream is unavailable and no cached page exists".to_owned(),
+            Self::OfflineMissing(target) => format!("offline mode has no cached {target}"),
             Self::NotVolatile => "index is not volatile; delete is disabled".to_owned(),
             Self::FileNotFound => "no matching cached file or upstream source was found".to_owned(),
             Self::FileExists(filename) => format!("file {filename:?} already exists with different content"),
@@ -133,8 +136,9 @@ pub async fn resolve_detail(
 ) -> Result<Option<ProjectDetail>, CacheError> {
     index.policy.check_project(PolicyAction::Serve, project)?;
     let detail = match &index.kind {
-        IndexKind::Mirror(client) => {
-            let Some(mut detail) = mirror_detail(state, &index.name, &index.route, client, project).await? else {
+        IndexKind::Mirror { client, offline } => {
+            let Some(mut detail) = mirror_detail(state, &index.name, &index.route, client, *offline, project).await?
+            else {
                 return Ok(None);
             };
             rewrite_urls(&mut detail, serve_route);
@@ -181,10 +185,15 @@ async fn overlay_detail(
     let mut versions = BTreeSet::new();
     let mut meta = Meta::default();
     let mut found = false;
+    let mut offline_missing = None;
     for (&pos, outcome) in layers.iter().zip(resolved) {
         // A layer being unavailable (a down mirror with a cold cache) must not break the others.
         let detail = match outcome {
             Ok(detail) => detail,
+            Err(err @ CacheError::OfflineMissing(_)) => {
+                offline_missing = Some(err);
+                continue;
+            }
             Err(err) => {
                 let layer = state.index_at(pos);
                 tracing::warn!(layer = %layer.name, error = ?err, "overlay layer unavailable, skipping");
@@ -206,6 +215,9 @@ async fn overlay_detail(
         }
     }
     if !found {
+        if let Some(err) = offline_missing {
+            return Err(err);
+        }
         return Ok(None);
     }
     if let Some(pos) = upload {
@@ -255,9 +267,16 @@ async fn mirror_detail(
     name: &str,
     route: &str,
     client: &UpstreamClient,
+    offline: bool,
     project: &str,
 ) -> Result<Option<ProjectDetail>, CacheError> {
     let key = format!("{name}/{project}");
+    if offline {
+        return match state.meta.get_index(&key)? {
+            Some(record) => Ok(Some(raw_to_detail(state, route, &record)?)),
+            None => Err(CacheError::OfflineMissing("project page")),
+        };
+    }
     if let Some(record) = fresh_cached(state, &key)? {
         return Ok(Some(raw_to_detail(state, route, &record)?));
     }
@@ -466,9 +485,12 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
         if now - fetched_at < fresh_secs.unwrap_or(state.ttl_secs) {
             continue;
         }
-        let Some((index, client, project)) = mirror_for_key(state, &key) else {
+        let Some((index, client, offline, project)) = mirror_for_key(state, &key) else {
             continue;
         };
+        if offline {
+            continue;
+        }
         if let Err(denial) = index.policy.check_project(PolicyAction::Mirror, &project) {
             log_mirror_sync(&index.route, &project, "denied", false, Some(&denial.reason));
             continue;
@@ -513,18 +535,18 @@ fn log_mirror_sync(repository: &str, project: &str, result: &'static str, change
 
 /// Map a cache key (`{mirror name}/{project}`) back to its mirror and client; the longest matching
 /// name wins when one mirror's name prefixes another's.
-fn mirror_for_key<'a>(state: &'a AppState, key: &str) -> Option<(&'a Index, &'a UpstreamClient, String)> {
+fn mirror_for_key<'a>(state: &'a AppState, key: &str) -> Option<(&'a Index, &'a UpstreamClient, bool, String)> {
     state
         .indexes
         .iter()
         .filter_map(|index| match &index.kind {
-            IndexKind::Mirror(client) => {
+            IndexKind::Mirror { client, offline } => {
                 let project = key.strip_prefix(&index.name)?.strip_prefix('/')?;
-                Some((index, client, project.to_owned()))
+                Some((index, client, *offline, project.to_owned()))
             }
             IndexKind::Local { .. } | IndexKind::Overlay { .. } => None,
         })
-        .max_by_key(|(index, _, _)| index.name.len())
+        .max_by_key(|(index, _, _, _)| index.name.len())
 }
 
 /// The canonical raw body to persist: JSON pages verbatim, HTML pages converted once to PEP 691
@@ -757,7 +779,7 @@ pub fn resolve_list(state: &AppState, index: &Index) -> Result<ProjectList, Cach
 
 fn collect_projects(state: &AppState, index: &Index, names: &mut BTreeSet<String>) -> Result<(), CacheError> {
     match &index.kind {
-        IndexKind::Mirror(_) | IndexKind::Local { .. } => {
+        IndexKind::Mirror { .. } | IndexKind::Local { .. } => {
             names.extend(state.meta.list_projects(&index.name)?);
         }
         IndexKind::Overlay { layers, .. } => {
@@ -771,8 +793,12 @@ fn collect_projects(state: &AppState, index: &Index, names: &mut BTreeSet<String
 
 /// Fetch a URL through the named mirror's client (reusing its authentication).
 async fn fetch_from_source(state: &AppState, source: &str, url: &str) -> Result<Bytes, CacheError> {
+    let (client, offline) = source_mirror(state, source)?;
+    if offline {
+        return Err(CacheError::OfflineMissing("metadata"));
+    }
     let _permit = upstream_permit(state, source)?;
-    Ok(source_client(state, source)?.fetch_bytes(url).await?)
+    Ok(client.fetch_bytes(url).await?)
 }
 
 /// Resolve a file to a local blob path. A cache miss is fetched through the same streaming path as
@@ -927,10 +953,14 @@ async fn generated_wheel_metadata_by_range(
     if !is_wheel(filename) {
         return Ok(None);
     }
-    let client = source_client(state, source_name)?;
+    let (client, offline) = source_mirror(state, source_name)?;
+    if offline {
+        return Err(CacheError::OfflineMissing("metadata"));
+    }
     if !client.may_support_ranges() {
         return Ok(None);
     }
+    let _permit = upstream_permit(state, source_name)?;
     match wheel_metadata_by_range(&client, url, filename).await {
         Ok(RemoteMetadata::Found(metadata)) => Ok(Some(metadata)),
         Ok(RemoteMetadata::Missing) => Err(CacheError::FileNotFound),
@@ -1417,7 +1447,7 @@ pub fn download_status(state: &AppState, index: &Index, filename: &str) -> Resul
 
 fn stored_project_status(state: &AppState, index: &Index, normalized: &str) -> Result<ProjectStatus, CacheError> {
     match &index.kind {
-        IndexKind::Mirror(_) => status_for_index(state, &index.name, normalized),
+        IndexKind::Mirror { .. } => status_for_index(state, &index.name, normalized),
         IndexKind::Local { .. } => Ok(ProjectStatus::Active),
         IndexKind::Overlay { layers, .. } => {
             for &pos in layers {
@@ -1546,7 +1576,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
         return Ok(PageOutcome::Fallback);
     }
     let route = index.route.clone();
-    let Some((mirror_name, client, context)) = streaming_parts(&state, index, &project)? else {
+    let Some((mirror_name, client, offline, context)) = streaming_parts(&state, index, &project)? else {
         return Ok(PageOutcome::Fallback);
     };
 
@@ -1556,6 +1586,12 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
     }
 
     let key = format!("{mirror_name}/{project}");
+    if offline {
+        return match state.meta.get_index(&key)? {
+            Some(record) => Ok(PageOutcome::Ready(transform_whole(&state, &hot_key, &record, context)?)),
+            None => Ok(PageOutcome::Fallback),
+        };
+    }
     if let Some(record) = fresh_cached(&state, &key)? {
         return Ok(PageOutcome::Ready(transform_whole(&state, &hot_key, &record, context)?));
     }
@@ -1631,6 +1667,32 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
             Ok(PageOutcome::Fallback)
         }
     }
+}
+
+/// Fetch and persist the project page for `position`, then return the served detail model.
+///
+/// `velodex mirror sync` uses this instead of a separate downloader so CLI prefetching and HTTP
+/// requests share cache registration, single-flight, and streaming behavior.
+///
+/// # Errors
+/// Returns [`CacheError`] on store, parse, upstream, or stream failures.
+pub async fn materialize_detail(
+    state: Arc<AppState>,
+    position: usize,
+    project: String,
+) -> Result<Option<ProjectDetail>, CacheError> {
+    match stream_detail(state.clone(), position, project.clone()).await? {
+        PageOutcome::Ready(_) | PageOutcome::Fallback => {}
+        PageOutcome::NotFound => return Ok(None),
+        PageOutcome::Streaming(mut stream) => {
+            use futures_util::StreamExt as _;
+            while let Some(chunk) = stream.next().await {
+                chunk.map_err(|err| CacheError::Stream(err.to_string()))?;
+            }
+        }
+    }
+    let index = state.index_at(position);
+    resolve_detail(&state, index, &project, &index.route).await
 }
 
 const fn missing_upstream_outcome(context: &crate::stream::PageContext) -> PageOutcome {
@@ -1776,12 +1838,13 @@ fn streaming_parts(
     state: &AppState,
     index: &Index,
     project: &str,
-) -> Result<Option<(String, UpstreamClient, crate::stream::PageContext)>, CacheError> {
+) -> Result<Option<(String, UpstreamClient, bool, crate::stream::PageContext)>, CacheError> {
     match &index.kind {
         _ if index.policy.has_project_size_limit() => Ok(None),
-        IndexKind::Mirror(client) => Ok(Some((
+        IndexKind::Mirror { client, offline } => Ok(Some((
             index.name.clone(),
             client.clone(),
+            *offline,
             crate::stream::page_context(
                 &index.route,
                 project,
@@ -1799,11 +1862,11 @@ fn streaming_parts(
             for &pos in layers {
                 let layer = state.index_at(pos);
                 match &layer.kind {
-                    IndexKind::Mirror(client) => {
+                    IndexKind::Mirror { client, offline } => {
                         if layer.policy.active() {
                             return Ok(None);
                         }
-                        if mirror.replace((layer.name.clone(), client.clone())).is_some() {
+                        if mirror.replace((layer.name.clone(), client.clone(), *offline)).is_some() {
                             return Ok(None);
                         }
                     }
@@ -1820,7 +1883,7 @@ fn streaming_parts(
                     IndexKind::Overlay { .. } => return Ok(None),
                 }
             }
-            let Some((mirror, client)) = mirror else {
+            let Some((mirror, client, offline)) = mirror else {
                 return Ok(None);
             };
             let overrides: std::collections::HashMap<String, String> = match upload {
@@ -1834,6 +1897,7 @@ fn streaming_parts(
             Ok(Some((
                 mirror,
                 client,
+                offline,
                 crate::stream::page_context(
                     &index.route,
                     project,
@@ -2139,7 +2203,10 @@ async fn start_download(
         .meta
         .get_file_url(digest.as_str())?
         .ok_or(CacheError::FileNotFound)?;
-    let client = source_client(state, &source.source)?;
+    let (client, offline) = source_mirror(state, &source.source)?;
+    if offline {
+        return Err(CacheError::OfflineMissing("file"));
+    }
     let permit = upstream_permit(state, &source.source)?;
     let body = client.stream_bytes(&source.url).await?;
     let pending = state.blobs.begin()?;
@@ -2190,13 +2257,13 @@ async fn wait_for_download(handle: &mut DownloadHandle) -> Result<(), CacheError
     }
 }
 
-fn source_client(state: &AppState, source: &str) -> Result<UpstreamClient, CacheError> {
+fn source_mirror(state: &AppState, source: &str) -> Result<(UpstreamClient, bool), CacheError> {
     state
         .indexes
         .iter()
         .find(|index| index.name == source)
         .and_then(|index| match &index.kind {
-            IndexKind::Mirror(client) => Some(client.clone()),
+            IndexKind::Mirror { client, offline } => Some((client.clone(), *offline)),
             IndexKind::Local { .. } | IndexKind::Overlay { .. } => None,
         })
         .ok_or(CacheError::FileNotFound)

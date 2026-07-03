@@ -1009,7 +1009,7 @@ fn upload_target<'a>(state: &'a AppState, index: &'a Index) -> Option<&'a Index>
     match &index.kind {
         IndexKind::Local { .. } => Some(index),
         IndexKind::Overlay { upload: Some(pos), .. } => Some(state.index_at(*pos)),
-        IndexKind::Mirror(_) | IndexKind::Overlay { upload: None, .. } => None,
+        IndexKind::Mirror { .. } | IndexKind::Overlay { upload: None, .. } => None,
     }
 }
 
@@ -1440,6 +1440,7 @@ fn cache_error_status(err: &CacheError, context: &CacheContext<'_>) -> StatusCod
     match err {
         CacheError::Meta(_) | CacheError::Blob(_) | CacheError::MissingSha256(_) => StatusCode::INTERNAL_SERVER_ERROR,
         CacheError::FileNotFound | CacheError::NoPromotableFiles { .. } => StatusCode::NOT_FOUND,
+        CacheError::OfflineMissing(_) => StatusCode::SERVICE_UNAVAILABLE,
         CacheError::FileExists(_) => StatusCode::CONFLICT,
         CacheError::NotVolatile | CacheError::Policy(_) => StatusCode::FORBIDDEN,
         CacheError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
@@ -1828,6 +1829,7 @@ pub async fn status(State(state): State<Arc<AppState>>, Query(query): Query<Stat
                             "kind": upstream.auth,
                             "redacted": (upstream.auth != "none").then_some("<redacted>"),
                         },
+                        "offline": upstream.offline,
                         "status": "configured",
                     }))),
                 ),

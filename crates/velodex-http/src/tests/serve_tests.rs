@@ -395,6 +395,209 @@ async fn test_file_path_abandoned_download_errors() {
     ));
 }
 
+#[tokio::test]
+async fn test_file_path_offline_mirror_miss_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+    let digest = Digest::of(b"wheel");
+    state
+        .meta
+        .put_file_url(digest.as_str(), "https://example.invalid/files/flask.whl", "pypi")
+        .unwrap();
+
+    let err = cache::file_path(
+        state,
+        digest,
+        "pypi".to_owned(),
+        "flask-1.0-py3-none-any.whl".to_owned(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, cache::CacheError::OfflineMissing("file")));
+}
+
+#[test]
+fn test_offline_missing_user_message_names_target() {
+    assert_eq!(
+        cache::CacheError::OfflineMissing("metadata").user_message(),
+        "offline mode has no cached metadata"
+    );
+}
+
+#[tokio::test]
+async fn test_refresh_stale_pages_skips_offline_mirrors() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+    state
+        .meta
+        .put_index(
+            "pypi/flask",
+            &CachedIndex {
+                etag: None,
+                last_serial: None,
+                fetched_at_unix: 0,
+                content_type: Some("application/vnd.pypi.simple.v1+json".to_owned()),
+                fresh_secs: Some(1),
+                body: detail_json(Digest::of(b"wheel").as_str(), "https://example.invalid/files/flask.whl")
+                    .into_bytes(),
+            },
+        )
+        .unwrap();
+
+    let summary = cache::refresh_stale_pages(&state).await.unwrap();
+
+    assert_eq!(summary.checked, 0);
+    assert_eq!(summary.changed, 0);
+}
+
+#[tokio::test]
+async fn test_offline_metadata_fetches_are_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+    let artifact = Digest::of(b"wheel");
+    let metadata = Digest::of(b"metadata");
+    state
+        .meta
+        .put_metadata(
+            artifact.as_str(),
+            "https://example.invalid/files/flask.whl.metadata",
+            metadata.as_str(),
+            "pypi",
+        )
+        .unwrap();
+
+    let err = cache::metadata_bytes(&state, &artifact, "pypi", "flask-1.0-py3-none-any.whl.metadata")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, cache::CacheError::OfflineMissing("metadata")));
+}
+
+#[tokio::test]
+async fn test_offline_generated_wheel_metadata_range_fetch_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+    let artifact = Digest::of(b"wheel");
+    state
+        .meta
+        .put_file_url(
+            artifact.as_str(),
+            "https://example.invalid/files/flask-1.0-py3-none-any.whl",
+            "pypi",
+        )
+        .unwrap();
+
+    let err = cache::metadata_bytes(&state, &artifact, "pypi", "flask-1.0-py3-none-any.whl.metadata")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, cache::CacheError::OfflineMissing("metadata")));
+}
+
+#[tokio::test]
+async fn test_stream_detail_offline_cold_miss_falls_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+
+    let outcome = cache::stream_detail(state, 0, "flask".to_owned()).await.unwrap();
+
+    assert!(matches!(outcome, PageOutcome::Fallback));
+}
+
+#[tokio::test]
+async fn test_overlay_offline_cold_mirror_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![
+            Index {
+                name: "pypi".to_owned(),
+                route: "pypi".to_owned(),
+                kind: IndexKind::Mirror { client, offline: true },
+                policy: crate::policy::Policy::default(),
+            },
+            Index {
+                name: "root/pypi".to_owned(),
+                route: "root/pypi".to_owned(),
+                kind: IndexKind::Overlay {
+                    layers: vec![0],
+                    upload: None,
+                },
+                policy: crate::policy::Policy::default(),
+            },
+        ]
+    });
+
+    let (status, _, body) = get(&state, "/root/pypi/simple/flask/", None).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body.contains("offline mode has no cached project page"));
+}
+
+#[tokio::test]
+async fn test_offline_mirror_resolves_cached_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "https://example.invalid/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: true },
+            policy: crate::policy::Policy::default(),
+        }]
+    });
+    state
+        .meta
+        .put_index(
+            "pypi/flask",
+            &fresh_record(
+                &detail_json(Digest::of(b"wheel").as_str(), "https://example.invalid/files/flask.whl").into_bytes(),
+            ),
+        )
+        .unwrap();
+
+    let detail = cache::resolve_detail(&state, state.index_at(0), "flask", "pypi")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(detail.name, "flask");
+}
+
 /// A state with the given indexes over a fresh store, for topologies the shared harness lacks.
 fn custom_state(dir: &tempfile::TempDir, upstream: &str, indexes: fn(UpstreamClient) -> Vec<Index>) -> Arc<AppState> {
     let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
@@ -428,14 +631,17 @@ async fn test_overlay_with_two_mirrors_serves_buffered() {
             Index {
                 name: "a".to_owned(),
                 route: "a".to_owned(),
+                kind: IndexKind::Mirror {
+                    client: client.clone(),
+                    offline: false,
+                },
                 policy: crate::policy::Policy::default(),
-                kind: IndexKind::Mirror(client.clone()),
             },
             Index {
                 name: "b".to_owned(),
                 route: "b".to_owned(),
+                kind: IndexKind::Mirror { client, offline: false },
                 policy: crate::policy::Policy::default(),
-                kind: IndexKind::Mirror(client),
             },
             Index {
                 name: "both".to_owned(),
@@ -467,8 +673,8 @@ async fn test_overlay_nesting_an_overlay_serves_buffered() {
             Index {
                 name: "a".to_owned(),
                 route: "a".to_owned(),
+                kind: IndexKind::Mirror { client, offline: false },
                 policy: crate::policy::Policy::default(),
-                kind: IndexKind::Mirror(client),
             },
             Index {
                 name: "inner".to_owned(),
@@ -611,8 +817,8 @@ async fn test_json_meta_preflight_streams_without_remainder() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: false },
             policy: crate::policy::Policy::default(),
-            kind: IndexKind::Mirror(client),
         }]
     });
     let outcome = cache::stream_detail(state, 0, "flask".to_owned()).await.unwrap();
@@ -630,6 +836,47 @@ async fn test_json_meta_preflight_streams_without_remainder() {
             body
         });
     assert_eq!(String::from_utf8(body).unwrap(), r#"{"meta":{"api-version":"1.4"}}"#);
+}
+
+#[tokio::test]
+async fn test_materialize_detail_fetches_and_reuses_cached_page() {
+    let h = harness().await;
+    let digest = Digest::of(b"wheel");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            detail_json(digest.as_str(), &file_url).into_bytes(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let first = cache::materialize_detail(h.state.clone(), 0, "flask".to_owned())
+        .await
+        .unwrap()
+        .unwrap();
+    let second = cache::materialize_detail(h.state.clone(), 0, "flask".to_owned())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(first.name, "flask");
+    assert_eq!(first.files, second.files);
+    assert!(first.files[0].url.contains(digest.as_str()));
+}
+
+#[tokio::test]
+async fn test_materialize_detail_returns_stream_errors() {
+    let h = harness().await;
+    mount_json_page(&h.server, r#"{"name":"flask","files":[{"bad": }]}"#).await;
+
+    let err = cache::materialize_detail(h.state.clone(), 0, "flask".to_owned())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, cache::CacheError::Stream(_)));
 }
 
 #[tokio::test]
@@ -826,8 +1073,8 @@ async fn test_live_stream_forwards_a_broken_upstream_transfer() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            kind: IndexKind::Mirror { client, offline: false },
             policy: crate::policy::Policy::default(),
-            kind: IndexKind::Mirror(client),
         }]
     });
     let items = stream_outcome(&state).await;

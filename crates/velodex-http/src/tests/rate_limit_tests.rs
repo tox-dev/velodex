@@ -42,7 +42,10 @@ async fn harness(rate_limit: RateLimitConfig, upstream_concurrency: usize) -> Ha
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
-            kind: IndexKind::Mirror(upstream),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
         }],
         Arc::new(move || ticks.load(Ordering::Relaxed)),
@@ -340,7 +343,10 @@ fn test_state_with_rate_limits_sets_limiter_and_upstream_cap() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
-            kind: IndexKind::Mirror(upstream),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
         }],
         RateLimitConfig::enabled_defaults(),

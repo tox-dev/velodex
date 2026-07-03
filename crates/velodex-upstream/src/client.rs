@@ -253,6 +253,18 @@ impl UpstreamClient {
     /// Returns [`UpstreamError`] if the URL cannot be formed or the request fails.
     pub async fn fetch_project(&self, project: &str, etag: Option<&str>) -> Result<SimpleResponse, UpstreamError> {
         let url = self.base.join(&format!("{project}/"))?;
+        self.fetch_simple(url, etag).await
+    }
+
+    /// Fetch the upstream root project list.
+    ///
+    /// # Errors
+    /// Returns [`UpstreamError`] if the request fails.
+    pub async fn fetch_index(&self) -> Result<SimpleResponse, UpstreamError> {
+        self.fetch_simple(self.base.clone(), None).await
+    }
+
+    async fn fetch_simple(&self, url: Url, etag: Option<&str>) -> Result<SimpleResponse, UpstreamError> {
         let mut attempt = 0;
         loop {
             let response = self.send_simple(&url, etag).await?;

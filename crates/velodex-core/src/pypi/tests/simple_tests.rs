@@ -3,7 +3,7 @@ use std::error::Error as _;
 
 use crate::pypi::{
     CoreMetadata, File, Meta, ProjectDetail, ProjectList, ProjectListEntry, ProjectStatus, Provenance, SimpleError,
-    Yanked, render_detail_html, render_index_html, render_legacy_json, to_json,
+    Yanked, parse_index, render_detail_html, render_index_html, render_legacy_json, to_json,
 };
 
 fn sha256(value: &str) -> BTreeMap<String, String> {
@@ -312,6 +312,64 @@ fn test_index_html_snapshot() {
 #[test]
 fn test_index_json_snapshot() {
     insta::assert_snapshot!("index_json", to_json(&sample_list()));
+}
+
+#[test]
+fn test_parse_index_json() {
+    let parsed = parse_index(
+        br#"{
+            "meta": {"api-version": "1.4"},
+            "projects": [{"name": "Flask"}, {"name": "zope.interface"}]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        parsed,
+        ProjectList {
+            meta: Meta::default(),
+            projects: vec![
+                ProjectListEntry {
+                    name: "Flask".to_owned(),
+                },
+                ProjectListEntry {
+                    name: "zope.interface".to_owned(),
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_parse_index_rejects_unsupported_major_api_version() {
+    let err = parse_index(br#"{"meta":{"api-version":"2.0"},"projects":[]}"#).unwrap_err();
+    assert!(matches!(err, SimpleError::UnsupportedApiVersion(version) if version == "2.0"));
+}
+
+#[test]
+fn test_render_detail_html_omits_non_sha256_metadata_hash_attr() {
+    let mut hashes = BTreeMap::new();
+    hashes.insert("sha512".to_owned(), "abc".to_owned());
+    let html = render_detail_html(&ProjectDetail {
+        meta: Meta::default(),
+        name: "proj".to_owned(),
+        versions: vec!["1.0".to_owned()],
+        files: vec![File {
+            filename: "proj-1.0-py3-none-any.whl".to_owned(),
+            url: "https://files.example/proj-1.0-py3-none-any.whl".to_owned(),
+            hashes: BTreeMap::new(),
+            requires_python: None,
+            size: None,
+            upload_time: None,
+            yanked: Yanked::No,
+            core_metadata: CoreMetadata::Hashes(hashes.clone()),
+            dist_info_metadata: CoreMetadata::Hashes(hashes),
+            gpg_sig: None,
+            provenance: Provenance::Absent,
+        }],
+    });
+
+    assert!(!html.contains("data-core-metadata"));
+    assert!(!html.contains("data-dist-info-metadata"));
 }
 
 #[test]

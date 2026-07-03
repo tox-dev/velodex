@@ -31,6 +31,30 @@ password = "<token>"
 
 Start velodex with `--config` and install through `http://<host>:<port>/corp/simple/`.
 
+## Sync for offline use
+
+Mirror sync uses the same upstream URL and credentials as serving. Configure the working set next to the mirror, then
+populate and verify the cache while the upstream is reachable:
+
+```toml
+[[index]]
+name = "corp"
+mirror = "https://private.example/simple/"
+token = "<token>"
+
+[index.prefetch]
+requirements = ["requirements.txt"]
+```
+
+```shell
+velodex mirror sync corp --config velodex.toml
+velodex mirror verify corp --config velodex.toml
+velodex serve --config velodex.toml --offline
+```
+
+Set `offline = true` on the mirror when only that upstream should stay cache-only. Use the top-level `offline = true` or
+`serve --offline` when every mirror in the process must avoid network access.
+
 ## HTML upstreams
 
 Some mirrors, including Artifactory, serve the PEP 503 HTML form instead of PEP 691 JSON. velodex requests
