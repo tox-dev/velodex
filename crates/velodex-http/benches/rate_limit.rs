@@ -13,6 +13,7 @@ use http_body_util::BodyExt as _;
 use tokio::runtime::Runtime;
 use tower::ServiceExt as _;
 use velodex_core::pypi::{Meta, ProjectDetail, to_json};
+use velodex_http::policy::Policy;
 use velodex_http::rate_limit::{RateLimitConfig, RouteLimit};
 use velodex_http::{AppState, Index, IndexKind, router};
 use velodex_storage::blob::BlobStore;
@@ -57,6 +58,7 @@ fn mirror(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
             kind: IndexKind::Mirror(upstream),
+            policy: Policy::default(),
         }],
         Arc::new(|| 1000),
         rate_limit,

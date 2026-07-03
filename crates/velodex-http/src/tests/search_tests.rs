@@ -7,9 +7,10 @@ use velodex_storage::blob::{BlobStore, Digest};
 use velodex_storage::meta::{CachedIndex, MetaError, MetaScanError, MetaStore};
 use velodex_upstream::UpstreamClient;
 
-use super::http_tests::{get, harness};
+use super::http_tests::{get, harness, harness_with_policies};
 use crate::cache;
 use crate::path_safety::local_file_url;
+use crate::policy::{Policy, PolicyConfig};
 use crate::search::{PackageSearch, PackageSource, SearchError, SourceFilter};
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;
@@ -37,6 +38,36 @@ async fn test_search_indexes_uploaded_metadata_and_route_scope() {
     assert_eq!(value["results"][0]["display_name"], "VelodexPkg");
     assert_eq!(value["results"][0]["normalized_name"], "velodexpkg");
     assert_eq!(value["results"][0]["type"], "hosted");
+}
+
+#[tokio::test]
+async fn test_search_filters_repository_policy_denials() {
+    let overlay_policy = policy(|config| {
+        config.block_projects = vec!["flask".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    put_cached_package(
+        &h.state,
+        "pypi/flask",
+        "pypi",
+        "flask",
+        &ProjectDetail {
+            meta: Meta::default(),
+            name: "Flask".to_owned(),
+            versions: vec!["1.0".to_owned()],
+            files: vec![file_with_hash("flask-1.0-py3-none-any.whl", &"a".repeat(64), None)],
+        },
+    );
+
+    let (status, _headers, body) = get(
+        &h.state,
+        "/root/pypi/+search?q=flask&page_size=25",
+        Some("application/json"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"], 0);
 }
 
 #[tokio::test]
@@ -470,6 +501,12 @@ fn test_search_public_filter_labels_and_scan_errors() {
     ));
 }
 
+fn policy(configure: impl FnOnce(&mut PolicyConfig)) -> Policy {
+    let mut config = PolicyConfig::default();
+    configure(&mut config);
+    Policy::compile(&config).unwrap()
+}
+
 fn put_uploaded_package(state: &crate::state::AppState, display: &str, normalized: &str, summary: &str) {
     put_uploaded_package_with_metadata(
         state,
@@ -541,11 +578,13 @@ fn overlay_state_without_upload() -> (tempfile::TempDir, Arc<AppState>) {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(UpstreamClient::new("https://example.test/simple/").unwrap()),
         },
         Index {
             name: "root/pypi".to_owned(),
             route: "root/pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Overlay {
                 layers: vec![0],
                 upload: None,

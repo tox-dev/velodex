@@ -259,13 +259,18 @@ impl Velodex {
     /// would get answers from the *other* server. Detecting the child's exit and retrying on a fresh
     /// port makes startup deterministic.
     fn start_against(upstream_url: &str) -> Self {
+        Self::start_against_with_overlay_policy(upstream_url, "")
+    }
+
+    fn start_against_with_overlay_policy(upstream_url: &str, policy_toml: &str) -> Self {
         let data = TempDir::new().expect("temp data dir");
         let config = data.path().join("velodex.toml");
         // A mirror of the given upstream with a local store overlaid in front, served at root/pypi.
         let config_toml = format!(
             "[[index]]\nname = \"upstream\"\nroute = \"upstream\"\nmirror = \"{upstream_url}\"\n\
              [[index]]\nname = \"local\"\nlocal = true\nupload_token = \"{UPLOAD_TOKEN}\"\n\
-             [[index]]\nname = \"root/pypi\"\nroute = \"root/pypi\"\nlayers = [\"local\", \"upstream\"]\nupload = \"local\"\n"
+             [[index]]\nname = \"root/pypi\"\nroute = \"root/pypi\"\nlayers = [\"local\", \"upstream\"]\nupload = \"local\"\n\
+             [index.policy]\n{policy_toml}"
         );
         std::fs::write(&config, config_toml).expect("write config");
         for attempt in 0..10 {
@@ -363,6 +368,12 @@ fn probe_status(port: u16) -> bool {
 fn hermetic() -> (Upstream, Velodex) {
     let upstream = Upstream::start();
     let velodex = Velodex::start_against(&upstream.upstream_url());
+    (upstream, velodex)
+}
+
+fn hermetic_with_overlay_policy(policy_toml: &str) -> (Upstream, Velodex) {
+    let upstream = Upstream::start();
+    let velodex = Velodex::start_against_with_overlay_policy(&upstream.upstream_url(), policy_toml);
     (upstream, velodex)
 }
 
@@ -473,6 +484,19 @@ fn pip_install(venv: &TempDir, velodex: &Velodex, spec: &str) {
     run_against(&mut cmd, "pip install", velodex);
 }
 
+fn pip_install_fails(venv: &TempDir, velodex: &Velodex, spec: &str) {
+    let mut cmd = Command::new("pip3");
+    cmd.arg("--python").arg(venv_python(venv)).args([
+        "install",
+        "--no-cache-dir",
+        "--no-input",
+        "--index-url",
+        &velodex.index_url(),
+        spec,
+    ]);
+    run_against_fails(&mut cmd, "pip install", velodex);
+}
+
 /// Install into `venv` with uv targeting that interpreter — faster than pip, still isolated.
 fn uv_install(venv: &TempDir, velodex: &Velodex, spec: &str) {
     let mut cmd = uv(venv);
@@ -480,6 +504,14 @@ fn uv_install(venv: &TempDir, velodex: &Velodex, spec: &str) {
         .arg(venv_python(venv))
         .args(["--index-url", &velodex.index_url(), spec]);
     run_against(&mut cmd, "uv pip install", velodex);
+}
+
+fn uv_install_fails(venv: &TempDir, velodex: &Velodex, spec: &str) {
+    let mut cmd = uv(venv);
+    cmd.args(["pip", "install", "--python"])
+        .arg(venv_python(venv))
+        .args(["--index-url", &velodex.index_url(), spec]);
+    run_against_fails(&mut cmd, "uv pip install", velodex);
 }
 
 /// Like [`run`], but a failure also dumps the velodex server's own log before panicking — the temp
@@ -493,6 +525,18 @@ fn run_against(cmd: &mut Command, what: &str, velodex: &Velodex) {
             velodex.server_log()
         );
         panic!("{what} failed:\n{}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+fn run_against_fails(cmd: &mut Command, what: &str, velodex: &Velodex) {
+    let output = cmd.output().unwrap_or_else(|err| panic!("spawn {what}: {err}"));
+    if output.status.success() {
+        eprintln!(
+            "=== velodex server log (port {}) ===\n{}",
+            velodex.port,
+            velodex.server_log()
+        );
+        panic!("{what} succeeded but should have failed");
     }
 }
 
@@ -562,6 +606,20 @@ fn e2e_uv_uses_pep658_metadata_fast_path() {
         velodex.metadata_requests() >= 1,
         "uv did not fetch a .metadata sibling through velodex"
     );
+}
+
+#[test]
+fn e2e_pip_respects_policy_blocked_dependency() {
+    let (_upstream, velodex) = hermetic_with_overlay_policy("block_projects = [\"velodexb\"]\n");
+    let venv = uv_venv();
+    pip_install_fails(&venv, &velodex, "velodexa");
+}
+
+#[test]
+fn e2e_uv_respects_policy_blocked_dependency() {
+    let (_upstream, velodex) = hermetic_with_overlay_policy("block_projects = [\"velodexb\"]\n");
+    let venv = uv_venv();
+    uv_install_fails(&venv, &velodex, "velodexa");
 }
 
 #[test]

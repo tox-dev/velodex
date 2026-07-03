@@ -20,7 +20,9 @@ use wiremock::matchers::{header as match_header, header_regex, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{LogCapture, field};
+use crate::cache;
 use crate::path_safety::local_file_url;
+use crate::policy::{PackageType, Policy, PolicyConfig};
 use crate::router;
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;
@@ -35,6 +37,16 @@ pub(super) struct Harness {
 /// A mirror (`pypi`) proxying the mock, a local store (`local`), and an overlay (`root/pypi`) that
 /// layers the local store in front of the mirror. `token`/`volatile` tune the local store.
 async fn harness_with(token: bool, volatile: bool) -> Harness {
+    harness_with_policies(token, volatile, Policy::default(), Policy::default(), Policy::default()).await
+}
+
+pub(super) async fn harness_with_policies(
+    token: bool,
+    volatile: bool,
+    mirror_policy: Policy,
+    local_policy: Policy,
+    overlay_policy: Policy,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
@@ -46,11 +58,13 @@ async fn harness_with(token: bool, volatile: bool) -> Harness {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: mirror_policy,
             kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "local".to_owned(),
             route: "local".to_owned(),
+            policy: local_policy,
             kind: IndexKind::Local {
                 upload_token: token.then(|| "s3cret".to_owned()),
                 volatile,
@@ -59,6 +73,7 @@ async fn harness_with(token: bool, volatile: bool) -> Harness {
         Index {
             name: "root/pypi".to_owned(),
             route: "root/pypi".to_owned(),
+            policy: overlay_policy,
             kind: IndexKind::Overlay {
                 layers: vec![1, 0],
                 upload: Some(1),
@@ -97,6 +112,7 @@ async fn promotion_harness() -> Harness {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
             kind: IndexKind::Mirror(upstream),
+            policy: Policy::default(),
         },
         Index {
             name: "staging".to_owned(),
@@ -105,6 +121,7 @@ async fn promotion_harness() -> Harness {
                 upload_token: Some("s3cret".to_owned()),
                 volatile: true,
             },
+            policy: Policy::default(),
         },
         Index {
             name: "prod".to_owned(),
@@ -113,6 +130,7 @@ async fn promotion_harness() -> Harness {
                 upload_token: Some("s3cret".to_owned()),
                 volatile: true,
             },
+            policy: Policy::default(),
         },
         Index {
             name: "release".to_owned(),
@@ -121,6 +139,7 @@ async fn promotion_harness() -> Harness {
                 layers: vec![2, 0],
                 upload: Some(2),
             },
+            policy: Policy::default(),
         },
     ];
     let state = Arc::new(AppState::with_clock(
@@ -136,6 +155,12 @@ async fn promotion_harness() -> Harness {
         state,
         clock,
     }
+}
+
+fn policy(configure: impl FnOnce(&mut PolicyConfig)) -> Policy {
+    let mut config = PolicyConfig::default();
+    configure(&mut config);
+    Policy::compile(&config).unwrap()
 }
 
 fn put_raw_project_status(path: &Path, key: &str, value: &[u8]) {
@@ -536,6 +561,22 @@ async fn test_legacy_json_missing_project_is_not_found() {
 }
 
 #[tokio::test]
+async fn test_policy_rejects_legacy_json_project() {
+    let overlay_policy = policy(|policy| {
+        policy.block_projects = vec!["flask".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/flask/json", None).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["action"], "serve");
+    assert_eq!(denial["project"], "flask");
+    assert_eq!(denial["rule"], "project-block-list");
+}
+
+#[tokio::test]
 async fn test_legacy_json_unsupported_upstream_content_type_is_bad_gateway() {
     let h = harness().await;
     Mock::given(method("GET"))
@@ -563,6 +604,7 @@ async fn test_legacy_json_unavailable_upstream_is_bad_gateway() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(upstream),
         }],
     ));
@@ -641,6 +683,189 @@ async fn test_mirror_detail_from_html_preserves_simple_api_fields() {
     assert_eq!(file["dist-info-metadata"]["sha256"], metadata.as_str());
     assert_eq!(file["gpg-sig"], true);
     assert_eq!(file["provenance"], "https://example.test/flask.provenance");
+}
+
+#[tokio::test]
+async fn test_policy_filters_upstream_simple_files() {
+    let overlay_policy = policy(|policy| {
+        policy.allow_versions = Some("==1.0".to_owned());
+        policy.allow_package_types = vec![PackageType::Wheel];
+        policy.allow_wheel_platforms = vec!["any".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    let allowed = Digest::of(b"allowed");
+    let blocked_version = Digest::of(b"blocked-version");
+    let blocked_sdist = Digest::of(b"blocked-sdist");
+    let blocked_platform = Digest::of(b"blocked-platform");
+    let file_url = h.server.uri();
+    let json = format!(
+        "{{\"meta\":{{\"api-version\":\"1.4\"}},\"name\":\"flask\",\"versions\":[\"1.0\",\"2.0\"],\"files\":[\
+         {{\"filename\":\"flask-1.0-py3-none-any.whl\",\"url\":\"{file_url}/files/a.whl\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"size\":10}},\
+         {{\"filename\":\"flask-2.0-py3-none-any.whl\",\"url\":\"{file_url}/files/b.whl\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"size\":10}},\
+         {{\"filename\":\"flask-1.0.tar.gz\",\"url\":\"{file_url}/files/c.tar.gz\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"size\":10}},\
+         {{\"filename\":\"flask-1.0-py3-none-manylinux_2_28_x86_64.whl\",\"url\":\"{file_url}/files/d.whl\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"size\":10}}]}}",
+        allowed.as_str(),
+        blocked_version.as_str(),
+        blocked_sdist.as_str(),
+        blocked_platform.as_str(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(json.into_bytes(), "application/vnd.pypi.simple.v1+json"))
+        .mount(&h.server)
+        .await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["versions"], serde_json::json!(["1.0"]));
+    assert_eq!(detail["files"].as_array().unwrap().len(), 1);
+    assert!(body.contains("flask-1.0-py3-none-any.whl"));
+    assert!(!body.contains("flask-2.0-py3-none-any.whl"));
+    assert!(!body.contains("flask-1.0.tar.gz"));
+    assert!(!body.contains("manylinux_2_28_x86_64"));
+}
+
+#[tokio::test]
+async fn test_policy_filters_files_without_declared_size() {
+    let overlay_policy = policy(|policy| {
+        policy.max_file_size_bytes = Some(20);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    let small = Digest::of(b"small");
+    let missing_size = Digest::of(b"missing-size");
+    let file_url = h.server.uri();
+    let json = format!(
+        "{{\"meta\":{{\"api-version\":\"1.4\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\"files\":[\
+         {{\"filename\":\"flask-1.0-py3-none-any.whl\",\"url\":\"{file_url}/files/small.whl\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"size\":10}},\
+         {{\"filename\":\"flask-1.0.tar.gz\",\"url\":\"{file_url}/files/missing.tar.gz\",\
+         \"hashes\":{{\"sha256\":\"{}\"}}}}]}}",
+        small.as_str(),
+        missing_size.as_str(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(json.into_bytes(), "application/vnd.pypi.simple.v1+json"))
+        .mount(&h.server)
+        .await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("text/html")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("flask-1.0-py3-none-any.whl"));
+    assert!(!body.contains("flask-1.0.tar.gz"));
+}
+
+#[tokio::test]
+async fn test_policy_rejects_direct_download() {
+    let overlay_policy = policy(|policy| {
+        policy.block_wheel_pythons = vec!["py3".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    let digest = Digest::of(b"wheel");
+    let uri = format!("/root/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
+
+    let (status, _, body) = get(&h.state, &uri, Some("application/json")).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["action"], "serve");
+    assert_eq!(denial["project"], "flask");
+    assert_eq!(denial["rule"], "wheel-python-block-list");
+}
+
+#[tokio::test]
+async fn test_policy_rejects_project_detail() {
+    let overlay_policy = policy(|policy| {
+        policy.block_projects = vec!["flask".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["action"], "serve");
+    assert_eq!(denial["project"], "flask");
+    assert_eq!(denial["rule"], "project-block-list");
+}
+
+#[tokio::test]
+async fn test_policy_rejects_upload_when_target_local_index_denies() {
+    let local_policy = policy(|policy| {
+        policy.max_file_size_bytes = Some(1);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), local_policy, Policy::default()).await;
+    let wheel = fixture_wheel();
+    let (content_type, body) = multipart_body(&upload_fields(), Some(("velodexpkg-1.0-py3-none-any.whl", &wheel)));
+
+    let (status, body) = post_upload_response(&h.state, "/root/pypi/", Some(&upload_auth()), &content_type, body).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["action"], "upload");
+    assert_eq!(denial["project"], "velodexpkg");
+    assert_eq!(denial["rule"], "max-file-size");
+}
+
+#[tokio::test]
+async fn test_overlay_serves_buffered_when_mirror_layer_policy_is_active() {
+    let mirror_policy = policy(|policy| {
+        policy.block_projects = vec!["blocked".to_owned()];
+    });
+    let h = harness_with_policies(true, true, mirror_policy, Policy::default(), Policy::default()).await;
+    let digest = Digest::of(b"wheel");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(digest.as_str()));
+}
+
+#[tokio::test]
+async fn test_overlay_serves_buffered_when_local_layer_policy_is_active() {
+    let local_policy = policy(|policy| {
+        policy.block_projects = vec!["blocked".to_owned()];
+    });
+    let h = harness_with_policies(true, true, Policy::default(), local_policy, Policy::default()).await;
+    let digest = Digest::of(b"wheel");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
+
+    let (status, _, body) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(digest.as_str()));
+}
+
+#[tokio::test]
+async fn test_persist_page_skips_policy_denied_file_registrations() {
+    let mirror_policy = policy(|policy| {
+        policy.block_package_types = vec![PackageType::Wheel];
+    });
+    let h = harness_with_policies(true, true, mirror_policy, Policy::default(), Policy::default()).await;
+    let digest = Digest::of(b"wheel");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    let record = CachedIndex {
+        etag: None,
+        last_serial: None,
+        fetched_at_unix: 1000,
+        content_type: Some("application/vnd.pypi.simple.v1+json".to_owned()),
+        fresh_secs: None,
+        body: detail_json(digest.as_str(), &file_url).into_bytes(),
+    };
+
+    cache::persist_page(&h.state, "pypi/flask", "pypi", "flask", &record).unwrap();
+
+    assert!(h.state.meta.get_file_url(digest.as_str()).unwrap().is_none());
 }
 
 #[tokio::test]
@@ -850,6 +1075,7 @@ async fn test_mirror_detail_upstream_unreachable_is_bad_gateway() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        policy: Policy::default(),
         kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
@@ -885,6 +1111,7 @@ async fn test_mirror_detail_stale_on_upstream_error() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        policy: Policy::default(),
         kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 100_000)));
@@ -965,6 +1192,7 @@ async fn test_file_download_status_store_error_is_server_error() {
     let indexes = vec![Index {
         name: "pypi".to_owned(),
         route: "pypi".to_owned(),
+        policy: Policy::default(),
         kind: IndexKind::Mirror(upstream),
     }];
     let state = Arc::new(AppState::new(meta, blobs, 60, indexes));
@@ -1806,6 +2034,24 @@ async fn test_upload_via_overlay_then_serve_and_download() {
 }
 
 #[tokio::test]
+async fn test_policy_rejects_upload() {
+    let overlay_policy = policy(|policy| {
+        policy.max_file_size_bytes = Some(1);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    let wheel = fixture_wheel();
+    let (content_type, body) = multipart_body(&upload_fields(), Some(("velodexpkg-1.0-py3-none-any.whl", &wheel)));
+
+    let (status, body) = post_upload_response(&h.state, "/root/pypi/", Some(&upload_auth()), &content_type, body).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["action"], "upload");
+    assert_eq!(denial["project"], "velodexpkg");
+    assert_eq!(denial["rule"], "max-file-size");
+}
+
+#[tokio::test]
 async fn test_overlay_tolerates_unavailable_layer() {
     let dir = tempfile::tempdir().unwrap();
     let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
@@ -1815,11 +2061,13 @@ async fn test_overlay_tolerates_unavailable_layer() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "local".to_owned(),
             route: "local".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Local {
                 upload_token: Some("s3cret".to_owned()),
                 volatile: true,
@@ -1828,6 +2076,7 @@ async fn test_overlay_tolerates_unavailable_layer() {
         Index {
             name: "root/pypi".to_owned(),
             route: "root/pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Overlay {
                 layers: vec![1, 0],
                 upload: Some(1),
@@ -2441,6 +2690,7 @@ async fn test_upload_storage_failure_is_server_error() {
     let indexes = vec![Index {
         name: "local".to_owned(),
         route: "local".to_owned(),
+        policy: Policy::default(),
         kind: IndexKind::Local {
             upload_token: Some("s3cret".to_owned()),
             volatile: true,
@@ -2675,6 +2925,7 @@ async fn test_longest_prefix_wins() {
         Index {
             name: "a".to_owned(),
             route: "a".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Local {
                 upload_token: None,
                 volatile: true,
@@ -2683,6 +2934,7 @@ async fn test_longest_prefix_wins() {
         Index {
             name: "ab".to_owned(),
             route: "a/b".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Local {
                 upload_token: Some("s3cret".to_owned()),
                 volatile: true,
@@ -2743,6 +2995,7 @@ async fn test_status_redacts_upstream_and_upload_secrets() {
         Index {
             name: "private".to_owned(),
             route: "private".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(
                 UpstreamClient::with_auth(
                     "https://user:pass@example.invalid/simple/?token=url-secret#frag",
@@ -2754,6 +3007,7 @@ async fn test_status_redacts_upstream_and_upload_secrets() {
         Index {
             name: "local".to_owned(),
             route: "local".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Local {
                 upload_token: Some("upload-secret".to_owned()),
                 volatile: false,
@@ -2997,11 +3251,13 @@ async fn test_upload_target_resolving_to_non_local_is_not_found() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "ov".to_owned(),
             route: "ov".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Overlay {
                 layers: vec![0],
                 upload: Some(0),
@@ -4250,11 +4506,13 @@ async fn test_overlay_without_upload_layer_serves_merged_page() {
         Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Mirror(upstream),
         },
         Index {
             name: "ov".to_owned(),
             route: "ov".to_owned(),
+            policy: Policy::default(),
             kind: IndexKind::Overlay {
                 layers: vec![0],
                 upload: None,

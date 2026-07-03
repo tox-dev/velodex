@@ -187,6 +187,10 @@ fn main() -> anyhow::Result<()> {
             let config = resolve_config(&args.runtime)?;
             operator::import_dir(&config, &args.repo, &args.dir, &mut std::io::stdout())
         }
+        velodex::cli::Command::Policy(command) => {
+            let config = resolve_config(command.runtime_args())?;
+            app::policy(&config, &command, &mut std::io::stdout())
+        }
         velodex::cli::Command::Openapi => {
             print!("{}", velodex_http::api::openapi_json());
             Ok(())

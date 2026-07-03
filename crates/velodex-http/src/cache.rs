@@ -18,6 +18,7 @@ use velodex_upstream::{RangeError, SimpleResponse, UpstreamClient};
 
 use crate::metrics::Event;
 use crate::path_safety::local_file_url;
+use crate::policy::{PolicyAction, PolicyDenial};
 use crate::rate_limit::UpstreamPermit;
 use crate::state::{AppState, Index, IndexKind};
 use crate::stream::{PageSummary, PageTransformer, Registration};
@@ -60,6 +61,8 @@ pub enum CacheError {
     Stream(String),
     #[error("rate limit exceeded; retry after {retry_after} seconds")]
     RateLimited { retry_after: u64 },
+    #[error(transparent)]
+    Policy(#[from] PolicyDenial),
 }
 
 impl From<velodex_core::pypi::SimpleError> for CacheError {
@@ -110,6 +113,7 @@ impl CacheError {
             }
             Self::Stream(err) => format!("file stream failed: {err}"),
             Self::RateLimited { retry_after } => format!("rate limit exceeded; retry after {retry_after} seconds"),
+            Self::Policy(err) => err.reason.to_string(),
         }
     }
 }
@@ -127,23 +131,32 @@ pub async fn resolve_detail(
     project: &str,
     serve_route: &str,
 ) -> Result<Option<ProjectDetail>, CacheError> {
-    match &index.kind {
+    index.policy.check_project(PolicyAction::Serve, project)?;
+    let detail = match &index.kind {
         IndexKind::Mirror(client) => {
             let Some(mut detail) = mirror_detail(state, &index.name, &index.route, client, project).await? else {
                 return Ok(None);
             };
             rewrite_urls(&mut detail, serve_route);
-            Ok(Some(detail))
+            Some(detail)
         }
         IndexKind::Local { .. } => {
             let Some(mut detail) = local_detail(state, &index.name, project)? else {
                 return Ok(None);
             };
             rewrite_urls(&mut detail, serve_route);
-            Ok(Some(detail))
+            Some(detail)
         }
-        IndexKind::Overlay { layers, upload } => overlay_detail(state, layers, *upload, project, serve_route).await,
-    }
+        IndexKind::Overlay { layers, upload } => overlay_detail(state, layers, *upload, project, serve_route).await?,
+    };
+    detail
+        .map(|detail| {
+            index
+                .policy
+                .apply_detail(PolicyAction::Serve, project, detail)
+                .map_err(CacheError::from)
+        })
+        .transpose()
 }
 
 /// Merge the layers of an overlay: first match per filename wins, versions are unioned. Overrides
@@ -310,6 +323,7 @@ async fn fetch_and_store(
     project: &str,
     client: &UpstreamClient,
 ) -> Result<Option<CachedIndex>, CacheError> {
+    mirror_policy(state, name).check_project(PolicyAction::Mirror, project)?;
     let now = (state.clock)();
     let cached = state.meta.get_index(key)?;
     let etag = cached.as_ref().and_then(|record| record.etag.clone());
@@ -394,6 +408,15 @@ async fn fetch_and_store(
     }
 }
 
+fn mirror_policy<'a>(state: &'a AppState, name: &str) -> &'a crate::policy::Policy {
+    &state
+        .indexes
+        .iter()
+        .find(|index| index.name == name)
+        .expect("mirror policy belongs to a configured index")
+        .policy
+}
+
 /// The route a mirror's cached pages are attributed to in metrics.
 fn mirror_route(state: &AppState, name: &str) -> String {
     state
@@ -446,6 +469,10 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
         let Some((index, client, project)) = mirror_for_key(state, &key) else {
             continue;
         };
+        if let Err(denial) = index.policy.check_project(PolicyAction::Mirror, &project) {
+            log_mirror_sync(&index.route, &project, "denied", false, Some(&denial.reason));
+            continue;
+        }
         summary.checked += 1;
         let before = state.meta.get_index(&key)?.map(|record| record.body);
         let result = fetch_and_store(state, &key, &index.name, &project, client).await;
@@ -544,9 +571,9 @@ fn persist_streamed(
     } else {
         summary.registrations.as_slice()
     };
-    let files: Vec<(String, String)> = registrations
+    let files: Vec<(String, String, Option<u64>)> = registrations
         .iter()
-        .map(|registration| (registration.sha256.clone(), registration.url.clone()))
+        .map(|registration| (registration.sha256.clone(), registration.url.clone(), registration.size))
         .collect();
     let metadata: Vec<(String, String, String)> = registrations
         .iter()
@@ -585,14 +612,18 @@ pub(crate) fn persist_page(
     let parsed = parse_detail(&record.body)?;
     let mut files = Vec::new();
     let mut metadata = Vec::new();
+    let policy = mirror_policy(state, name);
     for file in &parsed.files {
+        if policy.check_file(PolicyAction::Mirror, project, file).is_err() {
+            continue;
+        }
         let Some(sha256) = file.hashes.get("sha256") else {
             continue;
         };
         if file.url.starts_with('/') {
             continue; // a legacy record with velodex-route URLs has nothing to register
         }
-        files.push((sha256.clone(), file.url.clone()));
+        files.push((sha256.clone(), file.url.clone(), file.size));
         if let CoreMetadata::Hashes(hashes) = file.metadata()
             && let Some(digest) = hashes.get("sha256")
         {
@@ -718,10 +749,10 @@ fn rewrite_urls(detail: &mut ProjectDetail, route: &str) {
 pub fn resolve_list(state: &AppState, index: &Index) -> Result<ProjectList, CacheError> {
     let mut names = BTreeSet::new();
     collect_projects(state, index, &mut names)?;
-    Ok(ProjectList {
+    Ok(index.policy.apply_list(ProjectList {
         meta: Meta::default(),
         projects: names.into_iter().map(|name| ProjectListEntry { name }).collect(),
-    })
+    }))
 }
 
 fn collect_projects(state: &AppState, index: &Index, names: &mut BTreeSet<String>) -> Result<(), CacheError> {
@@ -858,13 +889,13 @@ async fn generated_metadata_bytes(
     if state.blobs.exists(artifact_digest) {
         let metadata = metadata_from_artifact_path(filename, &state.blobs.path_for(artifact_digest))?
             .ok_or(CacheError::FileNotFound)?;
-        return Ok((metadata, source.map(|(_, source)| source)));
+        return Ok((metadata, source.map(|source| source.source)));
     }
-    let Some((url, source_name)) = source else {
+    let Some(source) = source else {
         return Err(CacheError::FileNotFound);
     };
-    if let Some(metadata) = generated_wheel_metadata_by_range(state, &source_name, &url, filename).await? {
-        return Ok((metadata, Some(source_name)));
+    if let Some(metadata) = generated_wheel_metadata_by_range(state, &source.source, &source.url, filename).await? {
+        return Ok((metadata, Some(source.source)));
     }
     let path = file_path(
         state.clone(),
@@ -874,7 +905,7 @@ async fn generated_metadata_bytes(
     )
     .await?;
     let metadata = metadata_from_artifact_path(filename, &path)?.ok_or(CacheError::FileNotFound)?;
-    Ok((metadata, Some(source_name)))
+    Ok((metadata, Some(source.source)))
 }
 
 fn metadata_from_artifact_path(filename: &str, path: &std::path::Path) -> Result<Option<Vec<u8>>, CacheError> {
@@ -1150,6 +1181,14 @@ fn is_tar_gz(filename: &str) -> bool {
     filename
         .get(filename.len().saturating_sub(7)..)
         .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".tar.gz"))
+}
+
+/// The file size registered from the Simple API page for a digest, when upstream advertised one.
+///
+/// # Errors
+/// Returns [`CacheError`] when the metadata store cannot be read.
+pub fn registered_file_size(state: &AppState, digest: &Digest) -> Result<Option<u64>, CacheError> {
+    Ok(state.meta.get_file_url(digest.as_str())?.and_then(|source| source.size))
 }
 
 fn metadata_negative_key(artifact_digest: &Digest) -> String {
@@ -1502,6 +1541,10 @@ const JSON_META_PREFLIGHT_BYTES: usize = 64 * 1024;
 )]
 pub async fn stream_detail(state: Arc<AppState>, position: usize, project: String) -> Result<PageOutcome, CacheError> {
     let index = state.index_at(position);
+    index.policy.check_project(PolicyAction::Serve, &project)?;
+    if index.policy.active() {
+        return Ok(PageOutcome::Fallback);
+    }
     let route = index.route.clone();
     let Some((mirror_name, client, context)) = streaming_parts(&state, index, &project)? else {
         return Ok(PageOutcome::Fallback);
@@ -1735,10 +1778,18 @@ fn streaming_parts(
     project: &str,
 ) -> Result<Option<(String, UpstreamClient, crate::stream::PageContext)>, CacheError> {
     match &index.kind {
+        _ if index.policy.has_project_size_limit() => Ok(None),
         IndexKind::Mirror(client) => Ok(Some((
             index.name.clone(),
             client.clone(),
-            crate::stream::page_context(&index.route, Vec::new(), Vec::new(), &std::collections::HashMap::new()),
+            crate::stream::page_context(
+                &index.route,
+                project,
+                index.policy.clone(),
+                Vec::new(),
+                Vec::new(),
+                &std::collections::HashMap::new(),
+            ),
         ))),
         IndexKind::Local { .. } => Ok(None),
         IndexKind::Overlay { layers, upload } => {
@@ -1749,11 +1800,17 @@ fn streaming_parts(
                 let layer = state.index_at(pos);
                 match &layer.kind {
                     IndexKind::Mirror(client) => {
+                        if layer.policy.active() {
+                            return Ok(None);
+                        }
                         if mirror.replace((layer.name.clone(), client.clone())).is_some() {
                             return Ok(None);
                         }
                     }
                     IndexKind::Local { .. } => {
+                        if layer.policy.active() {
+                            return Ok(None);
+                        }
                         if let Some(mut detail) = local_detail(state, &layer.name, project)? {
                             rewrite_urls(&mut detail, &index.route);
                             local_versions.extend(detail.versions);
@@ -1777,7 +1834,14 @@ fn streaming_parts(
             Ok(Some((
                 mirror,
                 client,
-                crate::stream::page_context(&index.route, local_files, local_versions, &overrides),
+                crate::stream::page_context(
+                    &index.route,
+                    project,
+                    index.policy.clone(),
+                    local_files,
+                    local_versions,
+                    &overrides,
+                ),
             )))
         }
     }
@@ -2071,13 +2135,13 @@ async fn start_download(
     route: String,
     filename: String,
 ) -> Result<DownloadHandle, CacheError> {
-    let (url, source) = state
+    let source = state
         .meta
         .get_file_url(digest.as_str())?
         .ok_or(CacheError::FileNotFound)?;
-    let client = source_client(state, &source)?;
-    let permit = upstream_permit(state, &source)?;
-    let body = client.stream_bytes(&url).await?;
+    let client = source_client(state, &source.source)?;
+    let permit = upstream_permit(state, &source.source)?;
+    let body = client.stream_bytes(&source.url).await?;
     let pending = state.blobs.begin()?;
     let (sender, receiver) = tokio::sync::watch::channel(DownloadProgress::default());
     let handle = DownloadHandle {

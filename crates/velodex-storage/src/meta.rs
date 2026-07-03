@@ -294,6 +294,14 @@ pub struct RecentUpload {
     pub size: Option<u64>,
 }
 
+/// The upstream source for a cached artifact digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSource {
+    pub url: String,
+    pub source: String,
+    pub size: Option<u64>,
+}
+
 impl MetaStore {
     /// Open (creating if needed) the database at `path`, initializing its tables so later reads
     /// never race a missing table.
@@ -536,7 +544,7 @@ impl MetaStore {
         source: &str,
         project_status: Option<&str>,
         project_status_reason: Option<&str>,
-        files: &[(String, String)],
+        files: &[(String, String, Option<u64>)],
         metadata: &[(String, String, String)],
     ) -> Result<(), MetaError> {
         let bytes = record.encode();
@@ -566,11 +574,8 @@ impl MetaStore {
                 }
             }
             let mut table = txn.open_table(FILE)?;
-            for (sha256, url) in files {
-                let value = format!(
-                    "{url}
-{source}"
-                );
+            for (sha256, url, size) in files {
+                let value = file_source_value(url, source, *size);
                 table.insert(sha256.as_str(), value.as_str())?;
             }
             let mut table = txn.open_table(METADATA)?;
@@ -777,7 +782,7 @@ impl MetaStore {
     /// # Errors
     /// Returns a store error if the write or commit fails.
     pub fn put_file_url(&self, sha256: &str, url: &str, source: &str) -> Result<(), MetaError> {
-        let value = format!("{url}\n{source}");
+        let value = file_source_value(url, source, None);
         let txn = self.db.begin_write()?;
         {
             let mut table = txn.open_table(FILE)?;
@@ -791,10 +796,10 @@ impl MetaStore {
     ///
     /// # Errors
     /// Returns a store error if the read fails.
-    pub fn get_file_url(&self, sha256: &str) -> Result<Option<(String, String)>, MetaError> {
+    pub fn get_file_url(&self, sha256: &str) -> Result<Option<FileSource>, MetaError> {
         let txn = self.db.begin_read()?;
         let table = txn.open_table(FILE)?;
-        Ok(table.get(sha256)?.and_then(|value| split_pair(value.value())))
+        Ok(table.get(sha256)?.and_then(|value| split_file_source(value.value())))
     }
 
     /// Record the PEP 658 metadata sibling for an artifact: keyed by the artifact's digest,
@@ -1181,11 +1186,17 @@ fn due_key_time(key: &str) -> Option<i64> {
     Some(i64::from_be_bytes((raw ^ (1_u64 << 63)).to_be_bytes()))
 }
 
-/// Split a `"first\nsecond"` stored value into its two owned halves.
-fn split_pair(value: &str) -> Option<(String, String)> {
-    value
-        .split_once('\n')
-        .map(|(first, second)| (first.to_owned(), second.to_owned()))
+fn file_source_value(url: &str, source: &str, size: Option<u64>) -> String {
+    size.map_or_else(|| format!("{url}\n{source}"), |size| format!("{url}\n{source}\n{size}"))
+}
+
+fn split_file_source(value: &str) -> Option<FileSource> {
+    let mut parts = value.splitn(3, '\n');
+    Some(FileSource {
+        url: parts.next()?.to_owned(),
+        source: parts.next()?.to_owned(),
+        size: parts.next().and_then(|size| size.parse().ok()),
+    })
 }
 
 fn ordered_index_names(index_names: &[String]) -> Vec<&str> {

@@ -14,6 +14,7 @@ use velodex_storage::blob::{BlobStore, Digest};
 use velodex_storage::meta::{MetaStore, NewWebhookDelivery, WebhookDeliveryRecord, WebhookDeliveryStatus};
 
 use super::http_tests::{fixture_wheel, multipart_body, request, upload_auth, upload_velodexpkg};
+use crate::policy::Policy;
 use crate::router;
 use crate::state::{AppState, Index, IndexKind};
 use crate::webhook::{self, WebhookRuntime, WebhookTargetConfig};
@@ -52,6 +53,7 @@ impl Harness {
                     upload_token: Some("s3cret".to_owned()),
                     volatile: true,
                 },
+                policy: Policy::default(),
             }],
             Arc::new(move || ticks.load(Ordering::Relaxed)),
             webhooks,

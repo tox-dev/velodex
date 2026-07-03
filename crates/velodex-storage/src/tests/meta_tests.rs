@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::error::Error as _;
 
 use crate::meta::{
-    CachedIndex, MetaError, MetaScanError, MetaStore, NewWebhookDelivery, WebhookDeliveryAttempt, WebhookDeliveryStatus,
+    CachedIndex, FileSource, MetaError, MetaScanError, MetaStore, NewWebhookDelivery, WebhookDeliveryAttempt,
+    WebhookDeliveryStatus,
 };
 
 fn store() -> (tempfile::TempDir, MetaStore) {
@@ -240,7 +241,43 @@ fn test_put_and_get_file_url() {
         .unwrap();
     assert_eq!(
         store.get_file_url("deadbeef").unwrap(),
-        Some(("https://files.example/pkg.whl".to_owned(), "pypi".to_owned()))
+        Some(FileSource {
+            url: "https://files.example/pkg.whl".to_owned(),
+            source: "pypi".to_owned(),
+            size: None,
+        })
+    );
+}
+
+#[test]
+fn test_put_mirror_page_records_file_url_size() {
+    let (_dir, store) = store();
+    store
+        .put_mirror_page(
+            "pypi/pkg",
+            &record(),
+            "pypi",
+            "pkg",
+            "Pkg",
+            "pypi",
+            None,
+            None,
+            &[(
+                "feedface".to_owned(),
+                "https://files.example/pkg-1.0.whl".to_owned(),
+                Some(42),
+            )],
+            &[],
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.get_file_url("feedface").unwrap(),
+        Some(FileSource {
+            url: "https://files.example/pkg-1.0.whl".to_owned(),
+            source: "pypi".to_owned(),
+            size: Some(42),
+        })
     );
 }
 
@@ -648,7 +685,11 @@ fn test_count_and_delete_project_cache_purge() {
             "pypi",
             Some("archived"),
             Some("read only"),
-            &[(file_digests[0].clone(), "https://files.example/flask.whl".to_owned())],
+            &[(
+                file_digests[0].clone(),
+                "https://files.example/flask.whl".to_owned(),
+                Some(123),
+            )],
             &[(
                 metadata_digests[0].clone(),
                 "https://files.example/flask.whl.metadata".to_owned(),

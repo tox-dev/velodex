@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use velodex_core::pypi::{CoreMetadata, File, Provenance, Yanked, parse_detail, to_json};
 
-use crate::stream::{PageContext, PageTransformer, Registration, page_context};
+use crate::policy::{PackageType, Policy, PolicyConfig};
+use crate::stream::{PageContext, PageTransformer, Registration, page_context as build_page_context};
 
 fn upstream_page() -> String {
     r#"{"meta":{"api-version":"1.1"},"name":"demo","versions":["1.0","2.0"],"files":[
@@ -35,6 +36,37 @@ fn transform_summary(page: &str, context: PageContext, chunk: usize) -> (String,
 
 fn plain_context() -> PageContext {
     page_context("root/pypi", Vec::new(), Vec::new(), &HashMap::new())
+}
+
+fn page_context<S: std::hash::BuildHasher>(
+    route: &str,
+    local_files: Vec<File>,
+    local_versions: Vec<String>,
+    overrides: &HashMap<String, String, S>,
+) -> PageContext {
+    build_page_context(route, "demo", Policy::default(), local_files, local_versions, overrides)
+}
+
+fn policy(configure: impl FnOnce(&mut PolicyConfig)) -> Policy {
+    let mut config = PolicyConfig::default();
+    configure(&mut config);
+    Policy::compile(&config).unwrap()
+}
+
+fn local_wheel(filename: &str) -> File {
+    File {
+        filename: filename.to_owned(),
+        url: format!("/root/pypi/files/dd44/{filename}"),
+        hashes: std::collections::BTreeMap::from([("sha256".to_owned(), "dd44".to_owned())]),
+        requires_python: None,
+        size: Some(5),
+        upload_time: None,
+        yanked: Yanked::No,
+        core_metadata: CoreMetadata::Absent,
+        dist_info_metadata: CoreMetadata::Absent,
+        gpg_sig: None,
+        provenance: Provenance::Absent,
+    }
 }
 
 #[test]
@@ -99,19 +131,7 @@ fn test_rewrites_egg_urls_without_advertising_metadata() {
 
 #[test]
 fn test_injects_local_files_and_shadows_upstream() {
-    let local = File {
-        filename: "demo-2.0-py3-none-any.whl".to_owned(),
-        url: "/root/pypi/files/dd44/demo-2.0-py3-none-any.whl".to_owned(),
-        hashes: std::collections::BTreeMap::from([("sha256".to_owned(), "dd44".to_owned())]),
-        requires_python: None,
-        size: Some(5),
-        upload_time: None,
-        yanked: Yanked::No,
-        core_metadata: CoreMetadata::Absent,
-        dist_info_metadata: CoreMetadata::Absent,
-        gpg_sig: None,
-        provenance: Provenance::Absent,
-    };
+    let local = local_wheel("demo-2.0-py3-none-any.whl");
     let context = page_context("root/pypi", vec![local], vec!["3.0".to_owned()], &HashMap::new());
     let (out, _) = transform(&upstream_page(), context, 1);
     let detail = parse_detail(out.as_bytes()).unwrap();
@@ -128,6 +148,42 @@ fn test_injects_local_files_and_shadows_upstream() {
     );
     // Versions union, sorted.
     assert_eq!(detail.versions, ["1.0", "2.0", "3.0"]);
+}
+
+#[test]
+fn test_policy_filters_local_files() {
+    let policy = policy(|config| {
+        config.block_package_types = vec![PackageType::Wheel];
+    });
+    let context = build_page_context(
+        "root/pypi",
+        "demo",
+        policy,
+        vec![local_wheel("demo-3.0-py3-none-any.whl")],
+        Vec::new(),
+        &HashMap::new(),
+    );
+
+    let (out, registrations) = transform(r#"{"meta":{"api-version":"1.1"},"name":"demo","files":[]}"#, context, 8);
+
+    let detail = parse_detail(out.as_bytes()).unwrap();
+    assert!(detail.files.is_empty());
+    assert!(registrations.is_empty());
+}
+
+#[test]
+fn test_policy_filters_upstream_files() {
+    let policy = policy(|config| {
+        config.block_package_types = vec![PackageType::Wheel];
+    });
+    let context = build_page_context("root/pypi", "demo", policy, Vec::new(), Vec::new(), &HashMap::new());
+
+    let (out, registrations) = transform(&upstream_page(), context, 7);
+
+    let detail = parse_detail(out.as_bytes()).unwrap();
+    assert_eq!(detail.files.len(), 1);
+    assert_eq!(detail.files[0].filename, "demo-2.0.tar.gz");
+    assert!(registrations.is_empty());
 }
 
 #[test]

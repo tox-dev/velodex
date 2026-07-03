@@ -20,6 +20,7 @@ use velodex_storage::blob::Digest;
 use velodex_storage::meta::{CachedIndex, MetaScanError};
 
 use crate::path_safety::local_file_url;
+use crate::policy::PolicyAction;
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;
 
@@ -576,11 +577,15 @@ fn cached_detail(
     normalized: &str,
     serve_route: &str,
 ) -> Result<ProjectDetail, SearchError> {
-    match &index.kind {
+    let detail = match &index.kind {
         IndexKind::Mirror(_) => mirror_detail(state, index, normalized, serve_route),
         IndexKind::Local { .. } => local_detail(state, &index.name, normalized, serve_route),
         IndexKind::Overlay { layers, upload } => overlay_detail(state, layers, *upload, normalized, serve_route),
-    }
+    }?;
+    Ok(index
+        .policy
+        .apply_detail(PolicyAction::Serve, normalized, detail)
+        .unwrap_or_else(|_| empty_detail(normalized)))
 }
 
 fn mirror_detail(

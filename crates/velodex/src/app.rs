@@ -6,13 +6,17 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, bail};
-use velodex_core::pypi::{CoreMetadata, normalize_name, parse_detail};
+use velodex_core::pypi::{CoreMetadata, ProjectDetail, normalize_name, parse_detail};
 use velodex_http::discovery::{BaseUrl, SnippetKind, snippet_text};
+use velodex_http::policy::{PolicyAction, PolicyDenial};
 use velodex_http::upload::Uploaded;
 use velodex_storage::blob::{BlobEntry, BlobStore, Digest};
 use velodex_storage::meta::{CachedIndex, MetaStore, ProjectCachePurgeCounts};
 
-use crate::cli::{CacheCommand, CacheListArgs, CachePurgeCommand, CachePurgeOrphanedBlobsArgs, CachePurgeProjectArgs};
+use crate::cli::{
+    CacheCommand, CacheListArgs, CachePurgeCommand, CachePurgeOrphanedBlobsArgs, CachePurgeProjectArgs, PolicyCommand,
+    PolicyDryRunArgs,
+};
 use crate::config::Config;
 use crate::server;
 
@@ -64,6 +68,103 @@ pub fn config_snippet(config: &Config, route: &str, base_url: &str, kind: Snippe
 /// Returns an error if the metadata store or blob store cannot be read, or if output fails.
 pub fn cache(config: &Config, command: &CacheCommand, out: &mut dyn Write) -> anyhow::Result<()> {
     cache_at(config, command, unix_now(), out)
+}
+
+/// Run a policy inspection command.
+///
+/// # Errors
+/// Returns an error if configured indexes cannot be built, the metadata store cannot be read, or
+/// output fails.
+pub fn policy(config: &Config, command: &PolicyCommand, out: &mut dyn Write) -> anyhow::Result<()> {
+    let stores = CacheStores::open(config)?;
+    let indexes = server::build_indexes(&config.indexes)?;
+    match command {
+        PolicyCommand::DryRun(args) => policy_dry_run(config, &stores, &indexes, args, out),
+    }
+}
+
+fn policy_dry_run(
+    config: &Config,
+    stores: &CacheStores,
+    indexes: &[velodex_http::Index],
+    args: &PolicyDryRunArgs,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    writeln!(out, "action\tindex\tproject\tfilename\tversion\trule\tfield\treason")?;
+    let names = index_names(config);
+    let project_filter = args.project.as_deref().map(normalize_name);
+    stores
+        .meta
+        .scan_index_records(|key, bytes| {
+            let (index_name, project) = split_page_key(key, &names);
+            let Some(index) = matching_policy_index(indexes, &index_name, args.index.as_deref()) else {
+                return Ok::<(), std::io::Error>(());
+            };
+            if project_filter
+                .as_deref()
+                .is_some_and(|filter| filter != project.as_str())
+            {
+                return Ok::<(), std::io::Error>(());
+            }
+            let record = CachedIndex::decode(bytes).map_err(std::io::Error::other)?;
+            let parsed = parse_detail(&record.body).map_err(std::io::Error::other)?;
+            let detail = ProjectDetail {
+                meta: parsed.meta,
+                name: project,
+                versions: parsed.versions,
+                files: parsed.files,
+            };
+            for denial in index.policy.preview_detail(PolicyAction::Serve, &detail) {
+                write_policy_denial(out, &index.name, &denial)?;
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .context("scan cached index records")?;
+    stores
+        .meta
+        .scan_upload_records(|key, bytes| {
+            let Some((index_name, project, _filename)) = upload_key_parts(key, &names) else {
+                return Ok::<(), std::io::Error>(());
+            };
+            let Some(index) = matching_policy_index(indexes, &index_name, args.index.as_deref()) else {
+                return Ok::<(), std::io::Error>(());
+            };
+            if project_filter.as_deref().is_some_and(|filter| filter != project) {
+                return Ok::<(), std::io::Error>(());
+            }
+            let uploaded: Uploaded = serde_json::from_slice(bytes).map_err(std::io::Error::other)?;
+            if let Err(denial) = index.policy.check_file(PolicyAction::Upload, project, &uploaded.file) {
+                write_policy_denial(out, &index.name, &denial)?;
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .context("scan upload records")?;
+    Ok(())
+}
+
+fn matching_policy_index<'a>(
+    indexes: &'a [velodex_http::Index],
+    index_name: &str,
+    filter: Option<&str>,
+) -> Option<&'a velodex_http::Index> {
+    let index = indexes.iter().find(|index| index.name == index_name)?;
+    filter
+        .is_none_or(|filter| filter == index.name || filter == index.route)
+        .then_some(index)
+}
+
+fn write_policy_denial(out: &mut dyn Write, index: &str, denial: &PolicyDenial) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{}\t{index}\t{}\t{}\t{}\t{}\t{}\t{}",
+        denial.action,
+        denial.project,
+        denial.filename.as_deref().unwrap_or(""),
+        denial.version.as_deref().unwrap_or(""),
+        denial.rule,
+        denial.field,
+        denial.reason
+    )
 }
 
 fn cache_at(config: &Config, command: &CacheCommand, now: i64, out: &mut dyn Write) -> anyhow::Result<()> {
@@ -609,7 +710,7 @@ fn index_names(config: &Config) -> Vec<&str> {
 
 fn split_page_key(key: &str, index_names: &[&str]) -> (String, String) {
     for name in index_names {
-        if let Some(project) = key.strip_prefix(&format!("{name}/")) {
+        if let Some(project) = key.strip_prefix(name).and_then(|rest| rest.strip_prefix('/')) {
             return ((*name).to_owned(), project.to_owned());
         }
     }
@@ -617,6 +718,19 @@ fn split_page_key(key: &str, index_names: &[&str]) -> (String, String) {
         || (key.to_owned(), String::new()),
         |(index, project)| (index.to_owned(), project.to_owned()),
     )
+}
+
+fn upload_key_parts<'a>(key: &'a str, index_names: &[&str]) -> Option<(String, &'a str, &'a str)> {
+    for name in index_names {
+        let Some(rest) = key.strip_prefix(name).and_then(|rest| rest.strip_prefix('/')) else {
+            continue;
+        };
+        let (project, filename) = rest.split_once('/')?;
+        return Some(((*name).to_owned(), project, filename));
+    }
+    let (index, rest) = key.split_once('/')?;
+    let (project, filename) = rest.split_once('/')?;
+    Some((index.to_owned(), project, filename))
 }
 
 fn age_secs(now: i64, fetched_at: i64) -> u64 {

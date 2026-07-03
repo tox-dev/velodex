@@ -12,6 +12,7 @@ fn mirror(name: &str, upstream: &str) -> IndexConfig {
     IndexConfig {
         name: name.to_owned(),
         route: name.to_owned(),
+        policy: velodex_http::policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Mirror {
             upstream: upstream.to_owned(),
@@ -27,6 +28,7 @@ fn local(name: &str) -> IndexConfig {
     IndexConfig {
         name: name.to_owned(),
         route: name.to_owned(),
+        policy: velodex_http::policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Local {
             upload_token: None,
@@ -39,6 +41,7 @@ fn overlay(layers: &[&str], upload: Option<&str>) -> IndexConfig {
     IndexConfig {
         name: "team".to_owned(),
         route: "team/dev".to_owned(),
+        policy: velodex_http::policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Overlay {
             layers: layers.iter().map(|&name| name.to_owned()).collect(),
@@ -246,6 +249,14 @@ fn test_build_indexes_rejects_bad_upstream() {
     let err = build_indexes(&[mirror("pypi", "not a url")]).unwrap_err();
     assert!(err.to_string().contains("build mirror index pypi"));
     assert!(err.to_string().contains("<invalid upstream URL>"));
+}
+
+#[test]
+fn test_build_indexes_rejects_invalid_policy() {
+    let mut index = mirror("pypi", "https://pypi.org/simple/");
+    index.policy.allow_versions = Some("not a specifier".to_owned());
+    let err = build_indexes(&[index]).unwrap_err();
+    assert!(err.to_string().contains("compile policy for pypi"));
 }
 
 #[test]

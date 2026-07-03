@@ -54,7 +54,7 @@
           "search"
         ],
         "summary": "Search cached packages",
-        "description": "Searches the derived package index built from cached simple pages, local uploads, and cached core metadata. `q` uses substring matching; prefix it with `re:` for a regex. Results are sorted by display name and paged without collecting every match.",
+        "description": "Searches the derived package index built from cached simple pages, local uploads, and cached core metadata. `q` uses substring matching; prefix it with `re:` for a regex. Repository policy removes denied packages before indexing. Results are sorted by display name and paged without collecting every match.",
         "parameters": [
           {
             "name": "q",
@@ -360,7 +360,20 @@
             "description": "Missing or wrong token"
           },
           "403": {
-            "description": "Uploads disabled: the local index has no `upload_token`, or project status rejects uploads"
+            "description": "Uploads disabled, project status rejects uploads, or repository policy denied the upload",
+            "content": {
+              "application/json": {
+                "example": {
+                  "action": "upload",
+                  "field": "size",
+                  "filename": "flask-1.0-py3-none-any.whl",
+                  "project": "flask",
+                  "reason": "file size 2048 exceeds limit 1024",
+                  "rule": "max-file-size",
+                  "version": "1.0"
+                }
+              }
+            }
           },
           "405": {
             "description": "The route's index has no writable local layer"
@@ -449,7 +462,7 @@
           "search"
         ],
         "summary": "Search one index route",
-        "description": "Searches the derived package index built from cached simple pages, local uploads, and cached core metadata. `q` uses substring matching; prefix it with `re:` for a regex. Results are sorted by display name and paged without collecting every match.",
+        "description": "Searches the derived package index built from cached simple pages, local uploads, and cached core metadata. `q` uses substring matching; prefix it with `re:` for a regex. Repository policy removes denied packages before indexing. Results are sorted by display name and paged without collecting every match.",
         "parameters": [
           {
             "name": "q",
@@ -566,7 +579,20 @@
             "description": "The digest is not 64 lowercase hex, or the filename is not a safe path segment"
           },
           "403": {
-            "description": "Project status does not allow downloads"
+            "description": "Project status or repository policy does not allow downloads",
+            "content": {
+              "application/json": {
+                "example": {
+                  "action": "serve",
+                  "field": "size",
+                  "filename": "flask-1.0-py3-none-any.whl",
+                  "project": "flask",
+                  "reason": "file size 2048 exceeds limit 1024",
+                  "rule": "max-file-size",
+                  "version": "1.0"
+                }
+              }
+            }
           },
           "404": {
             "description": "No file with this digest is known"
@@ -617,7 +643,20 @@
             }
           },
           "403": {
-            "description": "Project status does not allow downloads"
+            "description": "Project status or repository policy does not allow downloads",
+            "content": {
+              "application/json": {
+                "example": {
+                  "action": "serve",
+                  "field": "size",
+                  "filename": "flask-1.0-py3-none-any.whl",
+                  "project": "flask",
+                  "reason": "file size 2048 exceeds limit 1024",
+                  "rule": "max-file-size",
+                  "version": "1.0"
+                }
+              }
+            }
           },
           "404": {
             "description": "The artifact has no known metadata sibling"
@@ -801,7 +840,7 @@
           "simple"
         ],
         "summary": "List projects",
-        "description": "The projects velodex has observed on this index: everything uploaded, plus every mirrored project a client has asked for. An overlay unions its layers. JSON or HTML by `Accept`.",
+        "description": "The projects velodex has observed on this index: everything uploaded, plus every mirrored project a client has asked for. An overlay unions its layers. Repository policy filters denied projects before serialization. JSON or HTML by `Accept`.",
         "parameters": [
           {
             "name": "route",
@@ -851,7 +890,7 @@
           "simple"
         ],
         "summary": "Project detail",
-        "description": "All files of one project, merged across overlay layers (first match per filename wins, versions union). File URLs point back at velodex's own `files/` route; `core-metadata` advertises the PEP 658 sibling.",
+        "description": "All files of one project, merged across overlay layers (first match per filename wins, versions union). File URLs point back at velodex's own `files/` route; `core-metadata` advertises the PEP 658 sibling. Repository policy filters denied files and their versions before serialization.",
         "parameters": [
           {
             "name": "route",
@@ -910,6 +949,22 @@
                   "versions": [
                     "1.0"
                   ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Repository policy denied the project detail",
+            "content": {
+              "application/json": {
+                "example": {
+                  "action": "serve",
+                  "field": "size",
+                  "filename": "flask-1.0-py3-none-any.whl",
+                  "project": "flask",
+                  "reason": "file size 2048 exceeds limit 1024",
+                  "rule": "max-file-size",
+                  "version": "1.0"
                 }
               }
             }

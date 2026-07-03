@@ -2,12 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use velodex_storage::blob::Digest;
+use velodex_storage::meta::CachedIndex;
 use wiremock::matchers::{header as match_header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::http_tests::{detail_json, get, harness};
+use super::http_tests::{detail_json, get, harness, harness_with_policies};
 use super::{LogCapture, field};
 use crate::cache::refresh_stale_pages;
+use crate::policy::{Policy, PolicyConfig};
 
 async fn mount_page(server: &MockServer, body: String, template: ResponseTemplate) {
     Mock::given(method("GET"))
@@ -31,6 +33,12 @@ fn settle(state: &Arc<crate::state::AppState>, field: &str, want: u64) {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     panic!("metric {field} never reached {want}");
+}
+
+fn policy(configure: impl FnOnce(&mut PolicyConfig)) -> Policy {
+    let mut config = PolicyConfig::default();
+    configure(&mut config);
+    Policy::compile(&config).unwrap()
 }
 
 #[tokio::test]
@@ -65,6 +73,45 @@ async fn test_refresh_sweep_detects_changed_page() {
     h.server.reset().await;
     let (_, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     assert!(body.contains(new_digest.as_str()));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_refresh_sweep_skips_policy_denied_project() {
+    let mirror_policy = policy(|policy| {
+        policy.block_projects = vec!["flask".to_owned()];
+    });
+    let h = harness_with_policies(true, true, mirror_policy, Policy::default(), Policy::default()).await;
+    let digest = Digest::of(b"wheel");
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    h.state
+        .meta
+        .put_index(
+            "pypi/flask",
+            &CachedIndex {
+                etag: None,
+                last_serial: None,
+                fetched_at_unix: 0,
+                content_type: Some("application/vnd.pypi.simple.v1+json".to_owned()),
+                fresh_secs: Some(1),
+                body: detail_json(digest.as_str(), &file_url).into_bytes(),
+            },
+        )
+        .unwrap();
+    let logs = LogCapture::default();
+    let guard = logs.install();
+
+    let summary = refresh_stale_pages(&h.state).await.unwrap();
+
+    drop(guard);
+    assert_eq!(summary, crate::cache::RefreshSummary::default());
+    let events = logs.security_events();
+    let sync = events
+        .iter()
+        .find(|event| field(event, "action") == Some("mirror_sync") && field(event, "result") == Some("denied"))
+        .unwrap();
+    assert_eq!(field(sync, "repository"), Some("pypi"));
+    assert_eq!(field(sync, "project"), Some("flask"));
+    assert_eq!(field(sync, "reason"), Some("project \"flask\" is blocked"));
 }
 
 #[tokio::test(flavor = "current_thread")]

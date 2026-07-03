@@ -33,6 +33,7 @@ upload tokens, upstream passwords, bearer tokens, URL user info, URL queries, or
 
 The header search box starts suggesting packages after two characters. Suggestions and the full `/search` page use the
 same `GET /+search` API, so hosted uploads, cached upstream pages, and overlay overrides rank from one indexed view.
+Repository policy filters search results before they reach the UI.
 
 `/search` keeps `q`, `type`, `page`, and `page_size` in the URL. The `type` filter accepts hosted, upstream, and
 upstream-overrides packages; the UI labels the last one as `Upstream+`. Page size choices are 25, 50, and 100, and the

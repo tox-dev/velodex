@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::http_tests::{detail_json, get, harness};
 use crate::cache::{self, PageOutcome};
+use crate::policy::{Policy, PolicyAction, PolicyConfig};
 use crate::state::{AppState, Index, IndexKind};
 
 fn fresh_record(body: &[u8]) -> CachedIndex {
@@ -273,6 +274,18 @@ fn test_cache_error_user_message_describes_store_and_policy_errors() {
         cache::CacheError::FileExists("pkg-1.0.whl".to_owned()).user_message(),
         "file \"pkg-1.0.whl\" already exists with different content"
     );
+    let config = PolicyConfig {
+        block_projects: vec!["flask".to_owned()],
+        ..PolicyConfig::default()
+    };
+    let denial = Policy::compile(&config)
+        .unwrap()
+        .check_project(PolicyAction::Serve, "flask")
+        .unwrap_err();
+    assert_eq!(
+        cache::CacheError::Policy(denial).user_message(),
+        "project \"flask\" is blocked"
+    );
 }
 
 #[tokio::test]
@@ -415,16 +428,19 @@ async fn test_overlay_with_two_mirrors_serves_buffered() {
             Index {
                 name: "a".to_owned(),
                 route: "a".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Mirror(client.clone()),
             },
             Index {
                 name: "b".to_owned(),
                 route: "b".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Mirror(client),
             },
             Index {
                 name: "both".to_owned(),
                 route: "both".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Overlay {
                     layers: vec![0, 1],
                     upload: None,
@@ -451,11 +467,13 @@ async fn test_overlay_nesting_an_overlay_serves_buffered() {
             Index {
                 name: "a".to_owned(),
                 route: "a".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Mirror(client),
             },
             Index {
                 name: "inner".to_owned(),
                 route: "inner".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Overlay {
                     layers: vec![0],
                     upload: None,
@@ -464,6 +482,7 @@ async fn test_overlay_nesting_an_overlay_serves_buffered() {
             Index {
                 name: "outer".to_owned(),
                 route: "outer".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Overlay {
                     layers: vec![1],
                     upload: None,
@@ -484,6 +503,7 @@ async fn test_overlay_without_a_mirror_serves_buffered() {
             Index {
                 name: "local".to_owned(),
                 route: "local".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Local {
                     upload_token: None,
                     volatile: true,
@@ -492,6 +512,7 @@ async fn test_overlay_without_a_mirror_serves_buffered() {
             Index {
                 name: "only".to_owned(),
                 route: "only".to_owned(),
+                policy: crate::policy::Policy::default(),
                 kind: IndexKind::Overlay {
                     layers: vec![0],
                     upload: Some(0),
@@ -590,6 +611,7 @@ async fn test_json_meta_preflight_streams_without_remainder() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: crate::policy::Policy::default(),
             kind: IndexKind::Mirror(client),
         }]
     });
@@ -804,6 +826,7 @@ async fn test_live_stream_forwards_a_broken_upstream_transfer() {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: crate::policy::Policy::default(),
             kind: IndexKind::Mirror(client),
         }]
     });

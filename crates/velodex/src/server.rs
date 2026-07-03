@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use axum::Router;
+use velodex_http::policy::Policy;
 use velodex_http::webhook::{WebhookRuntime, WebhookTargetConfig};
 use velodex_http::{AppState, Index, IndexKind, RuntimeOptions, path_safety, router, webhook};
 use velodex_storage::blob::BlobStore;
@@ -90,6 +91,7 @@ pub(crate) fn build_indexes(configs: &[IndexConfig]) -> anyhow::Result<Vec<Index
                 name: index.name.clone(),
                 route: index.route.clone(),
                 kind: build_kind(index, configs, &positions)?,
+                policy: Policy::compile(&index.policy).with_context(|| format!("compile policy for {}", index.name))?,
             })
         })
         .collect()

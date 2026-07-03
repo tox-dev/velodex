@@ -53,6 +53,9 @@ pub enum Command {
     Restore(RestoreArgs),
     /// Import local wheels and sdists into a hosted repository.
     ImportDir(ImportDirArgs),
+    /// Preview repository policy decisions against cached records.
+    #[command(subcommand)]
+    Policy(PolicyCommand),
     /// Print the `OpenAPI` description of the HTTP API as JSON.
     Openapi,
     /// Manage this velodex installation.
@@ -81,6 +84,37 @@ pub enum CacheCommand {
     /// Plan or run cache cleanup.
     #[command(subcommand)]
     Purge(CachePurgeCommand),
+}
+
+/// Repository policy commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum PolicyCommand {
+    /// Report cached projects and files the configured policy would block.
+    DryRun(PolicyDryRunArgs),
+}
+
+impl PolicyCommand {
+    #[must_use]
+    pub const fn runtime_args(&self) -> &RuntimeArgs {
+        match self {
+            Self::DryRun(args) => &args.runtime,
+        }
+    }
+}
+
+/// Options for policy dry-run output.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct PolicyDryRunArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+
+    /// Only report this index name or route.
+    #[arg(long)]
+    pub index: Option<String>,
+
+    /// Only report this project.
+    #[arg(long)]
+    pub project: Option<String>,
 }
 
 impl CacheCommand {

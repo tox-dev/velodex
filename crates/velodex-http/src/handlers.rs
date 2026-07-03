@@ -26,6 +26,7 @@ use crate::cache::{self, CacheError, PageOutcome};
 use crate::discovery::{self, BaseUrl};
 use crate::metrics::Event;
 use crate::path_safety::{self, PathSafetyError};
+use crate::policy::{PolicyAction, PolicyDenial};
 use crate::search::{SearchError, SearchParams};
 use crate::state::{AppState, Index, IndexKind, describe_index};
 use crate::upload::{self, StagedUpload, UploadError, UploadForm};
@@ -338,6 +339,9 @@ async fn file_route(state: &Arc<AppState>, index: &Index, file: &str) -> Respons
         Ok(filename) => filename,
         Err(err) => return path_error_response(&err),
     };
+    if let Some(response) = download_policy_response(state, index, &filename, &digest) {
+        return response;
+    }
     match cache::download_status(state, index, &filename) {
         Ok(status) if !status.offers_downloads() => {
             return (
@@ -367,6 +371,21 @@ async fn file_route(state: &Arc<AppState>, index: &Index, file: &str) -> Respons
         );
     }
     serve_blob(state, route, &filename, digest).await
+}
+
+fn download_policy_response(state: &AppState, index: &Index, filename: &str, digest: &Digest) -> Option<Response> {
+    let size = if state.blobs.exists(digest) {
+        std::fs::metadata(state.blobs.path_for(digest))
+            .ok()
+            .map(|metadata| metadata.len())
+    } else {
+        cache::registered_file_size(state, digest).ok().flatten()
+    };
+    index
+        .policy
+        .check_download(PolicyAction::Serve, filename, size)
+        .err()
+        .map(|denial| policy_denial_response(&denial))
 }
 
 fn safe_filename(raw: &str) -> Result<String, PathSafetyError> {
@@ -534,6 +553,14 @@ async fn accept_upload(
         filename: &filename,
         digest: &digest,
     };
+    if let Some(block) = upload_policy_response(index, &prepared, &audit) {
+        return block;
+    }
+    if local.name != index.name
+        && let Some(block) = upload_policy_response(local, &prepared, &audit)
+    {
+        return block;
+    }
     if let Some(block) = upload_status_response(
         cache::project_status(state, index, &project).await,
         &index.route,
@@ -543,6 +570,33 @@ async fn accept_upload(
         return block.response;
     }
     upload_store_response(state, &audit, cache::store_upload(state, &local.name, prepared))
+}
+
+fn upload_policy_response(
+    index: &Index,
+    prepared: &upload::PreparedUpload,
+    audit: &UploadAudit<'_>,
+) -> Option<Response> {
+    index
+        .policy
+        .check_file(PolicyAction::Upload, &prepared.normalized, &prepared.record.file)
+        .err()
+        .map(|denial| {
+            security_upload_event(
+                audit.headers,
+                audit.actor.as_deref(),
+                audit.route,
+                Some(audit.local),
+                "denied",
+            )
+            .project(Some(audit.project))
+            .version(Some(audit.version))
+            .filename(Some(audit.filename))
+            .digest(Some(audit.digest))
+            .reason(Some(&denial.reason))
+            .emit();
+            policy_denial_response(&denial)
+        })
 }
 
 struct UploadAudit<'a> {
@@ -1359,6 +1413,9 @@ impl<'a> CacheContext<'a> {
 }
 
 fn cache_error_response(err: &CacheError, context: CacheContext<'_>) -> Response {
+    if let CacheError::Policy(denial) = err {
+        return policy_denial_response(denial);
+    }
     if let CacheError::RateLimited { retry_after } = err {
         let mut response = (cache_error_status(err, &context), cache_error_message(err, context)).into_response();
         response.headers_mut().insert(
@@ -1370,12 +1427,21 @@ fn cache_error_response(err: &CacheError, context: CacheContext<'_>) -> Response
     (cache_error_status(err, &context), cache_error_message(err, context)).into_response()
 }
 
+fn policy_denial_response(denial: &PolicyDenial) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_vec(denial).expect("policy denial always serializes"),
+    )
+        .into_response()
+}
+
 fn cache_error_status(err: &CacheError, context: &CacheContext<'_>) -> StatusCode {
     match err {
         CacheError::Meta(_) | CacheError::Blob(_) | CacheError::MissingSha256(_) => StatusCode::INTERNAL_SERVER_ERROR,
         CacheError::FileNotFound | CacheError::NoPromotableFiles { .. } => StatusCode::NOT_FOUND,
         CacheError::FileExists(_) => StatusCode::CONFLICT,
-        CacheError::NotVolatile => StatusCode::FORBIDDEN,
+        CacheError::NotVolatile | CacheError::Policy(_) => StatusCode::FORBIDDEN,
         CacheError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
         CacheError::Parse(_) if matches!(context.operation, "upload storage" | "file removal" | "promotion") => {
             StatusCode::INTERNAL_SERVER_ERROR

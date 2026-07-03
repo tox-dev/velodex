@@ -12,12 +12,17 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use velodex_core::pypi::{CoreMetadata, File, Yanked, parse_meta, to_json};
 
 use crate::path_safety::local_file_url;
+use crate::policy::{Policy, PolicyAction};
 
 /// Per-request configuration: how to rewrite and merge one page.
 #[derive(Debug, Default, Clone)]
 pub struct PageContext {
     /// The route file URLs point back at, for example `root/pypi`.
     pub route: String,
+    /// The normalized project name this page serves.
+    pub project: String,
+    /// The compiled policy for the route being served.
+    pub policy: Policy,
     /// Locally uploaded files, emitted ahead of the upstream ones (their URLs are already local).
     pub local_files: Vec<File>,
     /// Locally known versions, merged into the upstream version list.
@@ -36,6 +41,7 @@ pub struct Registration {
     pub filename: String,
     pub sha256: String,
     pub url: String,
+    pub size: Option<u64>,
     /// `(sibling url, metadata sha256)` when the file advertises PEP 658 metadata.
     pub metadata: Option<(String, String)>,
 }
@@ -411,6 +417,14 @@ impl PageTransformer {
             return;
         }
         for file in &self.context.local_files {
+            if self
+                .context
+                .policy
+                .check_file(PolicyAction::Serve, &self.context.project, file)
+                .is_err()
+            {
+                continue;
+            }
             if self.emitted_in_array {
                 out.push(b',');
             }
@@ -426,6 +440,14 @@ impl PageTransformer {
             return Ok(());
         }
         if self.context.skip.contains(&file.filename) {
+            return Ok(());
+        }
+        if self
+            .context
+            .policy
+            .check_file(PolicyAction::Serve, &self.context.project, &file)
+            .is_err()
+        {
             return Ok(());
         }
         if let Some(yanked) = self.context.yanked.get(&file.filename) {
@@ -458,6 +480,7 @@ impl PageTransformer {
                 filename: file.filename.clone(),
                 sha256: sha256.clone(),
                 url: file.url.clone(),
+                size: file.size,
                 metadata,
             });
             if file.metadata().is_absent()
@@ -521,6 +544,8 @@ fn supports_metadata_sibling(filename: &str) -> bool {
 #[must_use]
 pub fn page_context<S: std::hash::BuildHasher>(
     route: &str,
+    project: &str,
+    policy: Policy,
     local_files: Vec<File>,
     local_versions: Vec<String>,
     overrides: &HashMap<String, String, S>,
@@ -540,6 +565,8 @@ pub fn page_context<S: std::hash::BuildHasher>(
     }
     PageContext {
         route: route.to_owned(),
+        project: project.to_owned(),
+        policy,
         local_files,
         local_versions,
         skip,

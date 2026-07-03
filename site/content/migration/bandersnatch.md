@@ -21,13 +21,14 @@ packages besides. bandersnatch's filter plugins narrow the terabytes; a cache re
 
 ## The renames
 
-| bandersnatch                                  | velodex                                             |
-| --------------------------------------------- | --------------------------------------------------- |
-| `bandersnatch mirror` on a timer              | nothing: the cache populates on request             |
-| `/etc/bandersnatch.conf` `[mirror] directory` | `data_dir`                                          |
-| `allowlist_project` / requirements filters    | the working set defines itself; lock files bound it |
-| nginx serving `web/`                          | built-in server                                     |
-| `--force-check` full re-sync                  | delete `data_dir` (worst case: a refetch)           |
+| bandersnatch                                  | velodex                                            |
+| --------------------------------------------- | -------------------------------------------------- |
+| `bandersnatch mirror` on a timer              | nothing: the cache populates on request            |
+| `/etc/bandersnatch.conf` `[mirror] directory` | `data_dir`                                         |
+| `allowlist_project` / requirements filters    | `[index.policy]` project rules, or the working set |
+| platform and Python wheel filters             | `[index.policy]` wheel tag rules                   |
+| nginx serving `web/`                          | built-in server                                    |
+| `--force-check` full re-sync                  | delete `data_dir` (worst case: a refetch)          |
 
 ## Pitfalls
 
@@ -35,5 +36,5 @@ packages besides. bandersnatch's filter plugins narrow the terabytes; a cache re
   [carry the data directory across](@/guides/air-gapped.md).
 - "Every package, guaranteed present" is bandersnatch's contract, not velodex's; if an auditor requires the full index
   offline, stay with the mirror.
-- bandersnatch's platform filters (drop Windows wheels, old Pythons) shrink a mirror; velodex has no equivalent because
-  it only ever stores what was asked for.
+- bandersnatch can prebuild a filtered filesystem mirror. velodex applies policy when it serves, mirrors, caches, or
+  accepts an upload; a cold cache still warms on first allowed request.

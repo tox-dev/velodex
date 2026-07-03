@@ -286,7 +286,8 @@ fn package_search(scoped: bool) -> OperationBuilder {
         .description(Some(
             "Searches the derived package index built from cached simple pages, local uploads, \
              and cached core metadata. `q` uses substring matching; prefix it with `re:` for a \
-             regex. Results are sorted by display name and paged without collecting every match.",
+             regex. Repository policy removes denied packages before indexing. Results are sorted \
+             by display name and paged without collecting every match.",
         ))
         .parameter(query_param(
             "q",
@@ -332,6 +333,21 @@ fn package_search(scoped: bool) -> OperationBuilder {
         operation = operation.parameter(route_param());
     }
     operation
+}
+
+fn policy_denial_response(description: &str, action: &str) -> ResponseBuilder {
+    api_json_response(
+        description,
+        json!({
+            "action": action,
+            "project": "flask",
+            "filename": "flask-1.0-py3-none-any.whl",
+            "version": "1.0",
+            "rule": "max-file-size",
+            "field": "size",
+            "reason": "file size 2048 exceeds limit 1024"
+        }),
+    )
 }
 
 fn index_discovery() -> OperationBuilder {
@@ -423,7 +439,8 @@ fn project_list() -> OperationBuilder {
         .summary(Some("List projects"))
         .description(Some(
             "The projects velodex has observed on this index: everything uploaded, plus every mirrored \
-             project a client has asked for. An overlay unions its layers. JSON or HTML by `Accept`.",
+             project a client has asked for. An overlay unions its layers. Repository policy filters \
+             denied projects before serialization. JSON or HTML by `Accept`.",
         ))
         .parameter(route_param())
         .parameter(accept_param())
@@ -447,7 +464,8 @@ fn project_detail() -> OperationBuilder {
         .description(Some(
             "All files of one project, merged across overlay layers (first match per filename wins, \
              versions union). File URLs point back at velodex's own `files/` route; `core-metadata` \
-             advertises the PEP 658 sibling.",
+             advertises the PEP 658 sibling. Repository policy filters denied files and their \
+             versions before serialization.",
         ))
         .parameter(route_param())
         .parameter(project_param())
@@ -475,6 +493,10 @@ fn project_detail() -> OperationBuilder {
                     }]
                 }),
             ),
+        )
+        .response(
+            "403",
+            policy_denial_response("Repository policy denied the project detail", "serve"),
         )
         .response("404", ResponseBuilder::new().description("No layer of this index has the project"))
         .response("502", ResponseBuilder::new().description("The upstream failed and nothing is cached"))
@@ -634,7 +656,7 @@ fn file_download() -> OperationBuilder {
         )
         .response(
             "403",
-            ResponseBuilder::new().description("Project status does not allow downloads"),
+            policy_denial_response("Project status or repository policy does not allow downloads", "serve"),
         )
         .response(
             "502",
@@ -669,7 +691,7 @@ fn metadata_download() -> OperationBuilder {
         )
         .response(
             "403",
-            ResponseBuilder::new().description("Project status does not allow downloads"),
+            policy_denial_response("Project status or repository policy does not allow downloads", "serve"),
         )
 }
 
@@ -743,8 +765,9 @@ fn upload() -> OperationBuilder {
         .response("401", ResponseBuilder::new().description("Missing or wrong token"))
         .response(
             "403",
-            ResponseBuilder::new().description(
-                "Uploads disabled: the local index has no `upload_token`, or project status rejects uploads",
+            policy_denial_response(
+                "Uploads disabled, project status rejects uploads, or repository policy denied the upload",
+                "upload",
             ),
         )
         .response(

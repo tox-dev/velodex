@@ -10,6 +10,7 @@ use velodex_storage::meta::MetaStore;
 use velodex_upstream::UpstreamClient;
 
 use crate::metrics::Metrics;
+use crate::policy::Policy;
 use crate::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RateLimiter, UpstreamLimits};
 use crate::search::{PackageSearch, SearchError};
 use crate::webhook::WebhookRuntime;
@@ -25,6 +26,7 @@ pub struct Index {
     pub name: String,
     pub route: String,
     pub kind: IndexKind,
+    pub policy: Policy,
 }
 
 /// The runtime shape of an index: a mirror owns its upstream client, a local store its upload

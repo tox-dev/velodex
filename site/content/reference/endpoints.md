@@ -47,6 +47,30 @@ size, and `requires_python` match the Simple API. Simple pages do not carry PyPI
 database, ownership data, download counts, last serial values, or MD5/BLAKE2 hashes when the upstream did not advertise
 them; those fields are null, empty, `0`, or `-1`.
 
+## Repository policy
+
+Policy rules configured under `[index.policy]` run before Simple API bytes leave the server. Project-list responses omit
+blocked projects. Project-detail responses omit blocked files and remove their versions from PEP 691 `versions`; when a
+project-level rule blocks the whole page, the response is `403` with a JSON policy denial. Search results use the same
+effective policy before packages enter the derived search index.
+
+Upload and direct file-download denials use the same JSON shape:
+
+```json
+{
+  "action": "upload",
+  "project": "flask",
+  "filename": "flask-1.0-py3-none-any.whl",
+  "version": "1.0",
+  "rule": "max-file-size",
+  "field": "size",
+  "reason": "file size 2048 exceeds limit 1024"
+}
+```
+
+`action` is one of `upload`, `mirror`, or `serve`. `rule` names the policy key that denied the artifact or project, and
+`field` names the matched value.
+
 ## Discovery
 
 `GET /+api` returns a compact JSON document for the server and every configured index. `GET /{route}/+api` returns the
@@ -70,7 +94,8 @@ index; the username is ignored. Promotion authenticates against the target route
 - `200`: accepted; removal responses state how many files changed.
 - `400`: malformed upload, bad promotion query, or unsafe path segment.
 - `401`: missing or wrong token.
-- `403`: uploads disabled, target project status rejects writes, or the index is not volatile.
+- `403`: uploads disabled, target project status rejects writes, repository policy denies the request, or the index is
+  not volatile.
 - `404`: unknown route, project, or nothing matched.
 - `405`: the route's index does not accept writes.
 - `409`: promotion target already has the filename with different bytes.

@@ -24,6 +24,8 @@ pub struct DistributionFilename {
     pub name: String,
     pub normalized_name: String,
     pub version: Version,
+    pub python_tag: Option<String>,
+    pub platform_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +103,8 @@ fn parsed<const N: usize>(
         name: name.to_owned(),
         normalized_name: normalize_name(name),
         version,
+        python_tag: tags.first().map(|tag| (*tag).to_owned()),
+        platform_tag: tags.get(2).map(|tag| (*tag).to_owned()),
     })
 }
 

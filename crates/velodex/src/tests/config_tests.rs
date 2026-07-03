@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use velodex_http::policy::PackageType;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 
 use crate::config::{
@@ -146,6 +147,30 @@ fn test_mirror_upstream_concurrency_defaults() {
 }
 
 #[test]
+fn test_index_policy_from_toml() {
+    let text = "\
+[[index]]\nname = \"pypi\"\nmirror = \"https://pypi.org/simple/\"\n\
+[index.policy]\nallow_projects = [\"Flask\"]\nblock_projects = [\"bad-pkg\"]\nallow_versions = \">=1,<2\"\n\
+allow_package_types = [\"wheel\"]\nblock_package_types = [\"sdist\"]\n\
+allow_wheel_pythons = [\"py3\"]\nblock_wheel_pythons = [\"py2\"]\n\
+allow_wheel_platforms = [\"any\"]\nblock_wheel_platforms = [\"win_amd64\"]\n\
+max_file_size_bytes = 1048576\nmax_project_size_bytes = 10485760\n";
+    let config = toml_config(text);
+    let policy = &config.indexes[0].policy;
+    assert_eq!(policy.allow_projects, ["Flask"]);
+    assert_eq!(policy.block_projects, ["bad-pkg"]);
+    assert_eq!(policy.allow_versions.as_deref(), Some(">=1,<2"));
+    assert_eq!(policy.allow_package_types, [PackageType::Wheel]);
+    assert_eq!(policy.block_package_types, [PackageType::Sdist]);
+    assert_eq!(policy.allow_wheel_pythons, ["py3"]);
+    assert_eq!(policy.block_wheel_pythons, ["py2"]);
+    assert_eq!(policy.allow_wheel_platforms, ["any"]);
+    assert_eq!(policy.block_wheel_platforms, ["win_amd64"]);
+    assert_eq!(policy.max_file_size_bytes, Some(1_048_576));
+    assert_eq!(policy.max_project_size_bytes, Some(10_485_760));
+}
+
+#[test]
 fn test_index_without_kind_is_error() {
     let partial = config::from_toml(PathBuf::from("x.toml"), "[[index]]\nname = \"bad\"\n").unwrap();
     let err = Config::default().apply(partial).unwrap_err();
@@ -203,6 +228,16 @@ fn test_from_toml_rejects_unknown_key() {
 #[test]
 fn test_from_toml_rejects_unknown_index_key() {
     assert!(config::from_toml(PathBuf::from("x.toml"), "[[index]]\nname = \"a\"\nbogus = 1\n").is_err());
+}
+
+#[test]
+fn test_from_toml_rejects_unknown_policy_key() {
+    let err = config::from_toml(
+        PathBuf::from("x.toml"),
+        "[[index]]\nname = \"pypi\"\nmirror = \"https://pypi.org/simple/\"\n[index.policy]\nbogus = 1\n",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("bogus"));
 }
 
 #[test]

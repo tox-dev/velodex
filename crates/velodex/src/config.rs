@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use velodex_http::policy::PolicyConfig;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 
 /// A fully resolved configuration.
@@ -32,6 +33,7 @@ pub struct IndexConfig {
     /// URL prefix the index is served under, for example `root/pypi`.
     pub route: String,
     pub kind: IndexKind,
+    pub policy: PolicyConfig,
     pub webhooks: Vec<WebhookConfig>,
 }
 
@@ -98,6 +100,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Mirror {
                 upstream: "https://pypi.org/simple/".to_owned(),
@@ -110,6 +113,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "local".to_owned(),
             route: "local".to_owned(),
+            policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Local {
                 upload_token: None,
@@ -119,6 +123,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "root/pypi".to_owned(),
             route: "root/pypi".to_owned(),
+            policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Overlay {
                 layers: vec!["local".to_owned(), "pypi".to_owned()],
@@ -188,6 +193,7 @@ fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
         name: raw.name,
         route,
         kind,
+        policy: raw.policy,
         webhooks: raw
             .webhooks
             .into_iter()
@@ -310,6 +316,8 @@ pub struct PartialConfig {
 pub struct RawIndex {
     pub name: String,
     pub route: Option<String>,
+    #[serde(default)]
+    pub policy: PolicyConfig,
     pub mirror: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
