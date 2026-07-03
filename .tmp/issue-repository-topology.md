@@ -5,8 +5,8 @@ Make hosted, proxy, and virtual PyPI repositories first-class Velox concepts.
 ## Problem
 
 Velox has local, mirror, and overlay indexes in configuration. Those cover the basic mechanics, but they do not give
-operators a product-level repository model with stable API semantics, member ordering, source precedence, upload routing,
-source visibility, and conflict handling.
+operators a product-level repository model with stable API semantics, member ordering, source precedence, upload
+routing, source visibility, and conflict handling.
 
 That makes later management APIs, policy controls, and UI work harder to define. Operators need a clear answer to which
 repository served a package, which member shadowed another file, and where uploads land when users publish through a

@@ -60,4 +60,5 @@ Those should depend on this issue if we accept them later.
 - Velox enforces policy consistently across upload, mirror ingestion, artifact fetch, and Simple API output.
 - Policy denials return actionable errors and do not leak blocked artifacts through HTML or JSON Simple API responses.
 - Dry-run mode explains what would change before enforcement.
-- Tests cover upload rejection, upstream filtering, wheel tag filtering, size filtering, dry-run output, and pip/uv client behavior.
+- Tests cover upload rejection, upstream filtering, wheel tag filtering, size filtering, dry-run output, and pip/uv
+  client behavior.

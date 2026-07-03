@@ -10,8 +10,8 @@ Velox does not enforce repository size limits or provide a supported cleanup wor
 hosted uploads, read-through cache fetches, mirror syncs, PEP 658 metadata siblings, and failed writes that leave orphan
 blobs.
 
-Operators need cleanup rules that are safe to preview, explain, and apply. Manual deletion can break Simple API output or
-leave metadata pointing at missing blobs.
+Operators need cleanup rules that are safe to preview, explain, and apply. Manual deletion can break Simple API output
+or leave metadata pointing at missing blobs.
 
 ## Competitor reference
 
@@ -69,4 +69,5 @@ References:
 - `cleanup plan` explains every planned deletion and writes no storage changes.
 - `cleanup apply` removes metadata and blobs in an order that keeps the served index consistent.
 - Cleanup can remove orphan blobs left by failed writes.
-- Tests cover dry-run output, hosted retention, cached retention, PEP 440 latest-N ordering, orphan cleanup, and object-storage cleanup.
+- Tests cover dry-run output, hosted retention, cached retention, PEP 440 latest-N ordering, orphan cleanup, and
+  object-storage cleanup.

@@ -5,8 +5,8 @@ Define a security event logging contract for repository actions.
 ## Problem
 
 Velox has operational logs, but it does not define which repository and security actions must be logged or which fields
-must appear on those events. Operators can use Splunk, Humio, Loki, grep, or another log system for queries, but the logs
-need stable fields so those tools can reconstruct what happened.
+must appear on those events. Operators can use Splunk, Humio, Loki, grep, or another log system for queries, but the
+logs need stable fields so those tools can reconstruct what happened.
 
 This issue replaces a separate audit-log store for now. Velox should keep using the existing logging pipeline and make
 the security-relevant events reliable.

@@ -7,8 +7,8 @@ Depends on #28 and #30.
 ## Problem
 
 Velox is a read-through cache. It fetches project pages and artifacts when pip, uv, or a browser asks for them. That
-works for live cache use, but it does not cover restricted networks, air-gapped CI, or teams that want to review a mirror
-set before clients use it.
+works for live cache use, but it does not cover restricted networks, air-gapped CI, or teams that want to review a
+mirror set before clients use it.
 
 Operators also need a clear way to define what they want to mirror. A sync command without a selection model would force
 users to choose between mirroring everything and writing scripts around Velox.

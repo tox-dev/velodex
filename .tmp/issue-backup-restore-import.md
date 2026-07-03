@@ -5,8 +5,8 @@ Add backup, restore, and directory import commands for Velox state.
 ## Problem
 
 Velox can host private uploads and cache upstream artifacts, but it does not provide a supported recovery path for
-metadata and blobs. Operators need to move a Velox instance, recover from disk failure, and import existing package files
-without bypassing validation.
+metadata and blobs. Operators need to move a Velox instance, recover from disk failure, and import existing package
+files without bypassing validation.
 
 Velox remains the serving layer. This issue does not add static mirror serving.
 

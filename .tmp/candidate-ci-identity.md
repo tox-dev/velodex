@@ -2,9 +2,7 @@ Created accepted issue: https://github.com/tox-dev/velodex/issues/34
 
 Candidate 8: CI Identity Publishing
 
-Status: possible new issue
-Priority: P1
-Labels: type:feature, area:auth, area:upload, area:security, area:api
+Status: possible new issue Priority: P1 Labels: type:feature, area:auth, area:upload, area:security, area:api
 
 CI identity publishing lets a CI job publish packages without a long-lived Velox upload token stored as a secret. The CI
 provider sends an OIDC identity token to Velox, Velox verifies it against a configured trusted publisher rule, and Velox
@@ -37,16 +35,20 @@ References:
 
 MVP scope I would propose:
 
-1. Add trusted publisher config for issuer, audience, subject pattern, repository, workflow/environment claims, target Velox repository, and allowed project names.
-2. Add `GET /_/oidc/audience` so publishing actions can discover the expected audience.
-3. Add `POST /_/oidc/mint-token` that verifies an OIDC token and returns a short-lived project-scoped upload token.
-4. Make minted tokens work with twine and uv publish through the existing upload API.
-5. Require scoped upload permission and short expiry for minted tokens.
-6. Log success and failure events through #34.
-7. Add tests with fixture OIDC tokens for accepted issuer, wrong audience, wrong subject, expired token, wrong project, and upload success.
+1. Add trusted publisher config for issuer, audience, subject pattern, repository, workflow/environment claims, target
+   Velox repository, and allowed project names.
+1. Add `GET /_/oidc/audience` so publishing actions can discover the expected audience.
+1. Add `POST /_/oidc/mint-token` that verifies an OIDC token and returns a short-lived project-scoped upload token.
+1. Make minted tokens work with twine and uv publish through the existing upload API.
+1. Require scoped upload permission and short expiry for minted tokens.
+1. Log success and failure events through #34.
+1. Add tests with fixture OIDC tokens for accepted issuer, wrong audience, wrong subject, expired token, wrong project,
+   and upload success.
 
-Out of scope for this issue: user login OIDC, browser SSO, attestation verification, hosted provenance display, and CI-specific UI setup wizards.
+Out of scope for this issue: user login OIDC, browser SSO, attestation verification, hosted provenance display, and
+CI-specific UI setup wizards.
 
-My take: accept if we want Velox to handle production publishing. Defer if upload tokens are enough for the first release.
+My take: accept if we want Velox to handle production publishing. Defer if upload tokens are enough for the first
+release.
 
 Accept, reject, or change scope?
