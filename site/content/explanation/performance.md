@@ -103,6 +103,11 @@ concludes the package does not exist.
 
 {{ bench(file="parallel-install") }}
 
+Run the metadata workload to publish the `metadata` table. It fetches PEP 658 `.metadata` siblings for one package,
+repeats the batch against a hot cache, and measures resolver work without whole-wheel downloads:
+
+`cargo run --release -p velodex-bench -- --skip install --skip pip --skip throughput --skip parallel --skip load`.
+
 The request workload drives a swarm against each warm server: one user, then 32, each a client that fetches project
 pages and reads every byte of the body, the way a resolver does. The pages average ~480 KB, so this row prices full page
 transfers, not header round-trips.

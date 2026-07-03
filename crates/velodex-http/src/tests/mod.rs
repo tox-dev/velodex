@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 mod api_tests;
 mod archive_tests;
+mod conformance_tests;
 mod fanout_tests;
 mod http_tests;
 mod metrics_tests;

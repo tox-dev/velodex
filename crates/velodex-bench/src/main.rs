@@ -1,6 +1,6 @@
 //! Benchmark velodex against direct `PyPI` and competing index servers.
 //!
-//! Four workloads, each a table in the site's TOML report:
+//! Five workloads, each a table in the site's TOML report:
 //!
 //! - **install**: time `uv pip install` and `pip install` of the top `PyPI` packages through each
 //!   server, cold (fresh server state) and warm (the server keeps its cache, the client starts
@@ -9,6 +9,8 @@
 //!   eight-way parallel downloads of it hot.
 //! - **parallel installs**: ten venvs install polars at once with separate client caches, like ten
 //!   CI jobs hitting the same server, cold and warm.
+//! - **metadata**: fetch a batch of PEP 658 metadata siblings cold, then hot, pricing the resolver
+//!   fast path without downloading the whole artifact.
 //! - **load**: request-level throughput, one user and a concurrent swarm, against each warm
 //!   server.
 //!
@@ -46,6 +48,8 @@ enum Part {
     Throughput,
     /// The parallel-CI install workload.
     Parallel,
+    /// The PEP 658 metadata sibling workload.
+    Metadata,
     /// The request swarm workload.
     Load,
 }
@@ -86,6 +90,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if runs(Part::Parallel) {
         workloads::fleet(&servers, &http).await?;
+    }
+    if runs(Part::Metadata) {
+        workloads::metadata(&servers, &http).await?;
     }
     if runs(Part::Load) {
         workloads::load(&servers, &[1, 32], &http).await?;

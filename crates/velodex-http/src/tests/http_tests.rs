@@ -1313,7 +1313,7 @@ fn upload_fields() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn multipart_body(fields: &[(&str, &str)], content: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
+pub(super) fn multipart_body(fields: &[(&str, &str)], content: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
     let contents = content.into_iter().collect::<Vec<_>>();
     multipart_body_with_content_parts(fields, &contents)
 }
@@ -1340,11 +1340,11 @@ fn multipart_body_with_content_parts(fields: &[(&str, &str)], contents: &[(&str,
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
-fn upload_auth() -> String {
+pub(super) fn upload_auth() -> String {
     format!("Basic {}", STANDARD.encode("__token__:s3cret"))
 }
 
-async fn post_upload(
+pub(super) async fn post_upload(
     state: &Arc<AppState>,
     uri: &str,
     auth: Option<&str>,
@@ -1354,7 +1354,7 @@ async fn post_upload(
     post_upload_response(state, uri, auth, content_type, body).await.0
 }
 
-async fn post_upload_response(
+pub(super) async fn post_upload_response(
     state: &Arc<AppState>,
     uri: &str,
     auth: Option<&str>,
@@ -2828,11 +2828,11 @@ async fn test_delete_upstream_on_non_volatile_still_hides() {
     assert_eq!(status, StatusCode::OK);
 }
 
-fn fixture_wheel() -> Vec<u8> {
+pub(super) fn fixture_wheel() -> Vec<u8> {
     fixture_wheel_for("1.0")
 }
 
-fn fixture_sdist() -> Vec<u8> {
+pub(super) fn fixture_sdist() -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::default());

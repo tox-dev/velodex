@@ -19,6 +19,7 @@ serde.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 toml.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

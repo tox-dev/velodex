@@ -1,4 +1,10 @@
 use crate::metrics::{Event, Metrics};
+use axum::http::StatusCode;
+use velodex_storage::blob::Digest;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, ResponseTemplate};
+
+use super::http_tests::{get, harness};
 
 fn settle(metrics: &Metrics, done: impl Fn(&Metrics) -> bool) {
     // The aggregator runs on its own thread; poll until the last event lands.
@@ -112,4 +118,85 @@ fn test_operational_events_aggregate() {
     let projects = metrics.drill(Some("pypi"), None);
     assert_eq!(projects["projects"]["flask"]["refreshes"], 2);
     assert_eq!(projects["projects"]["flask"]["rejected"], 1);
+}
+
+#[tokio::test]
+async fn test_router_paths_feed_stats_and_prometheus_metrics() {
+    let harness = harness().await;
+    let wheel = b"wheelcontent";
+    let metadata = b"Metadata-Version: 2.1\nName: flask\n";
+    let wheel_digest = Digest::of(wheel);
+    let metadata_digest = Digest::of(metadata);
+    let filename = "flask-1.0-py3-none-any.whl";
+    let page = format!(
+        "{{\"meta\":{{\"api-version\":\"1.1\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\
+         \"files\":[{{\"filename\":\"{filename}\",\"url\":\"{}/files/flask.whl\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"core-metadata\":{{\"sha256\":\"{}\"}}}}]}}",
+        harness.server.uri(),
+        wheel_digest.as_str(),
+        metadata_digest.as_str(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(page.into_bytes(), "application/vnd.pypi.simple.v1+json"))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(metadata.to_vec()))
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.to_vec()))
+        .mount(&harness.server)
+        .await;
+
+    let (page_status, ..) = get(&harness.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert_eq!(page_status, StatusCode::OK);
+    let metadata_uri = format!("/pypi/files/{}/{filename}.metadata", wheel_digest.as_str());
+    let (metadata_status, ..) = get(&harness.state, &metadata_uri, None).await;
+    assert_eq!(metadata_status, StatusCode::OK);
+    let file_uri = format!("/pypi/files/{}/{filename}", wheel_digest.as_str());
+    let (file_status, ..) = get(&harness.state, &file_uri, None).await;
+    assert_eq!(file_status, StatusCode::OK);
+    settle(&harness.state.metrics, |metrics| {
+        metrics.index_totals().get("pypi").is_some_and(|totals| {
+            totals.pages == 1 && totals.metadata == 1 && totals.downloads == 1 && totals.bytes == wheel.len() as u64
+        })
+    });
+
+    let (stats_status, _, stats_body) = get(&harness.state, "/+stats?index=pypi&project=flask", None).await;
+    let stats_json: serde_json::Value = serde_json::from_str(&stats_body).unwrap();
+    assert_eq!(stats_status, StatusCode::OK);
+    assert_eq!(
+        stats_json,
+        serde_json::json!({
+            "pages": 1,
+            "downloads": 1,
+            "metadata": 1,
+            "uploads": 0,
+            "bytes": wheel.len() as u64,
+            "refreshes": 0,
+            "changed": 0,
+            "stale_served": 0,
+            "upstream_errors": 0,
+            "rejected": 0,
+            "files": {
+                filename: {"downloads": 1, "metadata": 0, "bytes": wheel.len() as u64},
+                format!("{filename}.metadata"): {"downloads": 0, "metadata": 1, "bytes": 0}
+            }
+        })
+    );
+
+    let (metrics_status, _, metrics_body) = get(&harness.state, "/metrics", None).await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    for line in [
+        "velodex_index_pages_total{index=\"pypi\"} 1",
+        "velodex_index_downloads_total{index=\"pypi\"} 1",
+        "velodex_index_download_bytes_total{index=\"pypi\"} 12",
+        "velodex_index_metadata_total{index=\"pypi\"} 1",
+    ] {
+        assert!(metrics_body.contains(line), "{line} missing from:\n{metrics_body}");
+    }
 }

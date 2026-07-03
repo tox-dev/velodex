@@ -61,3 +61,6 @@ pub const STRESS_PROJECT: &str = "torch";
 
 /// A heavy single-wheel install a CI fleet grabs over and over.
 pub const FLEET_PACKAGE: &str = "polars";
+
+/// A package with wheel metadata siblings on `PyPI`'s Simple API.
+pub const METADATA_PROJECT: &str = "boto3";
