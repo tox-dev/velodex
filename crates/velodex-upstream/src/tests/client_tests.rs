@@ -413,6 +413,197 @@ async fn test_fetch_project_retries_body_errors() {
 }
 
 #[tokio::test]
+async fn test_head_file_for_range_requires_byte_ranges() {
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/files/pkg.whl"))
+        .respond_with(ResponseTemplate::new(200).insert_header("content-length", "10"))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client
+        .head_file_for_range(&format!("{}/files/pkg.whl", server.uri()))
+        .await
+        .unwrap_err();
+
+    assert!(err.disables_ranges());
+    assert!(!client.may_support_ranges());
+}
+
+#[tokio::test]
+async fn test_head_file_for_range_requires_content_length() {
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/files/pkg.whl"))
+        .respond_with(ResponseTemplate::new(200).insert_header("accept-ranges", "bytes"))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client
+        .head_file_for_range(&format!("{}/files/pkg.whl", server.uri()))
+        .await
+        .unwrap_err();
+
+    assert!(err.disables_ranges());
+    assert!(!client.may_support_ranges());
+}
+
+#[tokio::test]
+async fn test_fetch_range_requests_identity_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/files/pkg.whl"))
+        .and(header("accept-encoding", "identity"))
+        .and(header("range", "bytes=1-3"))
+        .respond_with(
+            ResponseTemplate::new(206)
+                .insert_header("content-range", "bytes 1-3/5")
+                .set_body_bytes(b"hee".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let bytes = client
+        .fetch_range(&format!("{}/files/pkg.whl", server.uri()), 1, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(&bytes[..], b"hee");
+    assert!(client.may_support_ranges());
+}
+
+#[tokio::test]
+async fn test_fetch_range_rejects_reversed_range() {
+    let client = UpstreamClient::new("https://pypi.org/simple/").unwrap();
+
+    let err = client
+        .fetch_range("https://example.invalid/pkg.whl", 3, 1)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "upstream returned an invalid byte range response: start 3 is after end 1"
+    );
+}
+
+#[tokio::test]
+async fn test_fetch_range_rejects_overflowing_range() {
+    let client = UpstreamClient::new("https://pypi.org/simple/").unwrap();
+
+    let err = client
+        .fetch_range("https://example.invalid/pkg.whl", 0, u64::MAX)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "upstream returned an invalid byte range response: requested range length overflowed"
+    );
+}
+
+#[tokio::test]
+async fn test_fetch_range_disables_on_unsupported_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/files/pkg.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"whole-file".to_vec()))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client
+        .fetch_range(&format!("{}/files/pkg.whl", server.uri()), 1, 3)
+        .await
+        .unwrap_err();
+
+    assert!(err.disables_ranges());
+    assert!(!client.may_support_ranges());
+}
+
+#[tokio::test]
+async fn test_fetch_range_rejects_non_partial_success() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/files/pkg.whl"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client
+        .fetch_range(&format!("{}/files/pkg.whl", server.uri()), 1, 3)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "upstream returned an invalid byte range response: range request returned a non-206 success"
+    );
+}
+
+#[tokio::test]
+async fn test_fetch_range_rejects_bad_content_range() {
+    let cases = [
+        ("/missing", None),
+        ("/prefix", Some("items 1-3/5")),
+        ("/total", Some("bytes 1-3")),
+        ("/span", Some("bytes 1/5")),
+        ("/mismatch", Some("bytes 2-4/5")),
+    ];
+    let server = MockServer::start().await;
+    for (uri_path, content_range) in cases {
+        let mut response = ResponseTemplate::new(206).set_body_bytes(b"hee".to_vec());
+        if let Some(content_range) = content_range {
+            response = response.insert_header("content-range", content_range);
+        }
+        Mock::given(method("GET"))
+            .and(path(uri_path))
+            .respond_with(response)
+            .mount(&server)
+            .await;
+    }
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    for (uri_path, _) in cases {
+        let err = client
+            .fetch_range(&format!("{}{uri_path}", server.uri()), 1, 3)
+            .await
+            .unwrap_err();
+        assert!(err.disables_ranges());
+    }
+}
+
+#[tokio::test]
+async fn test_fetch_range_rejects_short_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/files/pkg.whl"))
+        .respond_with(
+            ResponseTemplate::new(206)
+                .insert_header("content-range", "bytes 1-3/5")
+                .set_body_bytes(b"he".to_vec()),
+        )
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client
+        .fetch_range(&format!("{}/files/pkg.whl", server.uri()), 1, 3)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "upstream returned an invalid byte range response: expected 3 bytes, received 2"
+    );
+    assert!(!client.may_support_ranges());
+}
+
+#[tokio::test]
 async fn test_new_adds_trailing_slash() {
     let client = UpstreamClient::new("https://pypi.org/simple").unwrap();
     // A trailing slash was added, so joining a project stays under /simple/.

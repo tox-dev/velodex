@@ -27,7 +27,7 @@ pub const MAX_NESTED_ARCHIVE_SIZE: u64 = 128 * 1024 * 1024;
 /// Largest number of file entries returned from one archive listing.
 pub const MAX_LISTED_ENTRIES: usize = 10_000;
 
-const MAX_WHEEL_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_WHEEL_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_WHEEL_RECORD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_WHEEL_ENTRY_POINTS_BYTES: u64 = 1024 * 1024;
 const MAX_SDIST_METADATA_BYTES: u64 = 16 * 1024 * 1024;
@@ -1227,6 +1227,18 @@ pub fn wheel_metadata(filename: &str, bytes: &[u8]) -> Option<Vec<u8>> {
     wheel_metadata_reader(filename, Cursor::new(bytes)).ok().flatten()
 }
 
+/// The exact wheel metadata member implied by a wheel filename.
+///
+/// # Errors
+/// Returns [`ArchiveError::InvalidWheel`] when `filename` ends with `.whl` but is not a valid
+/// wheel filename.
+pub fn wheel_metadata_member_path(filename: &str) -> Result<Option<String>, ArchiveError> {
+    if !is_wheel(filename) {
+        return Ok(None);
+    }
+    Ok(Some(format!("{}/METADATA", expected_wheel_dist_info_dir(filename)?)))
+}
+
 /// Extract a wheel's `*.dist-info/METADATA` document from a staged file without buffering the wheel.
 ///
 /// # Errors
@@ -1491,24 +1503,31 @@ const fn metadata_version_at_least(actual: (u64, u64), required: (u64, u64)) -> 
 }
 
 fn wheel_metadata_reader(filename: &str, reader: impl Read + Seek) -> Result<Option<Vec<u8>>, ArchiveError> {
-    if !std::path::Path::new(filename)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
-    {
+    let Some(metadata_path) = wheel_metadata_member_path(filename)? else {
+        return Ok(None);
+    };
+    let mut archive = zip::ZipArchive::new(reader).map_err(read_error)?;
+    let mut entry = match archive.by_name(&metadata_path) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(err) => return Err(read_error(err)),
+    };
+    if !entry.is_file() {
         return Ok(None);
     }
-    let mut archive = zip::ZipArchive::new(reader).map_err(read_error)?;
-    for position in 0..archive.len() {
-        let mut entry = archive.by_index(position).map_err(read_error)?;
-        if !entry.is_file() {
-            continue;
-        }
-        let name = safe_member_name(entry.name())?;
-        if name.ends_with(".dist-info/METADATA") {
-            let mut bytes = Vec::with_capacity(entry.size().min(256 * 1024) as usize);
-            entry.read_to_end(&mut bytes).map_err(read_error)?;
-            return Ok(Some(bytes));
-        }
+    if entry.size() > MAX_WHEEL_METADATA_BYTES {
+        return Err(invalid_wheel(format!(
+            "{metadata_path} is {} bytes, above the upload validation limit of {MAX_WHEEL_METADATA_BYTES} bytes",
+            entry.size()
+        )));
     }
-    Ok(None)
+    let mut bytes = Vec::with_capacity(entry.size().min(256 * 1024) as usize);
+    entry.read_to_end(&mut bytes).map_err(read_error)?;
+    Ok(Some(bytes))
+}
+
+fn is_wheel(filename: &str) -> bool {
+    std::path::Path::new(filename)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
 }

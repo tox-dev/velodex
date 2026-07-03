@@ -174,11 +174,15 @@ member names seen during the scan; the archive is not unpacked.
 
 Resolvers spend most of their network time learning dependencies. The [PEP 658/714](https://peps.python.org/pep-0658/)
 `.metadata` sibling lets pip and uv fetch a few kilobytes of core metadata instead of a multi-megabyte artifact per
-candidate. velodex advertises the sibling, fetches it from the upstream on first use, verifies it against the digest
-from the index page, and caches it like any blob. For local uploads, velodex writes the sibling from verified wheel
-`METADATA` or sdist `PKG-INFO`. The `velodex_metadata_requests_total` metric counts these; the end-to-end tests assert
-on it to prove real clients take this path. Few third-party indexes serve PEP 658 yet, so fronting one with velodex can
-make resolution faster than the upstream itself once metadata is cached.
+candidate. velodex uses an advertised upstream sibling first, verifies it against the digest from the index page, and
+caches it like any blob. When the upstream page lacks that sibling, velodex reads a wheel's ZIP central directory with
+HTTP byte ranges, fetches only the `METADATA` member, and records the generated sibling for later page responses. If an
+index does not satisfy range requests, velodex remembers that for the process and streams the artifact into the blob
+store before extracting metadata from the cached file. Sdist backfill uses the same cached-file path and buffers only
+capped `PKG-INFO` content. For local uploads, velodex writes the sibling from verified wheel `METADATA` or sdist
+`PKG-INFO`. The `velodex_metadata_requests_total` metric counts these; the end-to-end tests assert on it to prove real
+clients take this path. Few third-party indexes serve PEP 658 yet, so fronting one with velodex can make resolution
+faster than the upstream itself once metadata is cached.
 
 ## Usage metrics
 

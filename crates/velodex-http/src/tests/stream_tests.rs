@@ -47,6 +47,7 @@ fn test_rewrites_urls_and_registers_sources() {
         // The file without a sha keeps its upstream URL and loses the metadata claim.
         assert_eq!(detail.files[1].url, "https://up/demo-2.0.tar.gz");
         assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations[0].filename, "demo-1.0-py3-none-any.whl");
         assert_eq!(registrations[0].sha256, "aa11");
         assert_eq!(registrations[0].url, "https://up/demo-1.0-py3-none-any.whl");
         assert_eq!(
@@ -58,6 +59,28 @@ fn test_rewrites_urls_and_registers_sources() {
         );
         assert_eq!(registrations[1].metadata, None);
     }
+}
+
+#[test]
+fn test_rewrites_cached_generated_metadata() {
+    let page = r#"{"meta":{"api-version":"1.1"},"name":"demo","files":[{
+        "filename":"demo-1.0-py3-none-any.whl","url":"https://up/demo-1.0-py3-none-any.whl",
+        "hashes":{"sha256":"aa11"},"yanked":false
+    }]}"#;
+    let mut context = plain_context();
+    context.known_metadata.insert("aa11".to_owned(), "bb22".to_owned());
+
+    let (out, registrations) = transform(page, context, 7);
+
+    let detail = parse_detail(out.as_bytes()).unwrap();
+    assert_eq!(
+        detail.files[0].metadata(),
+        &CoreMetadata::Hashes(std::collections::BTreeMap::from([(
+            "sha256".to_owned(),
+            "bb22".to_owned()
+        )]))
+    );
+    assert_eq!(registrations[0].metadata, None);
 }
 
 #[test]

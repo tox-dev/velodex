@@ -1,12 +1,15 @@
 //! The upstream HTTP client.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use futures_core::Stream;
 use reqwest::StatusCode;
 use reqwest::header::{
-    ACCEPT, ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderMap, HeaderName, IF_NONE_MATCH,
+    ACCEPT, ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderMap, HeaderName,
+    IF_NONE_MATCH, RANGE,
 };
 use url::Url;
 
@@ -49,6 +52,31 @@ pub struct SimpleHead {
     /// carried no positive lifetime (absent header, `no-cache`, `no-store`, or zero).
     pub max_age: Option<i64>,
     response: reqwest::Response,
+}
+
+/// The parts of an artifact `HEAD` response needed before range reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileHead {
+    pub len: u64,
+}
+
+/// An error from the range-read path.
+#[derive(Debug, thiserror::Error)]
+pub enum RangeError {
+    #[error(transparent)]
+    Upstream(#[from] UpstreamError),
+    #[error("upstream does not support byte range requests")]
+    Unsupported,
+    #[error("upstream returned an invalid byte range response: {0}")]
+    Invalid(String),
+}
+
+impl RangeError {
+    /// Whether Velodex should stop trying ranges for this index and fall back to full downloads.
+    #[must_use]
+    pub const fn disables_ranges(&self) -> bool {
+        matches!(self, Self::Unsupported | Self::Invalid(_))
+    }
 }
 
 impl SimpleHead {
@@ -150,7 +178,12 @@ pub struct UpstreamClient {
     bulk: reqwest::Client,
     base: Url,
     auth: Auth,
+    range_support: Arc<AtomicU8>,
 }
+
+const RANGE_UNKNOWN: u8 = 0;
+const RANGE_SUPPORTED: u8 = 1;
+const RANGE_UNSUPPORTED: u8 = 2;
 
 impl UpstreamClient {
     /// Build an unauthenticated client for `base` (for example `https://pypi.org/simple/`).
@@ -197,7 +230,13 @@ impl UpstreamClient {
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .build()?;
-        Ok(Self { http, bulk, base, auth })
+        Ok(Self {
+            http,
+            bulk,
+            base,
+            auth,
+            range_support: Arc::new(AtomicU8::new(RANGE_UNKNOWN)),
+        })
     }
 
     fn authenticate(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -291,6 +330,105 @@ impl UpstreamClient {
                 Err(err) => return Err(err.into()),
             }
         }
+    }
+
+    /// Whether this index should still try byte range reads.
+    #[must_use]
+    pub fn may_support_ranges(&self) -> bool {
+        self.range_support.load(Ordering::Relaxed) != RANGE_UNSUPPORTED
+    }
+
+    /// Stop trying byte range reads for this index during this process.
+    pub fn disable_ranges(&self) {
+        self.range_support.store(RANGE_UNSUPPORTED, Ordering::Relaxed);
+    }
+
+    /// Fetch artifact headers for a future range read.
+    ///
+    /// # Errors
+    /// Returns [`RangeError::Unsupported`] when upstream omits range support or length metadata,
+    /// and [`RangeError::Upstream`] on other request failures.
+    pub async fn head_file_for_range(&self, url: &str) -> Result<FileHead, RangeError> {
+        let response = self
+            .authenticate(self.http.head(url))
+            .header(ACCEPT_ENCODING, "identity")
+            .send()
+            .await
+            .map_err(UpstreamError::from)?;
+        if head_status_disables_ranges(response.status()) {
+            self.disable_ranges();
+            return Err(RangeError::Unsupported);
+        }
+        let response = response.error_for_status().map_err(UpstreamError::from)?;
+        let headers = response.headers();
+        if !headers
+            .get(HeaderName::from_static("accept-ranges"))
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.split(',').any(|part| part.trim().eq_ignore_ascii_case("bytes")))
+        {
+            self.disable_ranges();
+            return Err(RangeError::Unsupported);
+        }
+        let Some(len) = header_str(headers, &CONTENT_LENGTH).and_then(|value| value.parse().ok()) else {
+            self.disable_ranges();
+            return Err(RangeError::Unsupported);
+        };
+        self.range_support.store(RANGE_SUPPORTED, Ordering::Relaxed);
+        Ok(FileHead { len })
+    }
+
+    /// Fetch an inclusive byte range from an artifact URL.
+    ///
+    /// # Errors
+    /// Returns [`RangeError::Unsupported`] or [`RangeError::Invalid`] when upstream cannot satisfy
+    /// the requested range, and [`RangeError::Upstream`] on other request failures.
+    pub async fn fetch_range(&self, url: &str, start: u64, end: u64) -> Result<Bytes, RangeError> {
+        if end < start {
+            return Err(RangeError::Invalid(format!("start {start} is after end {end}")));
+        }
+        let Some(range_len) = (end - start).checked_add(1) else {
+            return Err(RangeError::Invalid("requested range length overflowed".to_owned()));
+        };
+        #[cfg(target_pointer_width = "64")]
+        let expected_len = usize::try_from(range_len).unwrap_or(usize::MAX);
+        #[cfg(not(target_pointer_width = "64"))]
+        let Ok(expected_len) = usize::try_from(range_len) else {
+            return Err(RangeError::Invalid("requested range does not fit memory".to_owned()));
+        };
+        let response = self
+            .authenticate(self.http.get(url))
+            .header(ACCEPT_ENCODING, "identity")
+            .header(RANGE, format!("bytes={start}-{end}"))
+            .send()
+            .await
+            .map_err(UpstreamError::from)?;
+        match response.status() {
+            reqwest::StatusCode::PARTIAL_CONTENT => {}
+            reqwest::StatusCode::OK | reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                self.disable_ranges();
+                return Err(RangeError::Unsupported);
+            }
+            _ => {
+                response.error_for_status().map_err(UpstreamError::from)?;
+                return Err(RangeError::Invalid(
+                    "range request returned a non-206 success".to_owned(),
+                ));
+            }
+        }
+        if let Err(err) = validate_content_range(response.headers(), start, end) {
+            self.disable_ranges();
+            return Err(err);
+        }
+        let bytes = response.bytes().await.map_err(UpstreamError::from)?;
+        if bytes.len() != expected_len {
+            self.disable_ranges();
+            return Err(RangeError::Invalid(format!(
+                "expected {expected_len} bytes, received {}",
+                bytes.len()
+            )));
+        }
+        self.range_support.store(RANGE_SUPPORTED, Ordering::Relaxed);
+        Ok(bytes)
     }
 
     /// The upstream base URL with user info, query, and fragment removed for status pages.
@@ -400,6 +538,40 @@ fn validate_simple_content_type(url: &Url, content_type: Option<&str>) -> Result
         url: url.clone(),
         content_type: content_type.to_owned(),
     })
+}
+
+const fn head_status_disables_ranges(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST
+            | reqwest::StatusCode::FORBIDDEN
+            | reqwest::StatusCode::NOT_FOUND
+            | reqwest::StatusCode::METHOD_NOT_ALLOWED
+            | reqwest::StatusCode::NOT_IMPLEMENTED
+    )
+}
+
+fn validate_content_range(headers: &HeaderMap, start: u64, end: u64) -> Result<(), RangeError> {
+    let value = headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| RangeError::Invalid("missing Content-Range".to_owned()))?;
+    let Some(rest) = value.strip_prefix("bytes ") else {
+        return Err(RangeError::Invalid(format!("unexpected Content-Range {value:?}")));
+    };
+    let Some((actual, _total)) = rest.split_once('/') else {
+        return Err(RangeError::Invalid(format!("unexpected Content-Range {value:?}")));
+    };
+    let Some((actual_start, actual_end)) = actual.split_once('-') else {
+        return Err(RangeError::Invalid(format!("unexpected Content-Range {value:?}")));
+    };
+    if actual_start.parse::<u64>().ok() == Some(start) && actual_end.parse::<u64>().ok() == Some(end) {
+        Ok(())
+    } else {
+        Err(RangeError::Invalid(format!(
+            "expected Content-Range bytes {start}-{end}, got {value:?}"
+        )))
+    }
 }
 
 /// The freshness lifetime a `Cache-Control` header grants a shared cache: `s-maxage` beats

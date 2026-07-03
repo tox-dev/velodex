@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error as _;
 
 use crate::meta::{CachedIndex, MetaError, MetaScanError, MetaStore};
@@ -89,6 +90,27 @@ fn test_put_and_get_metadata() {
             "pypi".to_owned()
         ))
     );
+}
+
+#[test]
+fn test_get_metadata_digests_skips_missing_and_malformed_records() {
+    let (dir, store) = store();
+    store
+        .put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha", "pypi")
+        .unwrap();
+    drop(store);
+    {
+        let db = redb::Database::create(dir.path().join("velodex.redb")).unwrap();
+        let table: redb::TableDefinition<&str, &str> = redb::TableDefinition::new("metadata");
+        let txn = db.begin_write().unwrap();
+        txn.open_table(table).unwrap().insert("broken", "only-url").unwrap();
+        txn.commit().unwrap();
+    }
+    let store = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
+
+    let digests = store.get_metadata_digests(["missing", "broken", "wheelsha"]).unwrap();
+
+    assert_eq!(digests, HashMap::from([("wheelsha".to_owned(), "metasha".to_owned())]));
 }
 
 #[test]

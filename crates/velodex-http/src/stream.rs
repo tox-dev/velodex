@@ -26,11 +26,14 @@ pub struct PageContext {
     pub skip: HashSet<String>,
     /// Filenames forced to the yanked state by an override.
     pub yanked: HashMap<String, Yanked>,
+    /// Generated metadata already cached by artifact sha256.
+    pub known_metadata: HashMap<String, String>,
 }
 
 /// A file's upstream source recorded while transforming, persisted later in one batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
+    pub filename: String,
     pub sha256: String,
     pub url: String,
     /// `(sibling url, metadata sha256)` when the file advertises PEP 658 metadata.
@@ -452,10 +455,19 @@ impl PageTransformer {
                 file.clear_metadata();
             }
             self.registrations.push(Registration {
+                filename: file.filename.clone(),
                 sha256: sha256.clone(),
                 url: file.url.clone(),
                 metadata,
             });
+            if file.metadata().is_absent()
+                && let Some(metadata) = self.context.known_metadata.get(&sha256)
+            {
+                file.set_metadata(CoreMetadata::Hashes(std::collections::BTreeMap::from([(
+                    "sha256".to_owned(),
+                    metadata.clone(),
+                )])));
+            }
             file.url = local_file_url(&self.context.route, &sha256, &file.filename);
         } else {
             file.clear_metadata();
@@ -532,6 +544,7 @@ pub fn page_context<S: std::hash::BuildHasher>(
         local_versions,
         skip,
         yanked,
+        known_metadata: HashMap::new(),
     }
 }
 

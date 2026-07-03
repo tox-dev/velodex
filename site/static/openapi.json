@@ -426,7 +426,7 @@
           "files"
         ],
         "summary": "Download PEP 658 core metadata",
-        "description": "The `.metadata` sibling of an artifact: core metadata verified against the digest the index page advertised. Uploaded wheels serve `METADATA`; uploaded sdists serve the verified `PKG-INFO`. pip and uv resolve through this instead of downloading whole artifacts.",
+        "description": "The `.metadata` sibling of an artifact: advertised upstream metadata verified against the index-page digest, or metadata generated from a wheel `METADATA`/sdist `PKG-INFO` when upstream omits the sibling. pip and uv resolve through this instead of downloading whole artifacts.",
         "parameters": [
           {
             "name": "route",

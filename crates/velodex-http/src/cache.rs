@@ -2,6 +2,7 @@
 //! an index's layers, fetching and caching from upstream on a miss.
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::io::{Cursor, Read as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,12 +14,12 @@ use velodex_core::pypi::{
 };
 use velodex_storage::blob::Digest;
 use velodex_storage::meta::CachedIndex;
-use velodex_upstream::{SimpleResponse, UpstreamClient};
+use velodex_upstream::{RangeError, SimpleResponse, UpstreamClient};
 
 use crate::metrics::Event;
 use crate::path_safety::local_file_url;
 use crate::state::{AppState, Index, IndexKind};
-use crate::stream::{PageSummary, PageTransformer};
+use crate::stream::{PageSummary, PageTransformer, Registration};
 use crate::upload::{PreparedUpload, Uploaded};
 
 const NEGATIVE_TTL_SECS: i64 = 30;
@@ -36,6 +37,8 @@ pub enum CacheError {
     Parse(#[from] serde_json::Error),
     #[error(transparent)]
     Simple(velodex_core::pypi::SimpleError),
+    #[error(transparent)]
+    Archive(#[from] crate::archive::ArchiveError),
     #[error("upstream unreachable and nothing cached")]
     Unavailable,
     #[error("index is not volatile; delete is disabled")]
@@ -70,6 +73,7 @@ impl CacheError {
             Self::Upstream(err) => err.user_message(),
             Self::Parse(err) => format!("simple API document could not be parsed: {err}"),
             Self::Simple(err) => format!("unsupported simple API response: {err}"),
+            Self::Archive(err) => err.to_string(),
             Self::Unavailable => "upstream is unavailable and no cached page exists".to_owned(),
             Self::NotVolatile => "index is not volatile; delete is disabled".to_owned(),
             Self::FileNotFound => "no matching cached file or upstream source was found".to_owned(),
@@ -211,7 +215,7 @@ async fn mirror_detail(
 ) -> Result<Option<ProjectDetail>, CacheError> {
     let key = format!("{name}/{project}");
     if let Some(record) = fresh_cached(state, &key)? {
-        return Ok(Some(raw_to_detail(route, &record)?));
+        return Ok(Some(raw_to_detail(state, route, &record)?));
     }
     if state.negative_fresh(&project_negative_key(&key)) {
         return Ok(None);
@@ -221,7 +225,7 @@ async fn mirror_detail(
     let _guard = gate.lock().await;
     // Whoever held the gate first has stored the page by now; everyone else serves it from cache.
     if let Some(record) = fresh_cached(state, &key)? {
-        return Ok(Some(raw_to_detail(route, &record)?));
+        return Ok(Some(raw_to_detail(state, route, &record)?));
     }
     if state.negative_fresh(&project_negative_key(&key)) {
         return Ok(None);
@@ -230,7 +234,7 @@ async fn mirror_detail(
     let result = fetch_and_store(state, &key, name, project, client).await;
     state.inflight.lock().expect("inflight lock").remove(&key);
     match result? {
-        Some(record) => Ok(Some(raw_to_detail(route, &record)?)),
+        Some(record) => Ok(Some(raw_to_detail(state, route, &record)?)),
         None => Ok(None),
     }
 }
@@ -576,9 +580,14 @@ pub(crate) fn persist_page(
 
 /// Turn a raw cached page into the detail served on `route`: parse, drop unverifiable metadata
 /// claims, and point content-addressable files at velodex's own file route.
-pub(crate) fn raw_to_detail(route: &str, record: &CachedIndex) -> Result<ProjectDetail, CacheError> {
+pub(crate) fn raw_to_detail(state: &AppState, route: &str, record: &CachedIndex) -> Result<ProjectDetail, CacheError> {
     let parsed = parse_detail(&record.body)?;
-    let files = parsed.files.into_iter().map(|file| present_file(file, route)).collect();
+    let known_metadata = known_metadata(state, &parsed.files)?;
+    let files = parsed
+        .files
+        .into_iter()
+        .map(|file| present_file(file, route, &known_metadata))
+        .collect();
     let mut detail = ProjectDetail {
         meta: parsed.meta,
         name: parsed.name,
@@ -597,7 +606,7 @@ fn apply_project_status(detail: &mut ProjectDetail) {
 
 /// The pure serving transform for one file: velodex URL for content-addressable files, metadata
 /// claims kept only when verifiable by digest.
-fn present_file(mut file: File, route: &str) -> File {
+fn present_file(mut file: File, route: &str, known_metadata: &std::collections::HashMap<String, String>) -> File {
     let Some(sha256) = file.hashes.get("sha256").cloned() else {
         file.clear_metadata();
         return file;
@@ -605,10 +614,27 @@ fn present_file(mut file: File, route: &str) -> File {
     if !matches!(file.metadata(), CoreMetadata::Hashes(hashes) if hashes.contains_key("sha256")) {
         file.clear_metadata();
     }
+    if file.metadata().is_absent()
+        && supports_generated_metadata(&file.filename)
+        && let Some(metadata) = known_metadata.get(&sha256)
+    {
+        file.set_metadata(CoreMetadata::Hashes(std::collections::BTreeMap::from([(
+            "sha256".to_owned(),
+            metadata.clone(),
+        )])));
+    }
     if !file.url.starts_with('/') {
         file.url = local_file_url(route, &sha256, &file.filename);
     }
     file
+}
+
+fn known_metadata(state: &AppState, files: &[File]) -> Result<std::collections::HashMap<String, String>, CacheError> {
+    let artifact_sha256s = files
+        .iter()
+        .filter(|file| supports_generated_metadata(&file.filename) && file.metadata().is_absent())
+        .filter_map(|file| file.hashes.get("sha256").map(String::as_str));
+    Ok(state.meta.get_metadata_digests(artifact_sha256s)?)
 }
 
 /// Build a local (uploaded) project's detail from its stored file records. Yank markers are kept, so
@@ -720,35 +746,368 @@ pub async fn file_path(
     Ok(state.blobs.path_for(&digest))
 }
 
-/// Resolve an artifact's PEP 658 metadata bytes: cached blob, or fetch the sibling from its source
-/// mirror, verify against the advertised digest, and cache.
+/// Resolve an artifact's PEP 658 metadata bytes: cached blob, advertised upstream sibling, or
+/// generated metadata extracted from the artifact.
 ///
 /// # Errors
-/// Returns [`CacheError::FileNotFound`] if the artifact has no known metadata sibling, or another
-/// error on a store or upstream failure.
-pub async fn metadata_bytes(state: &AppState, artifact_digest: &Digest) -> Result<Bytes, CacheError> {
+/// Returns [`CacheError::FileNotFound`] if the artifact has no usable metadata source, or another
+/// error on a store, archive, or upstream failure.
+pub async fn metadata_bytes(
+    state: &Arc<AppState>,
+    artifact_digest: &Digest,
+    route: &str,
+    metadata_filename: &str,
+) -> Result<Bytes, CacheError> {
+    let artifact_filename = metadata_filename
+        .strip_suffix(".metadata")
+        .ok_or(CacheError::FileNotFound)?;
     let negative_key = metadata_negative_key(artifact_digest);
     if state.negative_fresh(&negative_key) {
         return Err(CacheError::FileNotFound);
     }
-    let (url, metadata_hex, source) = state
-        .meta
-        .get_metadata(artifact_digest.as_str())?
-        .ok_or(CacheError::FileNotFound)?;
-    let metadata_digest = Digest::from_hex(&metadata_hex).ok_or(CacheError::FileNotFound)?;
-    if state.blobs.exists(&metadata_digest) {
-        return Ok(Bytes::from(state.blobs.read(&metadata_digest)?));
-    }
-    let bytes = match fetch_from_source(state, &source, &url).await {
-        Ok(bytes) => bytes,
-        Err(CacheError::Upstream(err)) if err.status() == Some(404) => {
-            state.remember_negative(negative_key, NEGATIVE_TTL_SECS);
-            return Err(CacheError::FileNotFound);
+    if let Some((url, metadata_hex, source)) = state.meta.get_metadata(artifact_digest.as_str())? {
+        let metadata_digest = Digest::from_hex(&metadata_hex).ok_or(CacheError::FileNotFound)?;
+        if state.blobs.exists(&metadata_digest) {
+            return Ok(Bytes::from(state.blobs.read(&metadata_digest)?));
         }
-        Err(err) => return Err(err),
+        if url != GENERATED_METADATA_URL {
+            let bytes = match fetch_from_source(state, &source, &url).await {
+                Ok(bytes) => bytes,
+                Err(CacheError::Upstream(err)) if err.status() == Some(404) => {
+                    state.remember_negative(negative_key, NEGATIVE_TTL_SECS);
+                    return Err(CacheError::FileNotFound);
+                }
+                Err(err) => return Err(err),
+            };
+            state.blobs.write_verified(&bytes, &metadata_digest)?;
+            return Ok(bytes);
+        }
+    }
+    write_generated_metadata(state, artifact_digest, route, artifact_filename).await
+}
+
+async fn write_generated_metadata(
+    state: &Arc<AppState>,
+    artifact_digest: &Digest,
+    route: &str,
+    artifact_filename: &str,
+) -> Result<Bytes, CacheError> {
+    let (bytes, source) = generated_metadata_bytes(state, artifact_digest, route, artifact_filename).await?;
+    let metadata_digest = state.blobs.write(&bytes)?;
+    let source = source.unwrap_or_else(|| GENERATED_METADATA_URL.to_owned());
+    let artifact_sha256 = artifact_digest.as_str();
+    let metadata_sha256 = metadata_digest.as_str();
+    state
+        .meta
+        .put_metadata(artifact_sha256, GENERATED_METADATA_URL, metadata_sha256, &source)?;
+    state.bump_epoch();
+    Ok(Bytes::from(bytes))
+}
+
+const GENERATED_METADATA_URL: &str = "velodex:generated";
+
+async fn generated_metadata_bytes(
+    state: &Arc<AppState>,
+    artifact_digest: &Digest,
+    route: &str,
+    filename: &str,
+) -> Result<(Vec<u8>, Option<String>), CacheError> {
+    let source = state.meta.get_file_url(artifact_digest.as_str())?;
+    if state.blobs.exists(artifact_digest) {
+        let metadata = metadata_from_artifact_path(filename, &state.blobs.path_for(artifact_digest))?
+            .ok_or(CacheError::FileNotFound)?;
+        return Ok((metadata, source.map(|(_, source)| source)));
+    }
+    let Some((url, source_name)) = source else {
+        return Err(CacheError::FileNotFound);
     };
-    state.blobs.write_verified(&bytes, &metadata_digest)?;
-    Ok(bytes)
+    if let Some(metadata) = generated_wheel_metadata_by_range(state, &source_name, &url, filename).await? {
+        return Ok((metadata, Some(source_name)));
+    }
+    let path = file_path(
+        state.clone(),
+        artifact_digest.clone(),
+        route.to_owned(),
+        filename.to_owned(),
+    )
+    .await?;
+    let metadata = metadata_from_artifact_path(filename, &path)?.ok_or(CacheError::FileNotFound)?;
+    Ok((metadata, Some(source_name)))
+}
+
+fn metadata_from_artifact_path(filename: &str, path: &std::path::Path) -> Result<Option<Vec<u8>>, CacheError> {
+    if is_wheel(filename) {
+        return Ok(crate::archive::wheel_metadata_path(filename, path)?);
+    }
+    if is_tar_gz(filename) {
+        return Ok(crate::archive::sdist_metadata_path(filename, path)?);
+    }
+    Ok(None)
+}
+
+async fn generated_wheel_metadata_by_range(
+    state: &Arc<AppState>,
+    source_name: &str,
+    url: &str,
+    filename: &str,
+) -> Result<Option<Vec<u8>>, CacheError> {
+    if !is_wheel(filename) {
+        return Ok(None);
+    }
+    let client = source_client(state, source_name)?;
+    if !client.may_support_ranges() {
+        return Ok(None);
+    }
+    match wheel_metadata_by_range(&client, url, filename).await {
+        Ok(RemoteMetadata::Found(metadata)) => Ok(Some(metadata)),
+        Ok(RemoteMetadata::Missing) => Err(CacheError::FileNotFound),
+        Ok(RemoteMetadata::Unsupported) => Ok(None),
+        Err(RangeError::Upstream(err)) => Err(CacheError::Upstream(err)),
+        Err(err @ (RangeError::Unsupported | RangeError::Invalid(_))) => {
+            debug_assert!(err.disables_ranges());
+            client.disable_ranges();
+            Ok(None)
+        }
+    }
+}
+
+enum RemoteMetadata {
+    Found(Vec<u8>),
+    Missing,
+    Unsupported,
+}
+
+async fn wheel_metadata_by_range(
+    client: &UpstreamClient,
+    url: &str,
+    filename: &str,
+) -> Result<RemoteMetadata, RangeError> {
+    let metadata_path = match crate::archive::wheel_metadata_member_path(filename) {
+        Ok(Some(metadata_path)) => metadata_path,
+        Ok(None) => return Ok(RemoteMetadata::Unsupported),
+        Err(err) => return Err(RangeError::Invalid(err.to_string())),
+    };
+    let head = client.head_file_for_range(url).await?;
+    if head.len == 0 {
+        return Ok(RemoteMetadata::Unsupported);
+    }
+    let tail_start = head.len.saturating_sub(ZIP_TAIL_BYTES);
+    let tail = client.fetch_range(url, tail_start, head.len - 1).await?;
+    let Some(directory) = central_directory(&tail) else {
+        return Ok(RemoteMetadata::Unsupported);
+    };
+    if directory.len == 0 {
+        return Ok(RemoteMetadata::Unsupported);
+    }
+    let directory_end = directory.offset + directory.len - 1;
+    let directory_bytes = client.fetch_range(url, directory.offset, directory_end).await?;
+    let entry = match find_central_directory_entry(&directory_bytes, &metadata_path) {
+        DirectoryEntrySearch::Found(entry) => entry,
+        DirectoryEntrySearch::Missing => return Ok(RemoteMetadata::Missing),
+        DirectoryEntrySearch::Invalid => return Ok(RemoteMetadata::Unsupported),
+    };
+    if entry.uncompressed_size > crate::archive::MAX_WHEEL_METADATA_BYTES
+        || entry.compressed_size > crate::archive::MAX_WHEEL_METADATA_BYTES
+    {
+        return Ok(RemoteMetadata::Unsupported);
+    }
+    let data_start = zip_data_start(client, url, entry.local_header_offset).await?;
+    let compressed = if entry.compressed_size == 0 {
+        Bytes::new()
+    } else {
+        client
+            .fetch_range(url, data_start, data_start + entry.compressed_size - 1)
+            .await?
+    };
+    match entry.compression_method {
+        ZIP_COMPRESSION_STORED => Ok(RemoteMetadata::Found(compressed.to_vec())),
+        ZIP_COMPRESSION_DEFLATED => {
+            let mut decoder = flate2::read::DeflateDecoder::new(Cursor::new(compressed));
+            let mut metadata = Vec::with_capacity(usize::try_from(entry.uncompressed_size).unwrap_or_default());
+            if let Err(err) = decoder.read_to_end(&mut metadata) {
+                return Err(RangeError::Invalid(err.to_string()));
+            }
+            if metadata.len() as u64 == entry.uncompressed_size {
+                Ok(RemoteMetadata::Found(metadata))
+            } else {
+                Ok(RemoteMetadata::Unsupported)
+            }
+        }
+        _ => Ok(RemoteMetadata::Unsupported),
+    }
+}
+
+const ZIP_TAIL_BYTES: u64 = 66_000;
+const ZIP_EOCD_LEN: usize = 22;
+const ZIP_EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+const ZIP_CENTRAL_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+const ZIP_LOCAL_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
+const ZIP_COMPRESSION_STORED: u16 = 0;
+const ZIP_COMPRESSION_DEFLATED: u16 = 8;
+
+struct CentralDirectory {
+    offset: u64,
+    len: u64,
+}
+
+struct CentralDirectoryEntry {
+    compression_method: u16,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    local_header_offset: u64,
+}
+
+enum DirectoryEntrySearch {
+    Found(CentralDirectoryEntry),
+    Missing,
+    Invalid,
+}
+
+fn central_directory(tail: &[u8]) -> Option<CentralDirectory> {
+    let eocd = (0..=tail.len().checked_sub(ZIP_EOCD_LEN)?)
+        .rev()
+        .find(|&position| tail[position..].starts_with(&ZIP_EOCD_SIGNATURE))?;
+    let comment_len = usize::from(read_u16(tail, eocd + 20)?);
+    if eocd + ZIP_EOCD_LEN + comment_len != tail.len() {
+        return None;
+    }
+    let len = u64::from(read_u32(tail, eocd + 12)?);
+    let offset = u64::from(read_u32(tail, eocd + 16)?);
+    if len == u64::from(u32::MAX) || offset == u64::from(u32::MAX) {
+        return None;
+    }
+    Some(CentralDirectory { offset, len })
+}
+
+fn find_central_directory_entry(directory: &[u8], metadata_path: &str) -> DirectoryEntrySearch {
+    let mut position = 0;
+    while position + 46 <= directory.len() {
+        if !directory[position..].starts_with(&ZIP_CENTRAL_SIGNATURE) {
+            return DirectoryEntrySearch::Invalid;
+        }
+        let flags = read_u16(directory, position + 8).expect("central directory fixed header is in bounds");
+        let compression_method =
+            read_u16(directory, position + 10).expect("central directory fixed header is in bounds");
+        let compressed_size =
+            u64::from(read_u32(directory, position + 20).expect("central directory fixed header is in bounds"));
+        let uncompressed_size =
+            u64::from(read_u32(directory, position + 24).expect("central directory fixed header is in bounds"));
+        let name_len =
+            usize::from(read_u16(directory, position + 28).expect("central directory fixed header is in bounds"));
+        let extra_len =
+            usize::from(read_u16(directory, position + 30).expect("central directory fixed header is in bounds"));
+        let comment_len =
+            usize::from(read_u16(directory, position + 32).expect("central directory fixed header is in bounds"));
+        let local_header_offset =
+            u64::from(read_u32(directory, position + 42).expect("central directory fixed header is in bounds"));
+        let name_start = position + 46;
+        let name_end = name_start + name_len;
+        let next = name_end + extra_len + comment_len;
+        if next > directory.len() {
+            return DirectoryEntrySearch::Invalid;
+        }
+        if flags & 1 == 0
+            && compressed_size != u64::from(u32::MAX)
+            && uncompressed_size != u64::from(u32::MAX)
+            && local_header_offset != u64::from(u32::MAX)
+            && &directory[name_start..name_end] == metadata_path.as_bytes()
+        {
+            return DirectoryEntrySearch::Found(CentralDirectoryEntry {
+                compression_method,
+                compressed_size,
+                uncompressed_size,
+                local_header_offset,
+            });
+        }
+        position = next;
+    }
+    DirectoryEntrySearch::Missing
+}
+
+async fn zip_data_start(client: &UpstreamClient, url: &str, local_header_offset: u64) -> Result<u64, RangeError> {
+    let header = client
+        .fetch_range(url, local_header_offset, local_header_offset + 29)
+        .await?;
+    if !header.starts_with(&ZIP_LOCAL_SIGNATURE) {
+        return Err(RangeError::Invalid("local file header signature mismatch".to_owned()));
+    }
+    let name_len = u64::from(read_u16(&header, 26).expect("fixed local header range is complete"));
+    let extra_len = u64::from(read_u16(&header, 28).expect("fixed local header range is complete"));
+    Ok(local_header_offset + 30 + name_len + extra_len)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+}
+
+fn spawn_metadata_backfill(state: Arc<AppState>, route: String, registrations: &[Registration]) {
+    let candidates = metadata_backfill_candidates(registrations);
+    if candidates.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        run_metadata_backfill_candidates(state, route, candidates).await;
+    });
+}
+
+fn metadata_backfill_candidates(registrations: &[Registration]) -> Vec<MetadataBackfillCandidate> {
+    registrations
+        .iter()
+        .filter(|registration| registration.metadata.is_none() && supports_generated_metadata(&registration.filename))
+        .filter_map(|registration| {
+            Some(MetadataBackfillCandidate {
+                digest: Digest::from_hex(&registration.sha256)?,
+                filename: registration.filename.clone(),
+            })
+        })
+        .collect()
+}
+
+async fn run_metadata_backfill_candidates(
+    state: Arc<AppState>,
+    route: String,
+    candidates: Vec<MetadataBackfillCandidate>,
+) {
+    for candidate in candidates {
+        if state
+            .meta
+            .get_metadata(candidate.digest.as_str())
+            .is_ok_and(|record| record.is_some())
+        {
+            continue;
+        }
+        let Err(err) = write_generated_metadata(&state, &candidate.digest, &route, &candidate.filename).await else {
+            continue;
+        };
+        let digest = candidate.digest.as_str();
+        let filename = &candidate.filename;
+        tracing::debug!(?err, digest, filename = %filename, "metadata backfill skipped");
+    }
+}
+
+struct MetadataBackfillCandidate {
+    digest: Digest,
+    filename: String,
+}
+
+fn supports_generated_metadata(filename: &str) -> bool {
+    is_wheel(filename) || is_tar_gz(filename)
+}
+
+fn is_wheel(filename: &str) -> bool {
+    std::path::Path::new(filename)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+}
+
+fn is_tar_gz(filename: &str) -> bool {
+    filename
+        .get(filename.len().saturating_sub(7)..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".tar.gz"))
 }
 
 fn metadata_negative_key(artifact_digest: &Digest) -> String {
@@ -1118,6 +1477,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
                 state,
                 key,
                 hot_key,
+                route,
                 mirror_name,
                 project,
                 now,
@@ -1171,6 +1531,7 @@ struct FreshJsonStream {
     state: Arc<AppState>,
     key: String,
     hot_key: String,
+    route: String,
     mirror_name: String,
     project: String,
     now: i64,
@@ -1221,6 +1582,7 @@ impl FreshJsonStream {
                     transformer: *transformer,
                     key: self.key,
                     hot_key: self.hot_key,
+                    route: self.route,
                     mirror: self.mirror_name,
                     project: self.project,
                     etag,
@@ -1245,6 +1607,7 @@ impl FreshJsonStream {
                 let expires_at = record.fetched_at_unix + record.fresh_secs.unwrap_or(self.state.ttl_secs);
                 #[rustfmt::skip]
                 persist_streamed(&self.state, &self.key, &self.mirror_name, &self.project, &record, &summary)?;
+                spawn_metadata_backfill(self.state.clone(), self.route.clone(), &summary.registrations);
                 let bytes = Bytes::from(served);
                 self.state.hot.insert(self.hot_key, (expires_at, bytes.clone()));
                 release_flight(&self.state, &self.key, self.guard);
@@ -1352,8 +1715,9 @@ fn transform_whole(
     state: &AppState,
     hot_key: &str,
     record: &CachedIndex,
-    context: crate::stream::PageContext,
+    mut context: crate::stream::PageContext,
 ) -> Result<Bytes, CacheError> {
+    context.known_metadata = known_metadata(state, &parse_detail(&record.body)?.files)?;
     let mut transformer = PageTransformer::new(context);
     let mut out = transformer.push(&record.body).map_err(transform_error)?;
     transformer.finish().map_err(transform_error)?;
@@ -1440,6 +1804,7 @@ struct LiveStream {
     transformer: PageTransformer,
     key: String,
     hot_key: String,
+    route: String,
     mirror: String,
     project: String,
     etag: Option<String>,
@@ -1508,6 +1873,7 @@ fn live_stream(
                     // sent already, and a client cannot act on the page before EOF, so downloads
                     // always find their file registrations.
                     let raw_len = record.body.len();
+                    let registrations = summary.registrations.clone();
                     let persist_state = state.clone();
                     let (key, mirror, project) = (live.key.clone(), live.mirror.clone(), live.project.clone());
                     #[rustfmt::skip]
@@ -1516,6 +1882,7 @@ fn live_stream(
                     })
                     .await
                     .expect("page persist task never panics");
+                    spawn_metadata_backfill(state.clone(), live.route.clone(), &registrations);
                     // The hot page goes live only after the persist lands: a concurrent client that
                     // serves this page from the hot cache and immediately requests a file must find
                     // that file's registration.
@@ -1874,5 +2241,192 @@ async fn tail_file(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use velodex_core::pypi::Provenance;
+    use velodex_storage::blob::BlobStore;
+    use velodex_storage::meta::MetaStore;
+
+    use super::*;
+
+    #[test]
+    fn test_present_file_advertises_cached_generated_metadata() {
+        let artifact = "a".repeat(64);
+        let metadata = "b".repeat(64);
+        let file = File {
+            filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+            url: "https://files.example/pkg-1.0-py3-none-any.whl".to_owned(),
+            hashes: BTreeMap::from([("sha256".to_owned(), artifact.clone())]),
+            requires_python: None,
+            size: None,
+            upload_time: None,
+            yanked: Yanked::No,
+            core_metadata: CoreMetadata::Absent,
+            dist_info_metadata: CoreMetadata::Absent,
+            gpg_sig: None,
+            provenance: Provenance::default(),
+        };
+
+        let file = present_file(file, "pypi", &HashMap::from([(artifact.clone(), metadata.clone())]));
+
+        assert_eq!(file.url, local_file_url("pypi", &artifact, "pkg-1.0-py3-none-any.whl"));
+        assert!(matches!(file.metadata(), CoreMetadata::Hashes(hashes) if hashes["sha256"] == metadata));
+    }
+
+    #[test]
+    fn test_cache_error_archive_message_is_user_visible() {
+        assert_eq!(
+            CacheError::Archive(crate::archive::ArchiveError::Unsupported).user_message(),
+            "unsupported archive type; accepted formats are .whl, .zip, .egg, .tar, .tar.gz, and .tgz"
+        );
+    }
+
+    #[test]
+    fn test_central_directory_rejects_comment_mismatch_and_zip64() {
+        let mut eocd = [0_u8; ZIP_EOCD_LEN];
+        eocd[..4].copy_from_slice(&ZIP_EOCD_SIGNATURE);
+        eocd[20] = 1;
+        assert!(central_directory(&eocd).is_none());
+
+        let mut eocd = [0_u8; ZIP_EOCD_LEN];
+        eocd[..4].copy_from_slice(&ZIP_EOCD_SIGNATURE);
+        eocd[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(central_directory(&eocd).is_none());
+    }
+
+    #[test]
+    fn test_find_central_directory_entry_rejects_malformed_and_missing_entries() {
+        assert!(matches!(
+            find_central_directory_entry(&[0; 46], "pkg-1.0.dist-info/METADATA"),
+            DirectoryEntrySearch::Invalid
+        ));
+
+        let mut truncated = [0_u8; 46];
+        truncated[..4].copy_from_slice(&ZIP_CENTRAL_SIGNATURE);
+        truncated[28..30].copy_from_slice(&10_u16.to_le_bytes());
+        assert!(matches!(
+            find_central_directory_entry(&truncated, "pkg-1.0.dist-info/METADATA"),
+            DirectoryEntrySearch::Invalid
+        ));
+
+        assert!(matches!(
+            find_central_directory_entry(&[], "pkg-1.0.dist-info/METADATA"),
+            DirectoryEntrySearch::Missing
+        ));
+    }
+
+    #[test]
+    fn test_transform_error_maps_parse_and_truncated_errors() {
+        let err = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        assert!(matches!(transform_error(err.into()), CacheError::Parse(_)));
+        assert!(matches!(
+            transform_error(crate::stream::TransformError::Truncated),
+            CacheError::Unavailable
+        ));
+    }
+
+    #[test]
+    fn test_metadata_from_artifact_path_skips_unsupported_formats() {
+        assert!(
+            metadata_from_artifact_path("pkg-1.0.zip", std::path::Path::new("unused"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wheel_metadata_by_range_rejects_invalid_names_before_fetch() {
+        let client = UpstreamClient::new("https://pypi.org/simple/").unwrap();
+
+        assert!(matches!(
+            wheel_metadata_by_range(&client, "https://example.invalid/pkg.zip", "pkg-1.0.zip").await,
+            Ok(RemoteMetadata::Unsupported)
+        ));
+        assert!(matches!(
+            wheel_metadata_by_range(&client, "https://example.invalid/pkg.whl", "pkg.whl").await,
+            Err(RangeError::Invalid(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_metadata_bytes_regenerates_missing_generated_blob() {
+        let (_dir, state) = test_state();
+        let wheel = test_wheel(b"Metadata-Version: 2.1\nName: pkg\nVersion: 1.0\n");
+        let digest = state.blobs.write(&wheel).unwrap();
+        state
+            .meta
+            .put_metadata(
+                digest.as_str(),
+                GENERATED_METADATA_URL,
+                &"f".repeat(64),
+                GENERATED_METADATA_URL,
+            )
+            .unwrap();
+
+        let bytes = metadata_bytes(&state, &digest, "pypi", "pkg-1.0-py3-none-any.whl.metadata")
+            .await
+            .unwrap();
+
+        assert_eq!(&bytes[..], b"Metadata-Version: 2.1\nName: pkg\nVersion: 1.0\n");
+        assert!(state.meta.get_metadata(digest.as_str()).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_metadata_backfill_candidates_skip_existing_and_successful_records() {
+        let (_dir, state) = test_state();
+        let existing = Digest::of(b"existing");
+        state
+            .meta
+            .put_metadata(
+                existing.as_str(),
+                GENERATED_METADATA_URL,
+                &"e".repeat(64),
+                GENERATED_METADATA_URL,
+            )
+            .unwrap();
+        let wheel = test_wheel(b"Metadata-Version: 2.1\nName: pkg\nVersion: 1.0\n");
+        let digest = state.blobs.write(&wheel).unwrap();
+
+        run_metadata_backfill_candidates(
+            state.clone(),
+            "pypi".to_owned(),
+            vec![
+                MetadataBackfillCandidate {
+                    digest: existing,
+                    filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+                },
+                MetadataBackfillCandidate {
+                    digest: digest.clone(),
+                    filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+                },
+            ],
+        )
+        .await;
+
+        assert!(state.meta.get_metadata(digest.as_str()).unwrap().is_some());
+    }
+
+    fn test_state() -> (tempfile::TempDir, Arc<AppState>) {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
+        let blobs = BlobStore::new(dir.path().join("blobs"));
+        (dir, Arc::new(AppState::new(meta, blobs, 60, Vec::new())))
+    }
+
+    fn test_wheel(metadata: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("pkg-1.0.dist-info/METADATA", options).unwrap();
+            std::io::Write::write_all(&mut zip, metadata).unwrap();
+            zip.finish().unwrap();
+        }
+        bytes
     }
 }

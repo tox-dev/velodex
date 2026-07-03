@@ -15,7 +15,7 @@ use velodex_core::pypi::{CoreMetadata, File, Provenance, Yanked, to_json};
 use velodex_storage::blob::{BlobStore, Digest};
 use velodex_storage::meta::{CachedIndex, MetaStore};
 use velodex_upstream::{Auth, UpstreamClient};
-use wiremock::matchers::{header as match_header, method, path};
+use wiremock::matchers::{header as match_header, header_regex, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{LogCapture, field};
@@ -742,6 +742,565 @@ async fn test_metadata_not_found_when_unregistered() {
     let uri = format!("/pypi/files/{}/x.whl.metadata", "a".repeat(64));
     let (status, ..) = get(&h.state, &uri, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_reads_wheel_ranges() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    let file_url = format!("{}/files/{filename}", h.server.uri());
+    h.state.meta.put_file_url(digest.as_str(), &file_url, "pypi").unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", wheel.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(match_header("accept-encoding", "identity"))
+        .respond_with(range_response(wheel))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+    let (url, metadata_sha256, source) = h
+        .state
+        .meta
+        .get_metadata(digest.as_str())
+        .unwrap()
+        .expect("generated metadata registered");
+    assert_eq!(url, "velodex:generated");
+    assert_eq!(metadata_sha256, Digest::of(metadata).as_str());
+    assert_eq!(source, "pypi");
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_upstream_range_error_is_bad_gateway() {
+    let h = harness().await;
+    let wheel = fixture_wheel_with_metadata(b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n");
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(body.contains("upstream returned 500 Internal Server Error"));
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_reads_cached_wheel_blob() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let digest = h.state.blobs.write(&wheel).unwrap();
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_ranges_fail() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    let file_url = format!("{}/files/{filename}", h.server.uri());
+    h.state.meta.put_file_url(digest.as_str(), &file_url, "pypi").unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+    assert!(h.state.blobs.exists(&digest));
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_sdist_without_ranges() {
+    let h = harness().await;
+    let sdist = fixture_sdist();
+    let digest = Digest::of(&sdist);
+    let filename = "velodexpkg-1.0.tar.gz";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "Metadata-Version: 2.2\nName: velodexpkg\nVersion: 1.0\n");
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_missing_wheel_metadata_is_not_found() {
+    let h = harness().await;
+    let wheel = fixture_wheel_without_metadata();
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", wheel.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(wheel))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, ..) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_zip_is_unsupported() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", "0"),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_tail_is_not_zip() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+
+    assert_metadata_range_fallback(&h, vec![0; 128], wheel, metadata).await;
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_directory_is_empty() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+
+    assert_metadata_range_fallback(&h, empty_zip(), wheel, metadata).await;
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_directory_is_invalid() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let mut ranged = wheel.clone();
+    overwrite_metadata_central_signature(&mut ranged, [0, 0, 0, 0]);
+
+    assert_metadata_range_fallback(&h, ranged, wheel, metadata).await;
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_metadata_is_too_large() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let ranged = wheel_with_metadata_uncompressed_size(
+        metadata,
+        u32::try_from(crate::archive::MAX_WHEEL_METADATA_BYTES).unwrap() + 1,
+    );
+
+    assert_metadata_range_fallback(&h, ranged, wheel, metadata).await;
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_skips_ranges_after_disable() {
+    let h = harness().await;
+    let first = fixture_wheel_with_metadata(b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n");
+    let first_digest = Digest::of(&first);
+    let first_filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(
+            first_digest.as_str(),
+            &format!("{}/files/{first_filename}", h.server.uri()),
+            "pypi",
+        )
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{first_filename}")))
+        .respond_with(ResponseTemplate::new(405))
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{first_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(first))
+        .mount(&h.server)
+        .await;
+
+    let first_uri = format!("/pypi/files/{}/{first_filename}.metadata", first_digest.as_str());
+    assert_eq!(get(&h.state, &first_uri, None).await.0, StatusCode::OK);
+
+    let second_metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 2.0\n";
+    let second = fixture_wheel_with_body_and_metadata("2.0", b"VALUE = 2\n", Some(second_metadata));
+    let second_digest = Digest::of(&second);
+    let second_filename = "velodexpkg-2.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(
+            second_digest.as_str(),
+            &format!("{}/files/{second_filename}", h.server.uri()),
+            "pypi",
+        )
+        .unwrap();
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{second_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(second))
+        .mount(&h.server)
+        .await;
+
+    let second_uri = format!("/pypi/files/{}/{second_filename}.metadata", second_digest.as_str());
+    let (status, _, body) = get(&h.state, &second_uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), second_metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_deflate_is_invalid() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let ranged = wheel_with_invalid_deflated_metadata(metadata);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", ranged.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(ranged))
+        .with_priority(1)
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(10)
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_compression_is_unsupported() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let ranged = wheel_with_metadata_compression_method(metadata, 99);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", ranged.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(ranged))
+        .with_priority(1)
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(10)
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_size_mismatches() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let ranged = wheel_with_metadata_uncompressed_size(metadata, u32::try_from(metadata.len()).unwrap() + 1);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", ranged.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(ranged))
+        .with_priority(1)
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(10)
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_downloads_when_range_local_header_is_invalid() {
+    let h = harness().await;
+    let metadata = b"Metadata-Version: 2.1\nName: velodexpkg\nVersion: 1.0\n";
+    let wheel = fixture_wheel_with_metadata(metadata);
+    let mut ranged = wheel.clone();
+    overwrite_metadata_local_signature(&mut ranged, [0, 0, 0, 0]);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", ranged.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(ranged))
+        .with_priority(1)
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(10)
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
+}
+
+#[tokio::test]
+async fn test_metadata_backfill_reads_empty_stored_range_metadata() {
+    let h = harness().await;
+    let wheel = fixture_wheel_with_metadata_compression(b"", zip::CompressionMethod::Stored);
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", wheel.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(wheel))
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_empty());
+}
+
+fn range_response(bytes: Vec<u8>) -> impl wiremock::Respond {
+    move |request: &wiremock::Request| {
+        let Some(range) = request
+            .headers
+            .get("range")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("bytes="))
+        else {
+            return ResponseTemplate::new(416);
+        };
+        let Some((start, end)) = range.split_once('-') else {
+            return ResponseTemplate::new(416);
+        };
+        let (Some(start), Some(end)) = (start.parse::<usize>().ok(), end.parse::<usize>().ok()) else {
+            return ResponseTemplate::new(416);
+        };
+        if start > end || end >= bytes.len() {
+            return ResponseTemplate::new(416);
+        }
+        ResponseTemplate::new(206)
+            .insert_header("accept-ranges", "bytes")
+            .insert_header("content-range", format!("bytes {start}-{end}/{}", bytes.len()))
+            .set_body_bytes(bytes[start..=end].to_vec())
+    }
+}
+
+async fn assert_metadata_range_fallback(h: &Harness, ranged: Vec<u8>, wheel: Vec<u8>, metadata: &[u8]) {
+    let digest = Digest::of(&wheel);
+    let filename = "velodexpkg-1.0-py3-none-any.whl";
+    h.state
+        .meta
+        .put_file_url(digest.as_str(), &format!("{}/files/{filename}", h.server.uri()), "pypi")
+        .unwrap();
+    Mock::given(method("HEAD"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("accept-ranges", "bytes")
+                .insert_header("content-length", ranged.len()),
+        )
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .and(header_regex("range", "^bytes=[0-9]+-[0-9]+$"))
+        .respond_with(range_response(ranged))
+        .with_priority(1)
+        .mount(&h.server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(10)
+        .mount(&h.server)
+        .await;
+
+    let uri = format!("/pypi/files/{}/{filename}.metadata", digest.as_str());
+    let (status, _, body) = get(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_bytes(), metadata);
 }
 
 fn upload_fields() -> Vec<(&'static str, &'static str)> {
@@ -2341,6 +2900,114 @@ fn fixture_wheel_without_metadata() -> Vec<u8> {
 
 fn fixture_wheel_with_metadata(metadata: &[u8]) -> Vec<u8> {
     fixture_wheel_with_body_and_metadata("1.0", b"VALUE = 1\n", Some(metadata))
+}
+
+fn empty_zip() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    zip::ZipWriter::new(std::io::Cursor::new(&mut bytes)).finish().unwrap();
+    bytes
+}
+
+fn fixture_wheel_with_metadata_compression(metadata: &[u8], compression: zip::CompressionMethod) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let options = zip::write::SimpleFileOptions::default().compression_method(compression);
+        let dist_info = "velodexpkg-1.0.dist-info";
+        let wheel = b"Wheel-Version: 1.0\nGenerator: velodex-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
+        let entries = [
+            ("velodexpkg/__init__.py".to_owned(), b"VALUE = 1\n".to_vec()),
+            (format!("{dist_info}/METADATA"), metadata.to_vec()),
+            (format!("{dist_info}/WHEEL"), wheel.to_vec()),
+        ];
+        for (path, bytes) in &entries {
+            zip.start_file(path, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        let record_path = format!("{dist_info}/RECORD");
+        zip.start_file(&record_path, options).unwrap();
+        zip.write_all(record(&entries, &record_path).as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+fn wheel_with_invalid_deflated_metadata(metadata: &[u8]) -> Vec<u8> {
+    let mut wheel = fixture_wheel_with_metadata(metadata);
+    let data_start = metadata_local_data_start(&wheel);
+    wheel[data_start] = 0x07;
+    wheel
+}
+
+fn wheel_with_metadata_compression_method(metadata: &[u8], compression_method: u16) -> Vec<u8> {
+    let mut wheel = fixture_wheel_with_metadata(metadata);
+    let position = metadata_central_directory_position(&wheel);
+    wheel[position + 10..position + 12].copy_from_slice(&compression_method.to_le_bytes());
+    wheel
+}
+
+fn wheel_with_metadata_uncompressed_size(metadata: &[u8], uncompressed_size: u32) -> Vec<u8> {
+    let mut wheel = fixture_wheel_with_metadata(metadata);
+    let position = metadata_central_directory_position(&wheel);
+    wheel[position + 24..position + 28].copy_from_slice(&uncompressed_size.to_le_bytes());
+    wheel
+}
+
+fn overwrite_metadata_local_signature(wheel: &mut [u8], signature: [u8; 4]) {
+    let position = metadata_local_header_position(wheel);
+    wheel[position..position + 4].copy_from_slice(&signature);
+}
+
+fn overwrite_metadata_central_signature(wheel: &mut [u8], signature: [u8; 4]) {
+    let position = metadata_central_directory_position(wheel);
+    wheel[position..position + 4].copy_from_slice(&signature);
+}
+
+fn metadata_local_data_start(wheel: &[u8]) -> usize {
+    let position = metadata_local_header_position(wheel);
+    let name_len = usize::from(u16::from_le_bytes(
+        wheel[position + 26..position + 28].try_into().unwrap(),
+    ));
+    let extra_len = usize::from(u16::from_le_bytes(
+        wheel[position + 28..position + 30].try_into().unwrap(),
+    ));
+    position + 30 + name_len + extra_len
+}
+
+fn metadata_local_header_position(wheel: &[u8]) -> usize {
+    let metadata = b"velodexpkg-1.0.dist-info/METADATA";
+    for position in 0..wheel.len().saturating_sub(30) {
+        if !wheel[position..].starts_with(b"PK\x03\x04") {
+            continue;
+        }
+        let name_len = usize::from(u16::from_le_bytes(
+            wheel[position + 26..position + 28].try_into().unwrap(),
+        ));
+        let name_start = position + 30;
+        let name_end = name_start + name_len;
+        if wheel.get(name_start..name_end) == Some(metadata.as_slice()) {
+            return position;
+        }
+    }
+    panic!("metadata local header not found");
+}
+
+fn metadata_central_directory_position(wheel: &[u8]) -> usize {
+    let metadata = b"velodexpkg-1.0.dist-info/METADATA";
+    for position in 0..wheel.len().saturating_sub(46) {
+        if !wheel[position..].starts_with(b"PK\x01\x02") {
+            continue;
+        }
+        let name_len = usize::from(u16::from_le_bytes(
+            wheel[position + 28..position + 30].try_into().unwrap(),
+        ));
+        let name_start = position + 46;
+        let name_end = name_start + name_len;
+        if wheel.get(name_start..name_end) == Some(metadata.as_slice()) {
+            return position;
+        }
+    }
+    panic!("metadata central directory entry not found");
 }
 
 fn fixture_wheel_with_body_and_metadata(version: &str, body: &[u8], metadata: Option<&[u8]>) -> Vec<u8> {

@@ -633,6 +633,30 @@ impl MetaStore {
         }))
     }
 
+    /// Look up metadata sha256 values for many artifact digests in one read transaction.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn get_metadata_digests<'a>(
+        &self,
+        artifact_sha256s: impl IntoIterator<Item = &'a str>,
+    ) -> Result<HashMap<String, String>, MetaError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(METADATA)?;
+        let mut metadata = HashMap::new();
+        for artifact_sha256 in artifact_sha256s {
+            let Some(value) = table.get(artifact_sha256)? else {
+                continue;
+            };
+            let mut parts = value.value().splitn(3, '\n');
+            let (_url, Some(metadata_sha256), _source) = (parts.next(), parts.next(), parts.next()) else {
+                continue;
+            };
+            metadata.insert(artifact_sha256.to_owned(), metadata_sha256.to_owned());
+        }
+        Ok(metadata)
+    }
+
     /// Record that `display` (a project's display name) has been observed on `index`, keyed by its
     /// normalized name so re-observations do not duplicate.
     ///

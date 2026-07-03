@@ -187,14 +187,17 @@ pub async fn project(route: &str, project: &str) -> Result<Option<(UiProject, Op
                     file.filename, file.sha256
                 ));
             };
-            let bytes = cache::metadata_bytes(&app, &digest).await.map_err(|err| {
-                format!(
-                    "metadata fetch on index {route:?} for file {:?} with digest {}: {}",
-                    file.filename,
-                    digest.as_str(),
-                    err.user_message()
-                )
-            })?;
+            let metadata_filename = format!("{}.metadata", file.filename);
+            let bytes = cache::metadata_bytes(&app, &digest, route, &metadata_filename)
+                .await
+                .map_err(|err| {
+                    format!(
+                        "metadata fetch on index {route:?} for file {:?} with digest {}: {}",
+                        file.filename,
+                        digest.as_str(),
+                        err.user_message()
+                    )
+                })?;
             Some(parse_metadata(&String::from_utf8_lossy(&bytes)))
         }
         None => None,

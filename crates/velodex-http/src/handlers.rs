@@ -335,7 +335,7 @@ async fn file_route(state: &Arc<AppState>, index: &Index, file: &str) -> Respons
             filename: filename.clone(),
         });
         return file_response(
-            cache::metadata_bytes(state, &digest).await,
+            cache::metadata_bytes(state, &digest, &route, &filename).await,
             CacheContext::metadata(&route, &digest_hex, &filename),
         );
     }
@@ -1028,6 +1028,7 @@ fn cache_error_status(err: &CacheError, context: &CacheContext<'_>) -> StatusCod
             StatusCode::INTERNAL_SERVER_ERROR
         }
         CacheError::Upstream(_)
+        | CacheError::Archive(_)
         | CacheError::Parse(_)
         | CacheError::Simple(_)
         | CacheError::Unavailable

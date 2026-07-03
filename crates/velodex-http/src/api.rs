@@ -414,10 +414,10 @@ fn metadata_download() -> OperationBuilder {
         .tag("files")
         .summary(Some("Download PEP 658 core metadata"))
         .description(Some(
-            "The `.metadata` sibling of an artifact: core metadata verified against the digest the \
-             index page advertised. Uploaded wheels serve `METADATA`; uploaded sdists serve the \
-             verified `PKG-INFO`. pip and uv resolve through this instead of downloading whole \
-             artifacts.",
+            "The `.metadata` sibling of an artifact: advertised upstream metadata verified against \
+             the index-page digest, or metadata generated from a wheel `METADATA`/sdist `PKG-INFO` \
+             when upstream omits the sibling. pip and uv resolve through this instead of downloading \
+             whole artifacts.",
         ))
         .parameter(route_param())
         .parameter(sha256_param())
