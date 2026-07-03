@@ -75,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         .into_iter()
         .filter(|server| cli.only.is_empty() || cli.only.split(',').any(|name| name == server.name))
         .collect();
+    report::publish_meta(&manifest())?;
     let http = reqwest::Client::builder().build()?;
     let runs = |part: Part| !cli.skip.contains(&part);
     if runs(Part::Install) {
@@ -88,9 +89,45 @@ async fn main() -> anyhow::Result<()> {
         workloads::fleet(&servers, cli.runs, &http).await?;
     }
     if runs(Part::Load) {
-        workloads::load(&servers, &[1, 32], cli.runs, &http).await?;
+        workloads::load(&servers, &[100.0, 1000.0], cli.runs, &http).await?;
     }
     Ok(())
+}
+
+/// The run's machine and toolchain, so a reader can judge and reproduce the numbers: absolute
+/// figures move with the hardware and the client versions, and only a stated platform makes a
+/// benchmark trustworthy.
+fn manifest() -> Vec<(&'static str, String)> {
+    use sysinfo::System;
+    let mut system = System::new();
+    system.refresh_cpu_all();
+    system.refresh_memory();
+    let cpu = system
+        .cpus()
+        .first()
+        .map_or_else(|| "unknown".to_owned(), |cpu| cpu.brand().trim().to_owned());
+    let os = System::long_os_version().unwrap_or_else(|| "unknown".to_owned());
+    let memory_gib = format!("{} GiB", system.total_memory() / (1 << 30));
+    let tool_version = |command: &str, args: &[&str]| {
+        std::process::Command::new(command)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map_or_else(
+                || "unknown".to_owned(),
+                |output| String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+            )
+    };
+    vec![
+        ("os", os),
+        ("cpu", cpu),
+        ("logical_cores", system.cpus().len().to_string()),
+        ("memory", memory_gib),
+        ("uv", tool_version("uv", &["--version"])),
+        ("python", tool_version("python3", &["--version"])),
+        ("date", tool_version("date", &["-u", "+%Y-%m-%d"])),
+    ]
 }
 
 /// Build the release binary when it is absent, so one command reproduces everything.

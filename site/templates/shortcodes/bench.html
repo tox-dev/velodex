@@ -16,7 +16,7 @@
       <tr>
         <th>{{ row.name }}</th>
         {%- for cell in row.cells %}
-        <td class="bench-{{ cell.tint }}">{{ cell.text }} <span class="bench-ratio">({{ cell.ratio }})</span></td>
+        <td class="bench-{{ cell.tint }}">{{ cell.text }} <span class="bench-ratio">({{ cell.ratio }})</span>{% set spread = cell.spread | default(value="") %}{% if spread %} <span class="bench-spread">{{ spread }}</span>{% endif %}</td>
         {%- endfor %}
       </tr>
       {%- endfor %}

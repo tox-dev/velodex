@@ -39,6 +39,10 @@ pub struct Cell {
     pub text: String,
     pub ratio: String,
     pub tint: String,
+    /// Run-to-run coefficient of variation across the kept samples, e.g. `±4%`; empty for a
+    /// derived or absent cell that has no spread of its own.
+    #[serde(default)]
+    pub spread: String,
 }
 
 /// What a `None` measurement means for a row, and how its cell renders.
@@ -61,7 +65,8 @@ pub enum Metric {
     Amount(&'static str),
 }
 
-/// Format one row: readable value, ratio against the baseline party, and a best-to-worst tint.
+/// Format one row from scalar values: readable value, ratio against the baseline, and a tint. Used
+/// for derived rows (a ratio, a normalized cost) that carry no per-cell spread.
 ///
 /// The baseline is the no-proxy `direct` measurement where present, so every other cell reads as
 /// the overhead (or win) a server adds on top of talking to the upstream itself. A `None` marks a
@@ -70,6 +75,48 @@ pub enum Metric {
 /// # Panics
 /// Never in practice: the caller always measures the baseline party.
 pub fn row(name: &str, values: &[Option<f64>], baseline: usize, metric: Metric, absent: Absent) -> Row {
+    let spreads = vec![String::new(); values.len()];
+    build_row(name, values, &spreads, baseline, metric, absent)
+}
+
+/// Format one row from the raw samples per party: the cell reports the trimmed mean and the
+/// run-to-run coefficient of variation beside it, so a reader sees not just the figure but how much
+/// it wandered between runs.
+///
+/// # Panics
+/// Never in practice: the caller always measures the baseline party.
+pub fn row_samples(name: &str, per_party: &[Option<Vec<f64>>], baseline: usize, metric: Metric, absent: Absent) -> Row {
+    let mut values = Vec::with_capacity(per_party.len());
+    let mut spreads = Vec::with_capacity(per_party.len());
+    for samples in per_party {
+        match samples {
+            Some(samples) if !samples.is_empty() => {
+                let (mean, cv) = robust_stats(&mut samples.clone());
+                values.push(Some(mean));
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "cv percent is small"
+                )]
+                spreads.push(format!("±{}%", (cv * 100.0).round() as u64));
+            }
+            _ => {
+                values.push(None);
+                spreads.push(String::new());
+            }
+        }
+    }
+    build_row(name, &values, &spreads, baseline, metric, absent)
+}
+
+fn build_row(
+    name: &str,
+    values: &[Option<f64>],
+    spreads: &[String],
+    baseline: usize,
+    metric: Metric,
+    absent: Absent,
+) -> Row {
     let reference = values[baseline].expect("the baseline party always has a number");
     let higher_is_better = matches!(metric, Metric::Rate(_));
     let cost = |value: f64| if higher_is_better { 1.0 / value } else { value };
@@ -79,7 +126,8 @@ pub fn row(name: &str, values: &[Option<f64>], baseline: usize, metric: Metric, 
     let span = (worst / best).ln().max(MIN_SPAN);
     let cells = values
         .iter()
-        .map(|value| {
+        .zip(spreads)
+        .map(|(value, spread)| {
             value.map_or_else(
                 || absent_cell(absent),
                 |value| {
@@ -95,6 +143,7 @@ pub fn row(name: &str, values: &[Option<f64>], baseline: usize, metric: Metric, 
                         text: format_value(value, metric),
                         ratio: format!("{:.2}x", value / reference),
                         tint: LADDER[index].to_owned(),
+                        spread: spread.clone(),
                     }
                 },
             )
@@ -119,6 +168,7 @@ fn absent_cell(absent: Absent) -> Cell {
         text: text.to_owned(),
         ratio: "n/a".to_owned(),
         tint: tint.to_owned(),
+        spread: String::new(),
     }
 }
 
@@ -157,6 +207,27 @@ pub fn publish(name: &str, table: Table) -> anyhow::Result<()> {
     std::fs::create_dir_all(path.parent().expect("the report lives under site/data"))?;
     std::fs::write(&path, toml::to_string_pretty(&report)?)?;
     println!("updated {} [{name}]", path.display());
+    Ok(())
+}
+
+/// Write the run's machine-and-toolchain manifest to the report's top-level `[meta]` table, kept
+/// alongside the workload tables so the docs can show what produced the numbers.
+///
+/// # Errors
+/// Returns an error when the existing report cannot be parsed or the new one cannot be written.
+pub fn publish_meta(entries: &[(&str, String)]) -> anyhow::Result<()> {
+    let path = report_path();
+    let mut report: toml::Table = match std::fs::read_to_string(&path) {
+        Ok(existing) => existing.parse().context("existing report is not valid TOML")?,
+        Err(_) => toml::Table::new(),
+    };
+    let meta: toml::Table = entries
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), toml::Value::String(value.clone())))
+        .collect();
+    report.insert("meta".to_owned(), toml::Value::Table(meta));
+    std::fs::create_dir_all(path.parent().expect("the report lives under site/data"))?;
+    std::fs::write(&path, toml::to_string_pretty(&report)?)?;
     Ok(())
 }
 
@@ -214,12 +285,29 @@ pub fn report_path() -> PathBuf {
 /// # Panics
 /// Never in practice: every measurement loop collects at least one sample.
 pub fn robust_mean(samples: &mut [f64]) -> f64 {
+    robust_stats(samples).0
+}
+
+/// The trimmed mean and the coefficient of variation of the kept samples (standard deviation over
+/// mean), the run-to-run spread a single figure hides.
+///
+/// # Panics
+/// Never in practice: every measurement loop collects at least one sample.
+pub fn robust_stats(samples: &mut [f64]) -> (f64, f64) {
     assert!(!samples.is_empty(), "a measurement always produces samples");
     samples.sort_unstable_by(f64::total_cmp);
     let trim = usize::from(samples.len() >= 3);
     let kept = &samples[trim..samples.len() - trim];
     #[expect(clippy::cast_precision_loss, reason = "sample counts are single digits")]
-    return kept.iter().sum::<f64>() / kept.len() as f64;
+    let count = kept.len() as f64;
+    let mean = kept.iter().sum::<f64>() / count;
+    let cv = if kept.len() < 2 || mean == 0.0 {
+        0.0
+    } else {
+        let variance = kept.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / count;
+        variance.sqrt() / mean
+    };
+    (mean, cv)
 }
 
 /// The repository checkout root.

@@ -2,12 +2,14 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 
 use crate::packages::{FLEET_PACKAGE, STRESS_PROJECT, TOP_PACKAGES};
-use crate::report::{Absent, Metric, Row, publish, robust_mean, row, table};
+use crate::report::{Absent, Metric, Row, publish, robust_mean, row, row_samples, table};
 use crate::servers::{Active, Server};
 use crate::usage::{Cost, Usage};
 
@@ -52,46 +54,32 @@ fn cost_rows(servers: &[Server], costs: &[Option<Cost>]) -> Vec<Row> {
 pub async fn installs(servers: &[Server], clients: &[&str], runs: usize, http: &reqwest::Client) -> anyhow::Result<()> {
     prewarm_cdn()?;
     for client in clients {
-        let mut walls: Vec<(Option<f64>, Option<f64>)> = Vec::new();
-        let mut costs: Vec<Option<Cost>> = Vec::new();
-        for server in servers {
-            let mut cold_samples = Vec::new();
-            let mut warm_samples = Vec::new();
-            let mut cost: Option<Cost> = None;
-            for attempt in 1..=runs {
+        let mut cold: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+        let mut warm: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+        let mut costs: Vec<Option<Cost>> = vec![None; servers.len()];
+        // Interleave server order round by round rather than finishing one server before the next,
+        // so a drift in the network or the laptop's thermal state spreads across every party
+        // instead of penalizing whoever the run reached last.
+        for round in 1..=runs {
+            for (index, server) in servers.iter().enumerate() {
                 let scratch = tempfile::tempdir()?;
                 let state = scratch.path().join("state");
                 std::fs::create_dir(&state)?;
                 let active = server.start(&state, http).await?;
                 let usage = Usage::watch(active.pid());
-                println!("[{client}] {} #{attempt}: cold", server.name);
-                cold_samples.push(install_once(client, &active.url, scratch.path())?);
-                println!("[{client}] {} #{attempt}: warm", server.name);
-                warm_samples.push(install_once(client, &active.url, scratch.path())?);
-                cost = usage.finish().or(cost);
+                println!("[{client}] {} round {round}: cold", server.name);
+                cold[index].push(install_once(client, &active.url, scratch.path())?);
+                println!("[{client}] {} round {round}: warm", server.name);
+                warm[index].push(install_once(client, &active.url, scratch.path())?);
+                costs[index] = usage.finish().or_else(|| costs[index].take());
             }
-            let cold = robust_mean(&mut cold_samples);
-            let warm = robust_mean(&mut warm_samples);
-            println!("[{client}] {}: cold {cold:.1}s warm {warm:.1}s", server.name);
-            walls.push((Some(cold), Some(warm)));
-            costs.push(cost);
         }
         let base = baseline(servers);
+        let cold_cells: Vec<Option<Vec<f64>>> = cold.into_iter().map(Some).collect();
+        let warm_cells: Vec<Option<Vec<f64>>> = warm.into_iter().map(Some).collect();
         let mut rows = vec![
-            row(
-                "cold cache",
-                &walls.iter().map(|&(cold, _)| cold).collect::<Vec<_>>(),
-                base,
-                Metric::Seconds,
-                Absent::Failed,
-            ),
-            row(
-                "warm cache",
-                &walls.iter().map(|&(_, warm)| warm).collect::<Vec<_>>(),
-                base,
-                Metric::Seconds,
-                Absent::Failed,
-            ),
+            row_samples("cold cache", &cold_cells, base, Metric::Seconds, Absent::Failed),
+            row_samples("warm cache", &warm_cells, base, Metric::Seconds, Absent::Failed),
         ];
         rows.extend(cost_rows(servers, &costs));
         publish(
@@ -176,15 +164,17 @@ fn run_checked(command: &mut Command) -> anyhow::Result<()> {
 pub async fn throughput(servers: &[Server], runs: usize, http: &reqwest::Client) -> anyhow::Result<()> {
     let filename = stress_wheel_filename(http).await?;
     println!("[throughput] measuring with {filename}");
-    let mut measured: Vec<Option<(f64, f64, f64)>> = Vec::new();
-    let mut costs: Vec<Option<Cost>> = Vec::new();
-    for server in servers {
-        let mut cold_samples = Vec::new();
-        let mut hot1_samples = Vec::new();
-        let mut hot8_samples = Vec::new();
-        let mut cost: Option<Cost> = None;
-        let mut failed = false;
-        for _ in 0..runs {
+    let mut cold: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+    let mut hot1: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+    let mut hot8: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+    let mut costs: Vec<Option<Cost>> = vec![None; servers.len()];
+    let mut failed = vec![false; servers.len()];
+    // Interleave the parties round by round so drift spreads evenly (see the install workload).
+    for _ in 0..runs {
+        for (index, server) in servers.iter().enumerate() {
+            if failed[index] {
+                continue;
+            }
             let scratch = tempfile::tempdir()?;
             let state = scratch.path().join("state");
             std::fs::create_dir(&state)?;
@@ -192,62 +182,45 @@ pub async fn throughput(servers: &[Server], runs: usize, http: &reqwest::Client)
             let usage = Usage::watch(active.pid());
             // A server erroring under contention is itself a result worth a table cell.
             let outcome = transfer_series(&active, &filename, http).await;
-            cost = usage.finish().or(cost);
+            costs[index] = usage.finish().or_else(|| costs[index].take());
             match outcome {
-                Ok((cold4, hot1, hot8)) => {
-                    cold_samples.push(cold4);
-                    hot1_samples.push(hot1);
-                    hot8_samples.push(hot8);
+                Ok((cold4, single, eight)) => {
+                    cold[index].push(cold4);
+                    hot1[index].push(single);
+                    hot8[index].push(eight);
                 }
                 Err(error) => {
                     println!("[throughput] {}: failed under contention ({error:#})", server.name);
-                    failed = true;
-                    break;
+                    failed[index] = true;
                 }
             }
         }
-        if failed || cold_samples.is_empty() {
-            measured.push(None);
-        } else {
-            let cold4 = robust_mean(&mut cold_samples);
-            let hot1 = robust_mean(&mut hot1_samples);
-            let hot8 = robust_mean(&mut hot8_samples);
-            println!(
-                "[throughput] {}: cold-4 {cold4:.1}s, hot {hot1:.0} MB/s, hot-8 {hot8:.0} MB/s",
-                server.name
-            );
-            measured.push(Some((cold4, hot1, hot8)));
-        }
-        costs.push(cost);
     }
     let base = baseline(servers);
+    let cells = |data: Vec<Vec<f64>>, fail: &[bool]| -> Vec<Option<Vec<f64>>> {
+        data.into_iter()
+            .enumerate()
+            .map(|(index, samples)| (!fail[index] && !samples.is_empty()).then_some(samples))
+            .collect()
+    };
     let mut rows = vec![
-        row(
+        row_samples(
             "cold cache: 4 clients, one wheel",
-            &measured
-                .iter()
-                .map(|cells| cells.map(|(cold4, ..)| cold4))
-                .collect::<Vec<_>>(),
+            &cells(cold, &failed),
             base,
             Metric::Seconds,
             Absent::Failed,
         ),
-        row(
+        row_samples(
             "hot cache: single download",
-            &measured
-                .iter()
-                .map(|cells| cells.map(|(_, hot1, _)| hot1))
-                .collect::<Vec<_>>(),
+            &cells(hot1, &failed),
             base,
             Metric::Rate("MB/s"),
             Absent::Failed,
         ),
-        row(
+        row_samples(
             "hot cache: 8 parallel downloads",
-            &measured
-                .iter()
-                .map(|cells| cells.map(|(.., hot8)| hot8))
-                .collect::<Vec<_>>(),
+            &cells(hot8, &failed),
             base,
             Metric::Rate("MB/s"),
             Absent::Failed,
@@ -389,14 +362,16 @@ async fn parallel_downloads(url: &str, clients: usize, http: &reqwest::Client) -
 /// # Errors
 /// Returns an error when a server cannot start; a server failing the fleet is a table cell.
 pub async fn fleet(servers: &[Server], runs: usize, http: &reqwest::Client) -> anyhow::Result<()> {
-    let mut walls: Vec<Option<(f64, f64)>> = Vec::new();
-    let mut costs: Vec<Option<Cost>> = Vec::new();
-    for server in servers {
-        let mut cold_samples = Vec::new();
-        let mut warm_samples = Vec::new();
-        let mut cost: Option<Cost> = None;
-        let mut failed = false;
-        for _ in 0..runs {
+    let mut cold: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+    let mut warm: Vec<Vec<f64>> = vec![Vec::new(); servers.len()];
+    let mut costs: Vec<Option<Cost>> = vec![None; servers.len()];
+    let mut failed = vec![false; servers.len()];
+    // Interleave the parties round by round so drift spreads evenly (see the install workload).
+    for _ in 0..runs {
+        for (index, server) in servers.iter().enumerate() {
+            if failed[index] {
+                continue;
+            }
             let scratch = tempfile::tempdir()?;
             let state = scratch.path().join("state");
             std::fs::create_dir(&state)?;
@@ -407,57 +382,37 @@ pub async fn fleet(servers: &[Server], runs: usize, http: &reqwest::Client) -> a
                 Ok(cold) => fleet_install(&active.url, scratch.path(), 10).map(|warm| (cold, warm)),
                 Err(error) => Err(error),
             };
-            cost = usage.finish().or(cost);
+            costs[index] = usage.finish().or_else(|| costs[index].take());
             match outcome {
-                Ok((cold, warm)) => {
-                    cold_samples.push(cold);
-                    warm_samples.push(warm);
+                Ok((cold_wall, warm_wall)) => {
+                    cold[index].push(cold_wall);
+                    warm[index].push(warm_wall);
                 }
                 Err(error) => {
                     println!("[fleet] {}: failed under the fleet ({error:#})", server.name);
-                    failed = true;
-                    break;
+                    failed[index] = true;
                 }
             }
         }
-        if failed || cold_samples.is_empty() {
-            walls.push(None);
-        } else {
-            let cold = robust_mean(&mut cold_samples);
-            let warm = robust_mean(&mut warm_samples);
-            let spent = cost.map_or_else(
-                || "no server".to_owned(),
-                |cost| {
-                    format!(
-                        "{:.1}s CPU, {} MB peak",
-                        cost.cpu_seconds,
-                        cost.peak_rss_bytes / 1_000_000
-                    )
-                },
-            );
-            println!("[fleet] {}: cold {cold:.1}s warm {warm:.1}s, {spent}", server.name);
-            walls.push(Some((cold, warm)));
-        }
-        costs.push(cost);
     }
     let base = baseline(servers);
+    let cells = |data: Vec<Vec<f64>>, fail: &[bool]| -> Vec<Option<Vec<f64>>> {
+        data.into_iter()
+            .enumerate()
+            .map(|(index, samples)| (!fail[index] && !samples.is_empty()).then_some(samples))
+            .collect()
+    };
     let mut rows = vec![
-        row(
+        row_samples(
             "cold cache: 10 parallel installs",
-            &walls
-                .iter()
-                .map(|walls| walls.map(|(cold, _)| cold))
-                .collect::<Vec<_>>(),
+            &cells(cold, &failed),
             base,
             Metric::Seconds,
             Absent::Failed,
         ),
-        row(
+        row_samples(
             "warm cache: 10 parallel installs",
-            &walls
-                .iter()
-                .map(|walls| walls.map(|(_, warm)| warm))
-                .collect::<Vec<_>>(),
+            &cells(warm, &failed),
             base,
             Metric::Seconds,
             Absent::Failed,
@@ -517,8 +472,9 @@ fn fleet_install(index_url: &str, scratch: &Path, workers: usize) -> anyhow::Res
 ///
 /// # Errors
 /// Returns an error when a server cannot start or its pages cannot be warmed.
-pub async fn load(servers: &[Server], users: &[usize], runs: usize, http: &reqwest::Client) -> anyhow::Result<()> {
-    let mut measured: Vec<Vec<Swarm>> = Vec::new();
+pub async fn load(servers: &[Server], rates: &[f64], runs: usize, http: &reqwest::Client) -> anyhow::Result<()> {
+    // measured[server][rate] holds each window's rps/p95/p99 samples and the total requests answered.
+    let mut measured: Vec<Vec<RateResult>> = Vec::new();
     let mut costs: Vec<Option<Cost>> = Vec::new();
     for server in servers {
         let scratch = tempfile::tempdir()?;
@@ -527,53 +483,46 @@ pub async fn load(servers: &[Server], users: &[usize], runs: usize, http: &reqwe
         let active = server.start(&state, http).await?;
         warm_pages(&active.url, http).await?;
         let usage = Usage::watch(active.pid());
-        let mut per_user = Vec::new();
-        for &count in users {
-            println!("[load] {}: {count} user(s)", server.name);
-            // Trimmed means across windows, metric by metric; the request total stays a sum so
-            // the CPU-per-thousand ratio spans everything the server actually answered.
-            let windows: Vec<Swarm> = {
-                let mut collected = Vec::new();
-                for _ in 0..runs {
-                    collected.push(swarm(&active.url, count).await?);
-                }
-                collected
-            };
-            per_user.push(Swarm {
-                rps: robust_mean(&mut windows.iter().map(|window| window.rps).collect::<Vec<_>>()),
-                p95: robust_mean(&mut windows.iter().map(|window| window.p95).collect::<Vec<_>>()),
-                p99: robust_mean(&mut windows.iter().map(|window| window.p99).collect::<Vec<_>>()),
-                requests: windows.iter().map(|window| window.requests).sum(),
-            });
+        let mut per_rate = Vec::new();
+        for &rate in rates {
+            println!("[load] {}: {rate:.0} req/s target", server.name);
+            let mut result = RateResult::default();
+            for _ in 0..runs {
+                let window = swarm(&active.url, rate).await?;
+                result.rps.push(window.rps);
+                result.p95.push(window.p95);
+                result.p99.push(window.p99);
+                result.requests += window.requests;
+            }
+            per_rate.push(result);
         }
         costs.push(usage.finish());
-        measured.push(per_user);
+        measured.push(per_rate);
     }
     let base = baseline(servers);
     let mut rows = Vec::new();
-    for (index, &count) in users.iter().enumerate() {
-        let label = if count == 1 {
-            "1 user".to_owned()
-        } else {
-            format!("{count} users")
+    for (index, &rate) in rates.iter().enumerate() {
+        let label = format!("{rate:.0} req/s target");
+        let column = |pick: fn(&RateResult) -> Vec<f64>| -> Vec<Option<Vec<f64>>> {
+            measured.iter().map(|server| Some(pick(&server[index]))).collect()
         };
-        rows.push(row(
-            &format!("{label}: requests/s"),
-            &measured.iter().map(|user| Some(user[index].rps)).collect::<Vec<_>>(),
+        rows.push(row_samples(
+            &format!("{label}: achieved req/s"),
+            &column(|r| r.rps.clone()),
             base,
             Metric::Rate("req/s"),
             Absent::Failed,
         ));
-        rows.push(row(
+        rows.push(row_samples(
             &format!("{label}: p95 latency"),
-            &measured.iter().map(|user| Some(user[index].p95)).collect::<Vec<_>>(),
+            &column(|r| r.p95.clone()),
             base,
             Metric::Seconds,
             Absent::Failed,
         ));
-        rows.push(row(
+        rows.push(row_samples(
             &format!("{label}: p99 latency"),
-            &measured.iter().map(|user| Some(user[index].p99)).collect::<Vec<_>>(),
+            &column(|r| r.p99.clone()),
             base,
             Metric::Seconds,
             Absent::Failed,
@@ -586,8 +535,8 @@ pub async fn load(servers: &[Server], users: &[usize], runs: usize, http: &reqwe
     let per_thousand: Vec<Option<f64>> = costs
         .iter()
         .zip(&measured)
-        .map(|(cost, swarms)| {
-            let requests: usize = swarms.iter().map(|swarm| swarm.requests).sum();
+        .map(|(cost, rate_results)| {
+            let requests: usize = rate_results.iter().map(|result| result.requests).sum();
             cost.map(|cost| cost.cpu_seconds / (requests as f64 / 1000.0))
         })
         .collect();
@@ -612,7 +561,7 @@ pub async fn load(servers: &[Server], users: &[usize], runs: usize, http: &reqwe
     ));
     publish(
         "load",
-        table("simple-page requests against a warm cache", servers, base, rows),
+        table("simple-page requests under open-loop load", servers, base, rows),
     )
 }
 
@@ -635,22 +584,52 @@ async fn warm_pages(index_url: &str, http: &reqwest::Client) -> anyhow::Result<(
     Ok(())
 }
 
-/// Drive `users` concurrent resolver-style clients for 20 seconds.
-async fn swarm(index_url: &str, users: usize) -> anyhow::Result<Swarm> {
-    const WINDOW: Duration = Duration::from_secs(20);
-    let mut tasks = Vec::new();
-    for user in 0..users {
+/// One rate's windows: the per-run rps and latency percentiles, plus the total requests answered.
+#[derive(Default)]
+struct RateResult {
+    rps: Vec<f64>,
+    p95: Vec<f64>,
+    p99: Vec<f64>,
+    requests: usize,
+}
+
+/// Drive an open-loop swarm at a constant target arrival rate for a fixed window, timing each
+/// request against its *intended* send time rather than the moment it left the client.
+///
+/// A closed-loop swarm — each worker sending its next request only after the last one returns —
+/// lets a stalled server throttle the offered load, so the requests that would have piled up during
+/// the stall are never issued and the tail latency reads far lower than production would (Gil Tene's
+/// coordinated omission). Here a bounded pool of connections pulls from a fixed schedule; when the
+/// server cannot keep up, the requests fall behind their intended times and that queueing delay
+/// lands in the measured latency, which is what a client under steady arrivals actually feels.
+async fn swarm(index_url: &str, target_rps: f64) -> anyhow::Result<Swarm> {
+    const WINDOW: Duration = Duration::from_secs(15);
+    const CONNECTIONS: usize = 64;
+    let start = Instant::now();
+    let deadline = start + WINDOW;
+    let next = Arc::new(AtomicU64::new(0));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..CONNECTIONS {
         let index_url = index_url.to_owned();
-        tasks.push(tokio::spawn(async move {
-            // Each user keeps its own connections, like one resolver process would.
+        let next = next.clone();
+        tasks.spawn(async move {
             let client = reqwest::Client::builder().build().expect("client builds");
-            let deadline = Instant::now() + WINDOW;
             let mut latencies = Vec::new();
-            let mut page = user;
-            while Instant::now() < deadline {
-                let target = format!("{index_url}{}/", TOP_PACKAGES[page % 10]);
-                page += 1;
-                let start = Instant::now();
+            loop {
+                let issued = next.fetch_add(1, Ordering::Relaxed);
+                #[expect(clippy::cast_precision_loss, reason = "schedule index stays well under 2^53")]
+                let intended = start + Duration::from_secs_f64(issued as f64 / target_rps);
+                if intended >= deadline {
+                    break;
+                }
+                let now = Instant::now();
+                if now < intended {
+                    tokio::time::sleep(intended - now).await;
+                }
+                let target = format!(
+                    "{index_url}{}/",
+                    TOP_PACKAGES[usize::try_from(issued).unwrap_or(0) % 10]
+                );
                 let outcome = async {
                     client
                         .get(&target)
@@ -663,15 +642,15 @@ async fn swarm(index_url: &str, users: usize) -> anyhow::Result<Swarm> {
                 }
                 .await;
                 if outcome.is_ok() {
-                    latencies.push(start.elapsed().as_secs_f64());
+                    latencies.push(intended.elapsed().as_secs_f64());
                 }
             }
             latencies
-        }));
+        });
     }
     let mut latencies = Vec::new();
-    for task in tasks {
-        latencies.extend(task.await.expect("swarm user never panics"));
+    while let Some(joined) = tasks.join_next().await {
+        latencies.extend(joined.expect("swarm connection never panics"));
     }
     if latencies.is_empty() {
         bail!("the swarm completed no requests");

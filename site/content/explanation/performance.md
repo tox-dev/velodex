@@ -64,9 +64,14 @@ The tables below come from a [benchmark harness](https://github.com/tox-dev/velo
 repository carries as a Rust crate: it builds velodex, starts every competitor from its published package, times the
 same workload through each with a native HTTP client, samples each server's process tree while its workload runs, and
 writes one TOML report these tables render from. Every cell is five samples with the high and low dropped and the rest
-averaged, so one slow run cannot move it. Cells tint from best-in-row green to worst-in-row red; the ratio in
-parentheses compares against **direct**, the no-proxy baseline, so each server's cell reads as the overhead (or win) it
-adds over talking to pypi.org yourself.
+averaged, so one slow run cannot move it; the small ± beside a cell is the run-to-run coefficient of variation across
+those samples, so you can see how settled each figure is. Servers are measured round by round in rotating order rather
+than one after another, so a drift in the network or the laptop's temperature spreads across every party instead of
+landing on whoever came last. Cells tint from best-in-row green to worst-in-row red; the ratio in parentheses compares
+against **direct**, the no-proxy baseline, so each server's cell reads as the overhead (or win) it adds over talking to
+pypi.org yourself.
+
+{{ benchmeta() }}
 
 The numbers come from a laptop on a home connection, not a controlled lab, so the absolute figures move with the network
 and thermal state. The ratios against **direct** are what to read: every server meets the same conditions in the same
@@ -110,13 +115,14 @@ concludes the package does not exist.
 
 {{ bench(file="parallel-install") }}
 
-The request workload drives a swarm against each warm server: one user, then 32, each a client that fetches project
-pages and reads every byte of the body, the way a resolver does. The pages average ~480 KB, so this row prices full page
-transfers, not header round-trips. p95 and p99 come from pooling every request's latency and reading the percentile off
-the pool, not from averaging per-window percentiles. The swarm is closed-loop — each client waits for its response
-before sending the next — so these percentiles are bounded by the client count and read optimistically against a
-production tail; treat them as a same-conditions comparison between servers, not as absolute latency you would see under
-open-arrival load.
+The request workload drives an open-loop swarm at a fixed target arrival rate — 100 then 1,000 requests a second —
+against each warm server, every client reading every byte of the ~480 KB page the way a resolver does. Open-loop is the
+important word: requests leave on a fixed schedule whether or not earlier ones have come back, and each request's latency
+is measured from its **intended** send time. A closed-loop swarm, where a client waits for its response before sending
+the next, lets a stalled server throttle the offered load so the requests that would have piled up are never issued and
+the tail reads far better than production — the coordinated-omission trap. Here a server that cannot keep up with the
+target rate shows its real queueing delay: the achieved rate falls below the target and p95/p99 climb. Percentiles come
+from pooling every request's latency, not from averaging per-window percentiles.
 
 {{ bench(file="load") }}
 
