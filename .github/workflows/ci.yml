@@ -141,7 +141,13 @@ jobs:
         working-directory: tests/frontend
 
   all-pass:
-    needs: [lint, test, coverage, e2e, frontend]
+    # always() keeps this job from being skipped when a dependency fails: a skipped check
+    # satisfies branch protection, so the aggregate must fail loudly instead.
+    if: always()
+    needs: [lint, test, coverage, e2e, e2e-live, frontend]
     runs-on: ubuntu-latest
     steps:
+      - name: Fail when any dependency failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
       - run: echo "all checks passed"
