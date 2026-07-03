@@ -194,14 +194,8 @@ fn handle_with(path: std::path::PathBuf, progress: DownloadProgress) -> Download
     DownloadHandle::new(path, receiver)
 }
 
-async fn drain(state: &Arc<AppState>, handle: DownloadHandle) -> Result<Vec<u8>, std::io::Error> {
-    let mut stream = cache::tail_download(
-        state.clone(),
-        Digest::of(b"tail-target"),
-        handle,
-        "pypi".to_owned(),
-        "tail.whl".to_owned(),
-    );
+async fn drain(state: &Arc<AppState>, digest: Digest, handle: DownloadHandle) -> Result<Vec<u8>, std::io::Error> {
+    let mut stream = cache::tail_download(state.clone(), digest, handle, "pypi".to_owned(), "tail.whl".to_owned());
     let mut body = Vec::new();
     while let Some(item) = stream.next().await {
         body.extend_from_slice(&item?);
@@ -260,14 +254,52 @@ async fn test_tail_switches_to_the_committed_blob_when_the_temp_file_is_gone() {
 }
 
 #[tokio::test]
-async fn test_tail_with_a_missing_temp_file_and_no_commit_errors() {
+async fn test_tail_waits_out_the_commit_window_between_rename_and_verdict() {
+    let h = harness().await;
+    let body = b"renamed before the verdict broadcast";
+    let digest = Digest::of(body);
+    let progress = DownloadProgress {
+        flushed: body.len() as u64,
+        done: None,
+    };
+    // The temp file is already gone but no verdict has landed: the exact in-between state a slow
+    // tail observes mid-commit. The verdict arrives while it waits.
+    let (sender, receiver) = tokio::sync::watch::channel(progress);
+    let handle = DownloadHandle::new(std::path::PathBuf::from("/nonexistent/temp"), receiver);
+    let state = h.state.clone();
+    let commit_digest = digest.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        state.blobs.write_verified(body, &commit_digest).unwrap();
+        sender.send_modify(|progress| progress.done = Some(Ok(())));
+    });
+    let streamed = drain(&h.state, digest, handle).await.unwrap();
+    assert_eq!(streamed, body);
+}
+
+#[tokio::test]
+async fn test_tail_with_a_missing_temp_file_surfaces_the_failure_verdict() {
+    let h = harness().await;
+    let progress = DownloadProgress {
+        flushed: 10,
+        done: Some(Err("verification failed".to_owned())),
+    };
+    let handle = handle_with(std::path::PathBuf::from("/nonexistent/temp"), progress);
+    let err = drain(&h.state, Digest::of(b"tail-target"), handle).await.unwrap_err();
+    assert!(err.to_string().contains("verification failed"));
+}
+
+#[tokio::test]
+async fn test_tail_with_a_missing_temp_file_and_a_dead_pump_errors() {
     let h = harness().await;
     let progress = DownloadProgress {
         flushed: 10,
         done: None,
     };
-    let handle = handle_with(std::path::PathBuf::from("/nonexistent/temp"), progress);
-    let err = drain(&h.state, handle).await.unwrap_err();
+    let (sender, receiver) = tokio::sync::watch::channel(progress);
+    drop(sender);
+    let handle = DownloadHandle::new(std::path::PathBuf::from("/nonexistent/temp"), receiver);
+    let err = drain(&h.state, Digest::of(b"tail-target"), handle).await.unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 }
 
@@ -279,7 +311,7 @@ async fn test_tail_surfaces_the_transfer_failure() {
         done: Some(Err("upstream fell over".to_owned())),
     };
     let handle = handle_with(std::path::PathBuf::from("/irrelevant"), progress);
-    let err = drain(&h.state, handle).await.unwrap_err();
+    let err = drain(&h.state, Digest::of(b"tail-target"), handle).await.unwrap_err();
     assert!(err.to_string().contains("upstream fell over"));
 }
 
@@ -289,6 +321,6 @@ async fn test_tail_errors_when_the_pump_vanishes_without_a_verdict() {
     let (sender, receiver) = tokio::sync::watch::channel(DownloadProgress::default());
     drop(sender);
     let handle = DownloadHandle::new(std::path::PathBuf::from("/irrelevant"), receiver);
-    let err = drain(&h.state, handle).await.unwrap_err();
+    let err = drain(&h.state, Digest::of(b"tail-target"), handle).await.unwrap_err();
     assert!(err.to_string().contains("abandoned"));
 }

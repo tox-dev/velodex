@@ -1387,7 +1387,7 @@ pub(crate) fn tail_download(
             let progress = tail.handle.progress.borrow_and_update().clone();
             if tail.sent < progress.flushed {
                 if tail.file.is_none() {
-                    match tail_file(&tail.state, &tail.handle, &tail.digest).await {
+                    match tail_file(&tail.state, &mut tail.handle, &tail.digest).await {
                         Ok(file) => tail.file = Some(file),
                         Err(err) => {
                             tail.alive = false;
@@ -1438,20 +1438,28 @@ pub(crate) fn tail_download(
 /// Open the file a tail reads from. The first read always happens at offset zero, so no seek is
 /// needed: either the temp file still exists, or the transfer already committed and the blob
 /// serves from its final path.
+///
+/// The commit renames the temp file before the verdict broadcasts, so a missing file with no
+/// verdict yet is a normal in-between state: wait for the next progress change and look again.
 async fn tail_file(
     state: &AppState,
-    handle: &DownloadHandle,
+    handle: &mut DownloadHandle,
     digest: &Digest,
 ) -> Result<tokio::fs::File, std::io::Error> {
-    match tokio::fs::File::open(&handle.path).await {
-        Ok(file) => Ok(file),
-        Err(err) => {
-            // Check the live progress, not the caller's snapshot: the rename that removed the
-            // temp file may have landed after that snapshot was taken.
-            if matches!(handle.progress.borrow().done, Some(Ok(()))) {
-                return tokio::fs::File::open(state.blobs.path_for(digest)).await;
+    loop {
+        let missing = match tokio::fs::File::open(&handle.path).await {
+            Ok(file) => return Ok(file),
+            Err(err) => err,
+        };
+        let verdict = handle.progress.borrow_and_update().done.clone();
+        match verdict {
+            Some(Ok(())) => return tokio::fs::File::open(state.blobs.path_for(digest)).await,
+            Some(Err(message)) => return Err(std::io::Error::other(message)),
+            None => {
+                if handle.progress.changed().await.is_err() {
+                    return Err(missing);
+                }
             }
-            Err(err)
         }
     }
 }
