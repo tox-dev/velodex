@@ -555,7 +555,7 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
         indexes: vec![IndexConfig {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
-            policy: velodex_http::policy::PolicyConfig::default(),
+            policy: velodex_policy::PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Mirror {
                 upstream: "https://pypi.org/simple/".to_owned(),
@@ -574,7 +574,7 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
         indexes: vec![IndexConfig {
             name: "overlay".to_owned(),
             route: "overlay".to_owned(),
-            policy: velodex_http::policy::PolicyConfig::default(),
+            policy: velodex_policy::PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Overlay {
                 layers: Vec::new(),

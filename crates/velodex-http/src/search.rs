@@ -20,7 +20,7 @@ use velodex_storage::blob::Digest;
 use velodex_storage::meta::{CachedIndex, MetaScanError};
 
 use crate::path_safety::local_file_url;
-use crate::policy::PolicyAction;
+use velodex_policy::PolicyAction;
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;
 

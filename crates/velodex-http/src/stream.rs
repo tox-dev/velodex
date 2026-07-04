@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use velodex_ecosystem_pypi::{CoreMetadata, File, Yanked, parse_meta, to_json};
 
 use crate::path_safety::local_file_url;
-use crate::policy::{Policy, PolicyAction};
+use velodex_policy::{Policy, PolicyAction};
 
 /// Per-request configuration: how to rewrite and merge one page.
 #[derive(Debug, Default, Clone)]

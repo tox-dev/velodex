@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use velodex_http::policy::PackageType;
+use velodex_policy::PackageType;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 
 use crate::config::{

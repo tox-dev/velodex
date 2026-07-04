@@ -1,0 +1,16 @@
+[package]
+name = "velodex-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Repository policy engine for velodex: allow/deny, version, wheel-tag, and size rules."
+
+[dependencies]
+velodex-ecosystem-pypi.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

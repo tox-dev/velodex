@@ -4637,6 +4637,7 @@ dependencies = [
  "tracing-subscriber",
  "velodex-ecosystem-pypi",
  "velodex-http",
+ "velodex-policy",
  "velodex-storage",
  "velodex-upstream",
  "velodex-web",
@@ -4717,10 +4718,20 @@ dependencies = [
  "utoipa",
  "velodex-ecosystem-pypi",
  "velodex-format",
+ "velodex-policy",
  "velodex-storage",
  "velodex-upstream",
  "wiremock",
  "zip",
+]
+
+[[package]]
+name = "velodex-policy"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "velodex-ecosystem-pypi",
 ]
 
 [[package]]

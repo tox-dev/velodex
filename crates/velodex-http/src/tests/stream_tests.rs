@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use velodex_ecosystem_pypi::{CoreMetadata, File, Provenance, Yanked, parse_detail, to_json};
 
-use crate::policy::{PackageType, Policy, PolicyConfig};
+use velodex_policy::{PackageType, Policy, PolicyConfig};
 use crate::stream::{PageContext, PageTransformer, Registration, page_context as build_page_context};
 
 fn upstream_page() -> String {

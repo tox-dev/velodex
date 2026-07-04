@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use velodex_http::policy::PolicyConfig;
+use velodex_policy::PolicyConfig;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 
 /// A fully resolved configuration.

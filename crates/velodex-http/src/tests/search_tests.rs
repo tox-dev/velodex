@@ -10,7 +10,7 @@ use velodex_upstream::UpstreamClient;
 use super::http_tests::{get, harness, harness_with_policies};
 use crate::cache;
 use crate::path_safety::local_file_url;
-use crate::policy::{Policy, PolicyConfig};
+use velodex_policy::{Policy, PolicyConfig};
 use crate::search::{PackageSearch, PackageSource, SearchError, SourceFilter};
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;

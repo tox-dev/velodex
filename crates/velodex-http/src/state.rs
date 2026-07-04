@@ -10,7 +10,7 @@ use velodex_storage::meta::MetaStore;
 use velodex_upstream::UpstreamClient;
 
 use crate::metrics::Metrics;
-use crate::policy::Policy;
+use velodex_policy::Policy;
 use crate::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RateLimiter, UpstreamLimits};
 use crate::search::{PackageSearch, SearchError};
 use crate::webhook::WebhookRuntime;

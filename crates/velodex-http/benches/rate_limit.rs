@@ -13,7 +13,7 @@ use http_body_util::BodyExt as _;
 use tokio::runtime::Runtime;
 use tower::ServiceExt as _;
 use velodex_ecosystem_pypi::{Meta, ProjectDetail, to_json};
-use velodex_http::policy::Policy;
+use velodex_policy::Policy;
 use velodex_http::rate_limit::{RateLimitConfig, RouteLimit};
 use velodex_http::{AppState, Index, IndexKind, router};
 use velodex_storage::blob::BlobStore;

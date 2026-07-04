@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use axum::Router;
-use velodex_http::policy::Policy;
+use velodex_policy::Policy;
 use velodex_http::webhook::{WebhookRuntime, WebhookTargetConfig};
 use velodex_http::{AppState, Index, IndexKind, RuntimeOptions, path_safety, router, webhook};
 use velodex_storage::blob::BlobStore;

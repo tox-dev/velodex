@@ -26,7 +26,7 @@ use crate::cache::{self, CacheError, PageOutcome};
 use crate::discovery::{self, BaseUrl};
 use crate::metrics::Event;
 use crate::path_safety::{self, PathSafetyError};
-use crate::policy::{PolicyAction, PolicyDenial};
+use velodex_policy::{PolicyAction, PolicyDenial};
 use crate::search::{SearchError, SearchParams};
 use crate::state::{AppState, Index, IndexKind, describe_index};
 use crate::upload::{self, StagedUpload, UploadError, UploadForm};

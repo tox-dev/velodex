@@ -613,3 +613,6 @@ fn tags(values: &[String]) -> Result<HashSet<String>, PolicyConfigError> {
     }
     Ok(tags)
 }
+
+#[cfg(test)]
+mod tests;

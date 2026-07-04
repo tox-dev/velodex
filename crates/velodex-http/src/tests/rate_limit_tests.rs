@@ -15,7 +15,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::http_tests::detail_json;
 use super::{LogCapture, field};
-use crate::policy::Policy;
+use velodex_policy::Policy;
 use crate::rate_limit::{
     DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RateLimiter, RouteClass, RouteLimit, UpstreamLimits, route_class,
 };

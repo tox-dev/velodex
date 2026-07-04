@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use velodex_ecosystem_pypi::to_json;
-use velodex_http::policy::PolicyConfig;
+use velodex_policy::PolicyConfig;
 use velodex_http::rate_limit::DEFAULT_UPSTREAM_CONCURRENCY;
 use velodex_storage::blob::{BlobStore, Digest};
 use velodex_storage::meta::{CachedIndex, MetaStore};

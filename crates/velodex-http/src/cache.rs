@@ -18,7 +18,7 @@ use velodex_upstream::{RangeError, SimpleResponse, UpstreamClient};
 
 use crate::metrics::Event;
 use crate::path_safety::local_file_url;
-use crate::policy::{PolicyAction, PolicyDenial};
+use velodex_policy::{PolicyAction, PolicyDenial};
 use crate::rate_limit::UpstreamPermit;
 use crate::state::{AppState, Index, IndexKind};
 use crate::stream::{PageSummary, PageTransformer, Registration};
@@ -427,7 +427,7 @@ async fn fetch_and_store(
     }
 }
 
-fn mirror_policy<'a>(state: &'a AppState, name: &str) -> &'a crate::policy::Policy {
+fn mirror_policy<'a>(state: &'a AppState, name: &str) -> &'a velodex_policy::Policy {
     &state
         .indexes
         .iter()

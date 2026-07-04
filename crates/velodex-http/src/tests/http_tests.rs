@@ -22,7 +22,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::{LogCapture, field};
 use crate::cache;
 use crate::path_safety::local_file_url;
-use crate::policy::{PackageType, Policy, PolicyConfig};
+use velodex_policy::{PackageType, Policy, PolicyConfig};
 use crate::router;
 use crate::state::{AppState, Index, IndexKind};
 use crate::upload::Uploaded;

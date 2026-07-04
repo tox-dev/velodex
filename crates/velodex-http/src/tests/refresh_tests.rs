@@ -9,7 +9,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::http_tests::{detail_json, get, harness, harness_with_policies};
 use super::{LogCapture, field};
 use crate::cache::refresh_stale_pages;
-use crate::policy::{Policy, PolicyConfig};
+use velodex_policy::{Policy, PolicyConfig};
 
 async fn mount_page(server: &MockServer, body: String, template: ResponseTemplate) {
     Mock::given(method("GET"))

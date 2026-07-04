@@ -12,7 +12,7 @@ fn mirror(name: &str, upstream: &str) -> IndexConfig {
     IndexConfig {
         name: name.to_owned(),
         route: name.to_owned(),
-        policy: velodex_http::policy::PolicyConfig::default(),
+        policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Mirror {
             upstream: upstream.to_owned(),
@@ -30,7 +30,7 @@ fn local(name: &str) -> IndexConfig {
     IndexConfig {
         name: name.to_owned(),
         route: name.to_owned(),
-        policy: velodex_http::policy::PolicyConfig::default(),
+        policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Local {
             upload_token: None,
@@ -43,7 +43,7 @@ fn overlay(layers: &[&str], upload: Option<&str>) -> IndexConfig {
     IndexConfig {
         name: "team".to_owned(),
         route: "team/dev".to_owned(),
-        policy: velodex_http::policy::PolicyConfig::default(),
+        policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
         kind: IndexKind::Overlay {
             layers: layers.iter().map(|&name| name.to_owned()).collect(),
