@@ -136,6 +136,7 @@ fn AdminIndexTable(indexes: Vec<UiIndex>, all: Vec<UiIndex>) -> impl IntoView {
                     <tr>
                         <th>"Name"</th>
                         <th>"Route"</th>
+                        <th>"Ecosystem"</th>
                         <th>"Kind"</th>
                         <th>"Simple API"</th>
                         <th>"Projects"</th>
@@ -156,6 +157,7 @@ fn AdminIndexTable(indexes: Vec<UiIndex>, all: Vec<UiIndex>) -> impl IntoView {
                                 <tr>
                                     <td><a href=browse>{index.name.clone()}</a></td>
                                     <td><code>{index.route.clone()}</code></td>
+                                    <td><span class=format!("badge ecosystem-{}", index.ecosystem)>{index.ecosystem.clone()}</span></td>
                                     <td><span class=format!("badge kind-{}", index.kind)>{index.kind.clone()}</span></td>
                                     <td><a href=simple><code>{shown}</code></a></td>
                                     <td>{index.project_count}</td>

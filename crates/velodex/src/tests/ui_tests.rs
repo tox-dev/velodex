@@ -25,6 +25,7 @@ fn ui_config(dir: &tempfile::TempDir) -> Config {
                 route: "pypi".to_owned(),
                 policy: velodex_policy::PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Proxy {
                     upstream: "http://127.0.0.1:9/simple/".to_owned(),
                     username: None,
@@ -40,6 +41,7 @@ fn ui_config(dir: &tempfile::TempDir) -> Config {
                 route: "local".to_owned(),
                 policy: velodex_policy::PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Hosted {
                     upload_token: Some("s3cret".to_owned()),
                     volatile: true,
@@ -50,6 +52,7 @@ fn ui_config(dir: &tempfile::TempDir) -> Config {
                 route: "root/pypi".to_owned(),
                 policy: velodex_policy::PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Virtual {
                     layers: vec!["local".to_owned(), "pypi".to_owned()],
                     upload: Some("local".to_owned()),

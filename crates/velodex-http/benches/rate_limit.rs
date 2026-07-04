@@ -57,6 +57,7 @@ fn mirror(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            ecosystem: velodex_format::Ecosystem::Pypi,
             kind: IndexKind::Proxy {
                 client: upstream,
                 offline: false,

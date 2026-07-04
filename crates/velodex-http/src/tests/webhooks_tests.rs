@@ -49,6 +49,7 @@ impl Harness {
             vec![Index {
                 name: "local".to_owned(),
                 route: "local".to_owned(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Hosted {
                     upload_token: Some("s3cret".to_owned()),
                     volatile: true,

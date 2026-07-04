@@ -13,6 +13,7 @@ fn test_snapshot_from_status_roundtrip() {
         "indexes": [{
             "name": "pypi",
             "route": "pypi",
+            "ecosystem": "pypi",
             "kind": "proxy",
             "layers": [],
             "uploads": false,

@@ -90,6 +90,7 @@ pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::R
             Ok(Index {
                 name: index.name.clone(),
                 route: index.route.clone(),
+                ecosystem: index.ecosystem,
                 kind: build_kind(index, configs, &positions, offline)?,
                 policy: Policy::compile(&index.policy).with_context(|| format!("compile policy for {}", index.name))?,
             })

@@ -5,6 +5,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use velodex_format::Ecosystem;
+use velodex_policy::Policy;
 use velodex_storage::blob::BlobStore;
 use velodex_storage::meta::MetaStore;
 use velodex_upstream::UpstreamClient;
@@ -13,7 +15,6 @@ use crate::metrics::Metrics;
 use crate::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RateLimiter, UpstreamLimits};
 use crate::search::{PackageSearch, SearchError};
 use crate::webhook::WebhookRuntime;
-use velodex_policy::Policy;
 
 /// A source of the current unix time, injectable so cache-freshness logic is deterministic in
 /// tests.
@@ -25,6 +26,7 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub struct Index {
     pub name: String,
     pub route: String,
+    pub ecosystem: Ecosystem,
     pub kind: IndexKind,
     pub policy: Policy,
 }
@@ -477,6 +479,7 @@ pub(crate) fn describe_index(indexes: &[Index], position: usize) -> IndexDescrip
     IndexDescription {
         name: index.name.clone(),
         route: index.route.clone(),
+        ecosystem: index.ecosystem.as_str(),
         kind,
         layers,
         uploads,
@@ -492,6 +495,7 @@ pub(crate) fn describe_index(indexes: &[Index], position: usize) -> IndexDescrip
 pub struct IndexDescription {
     pub name: String,
     pub route: String,
+    pub ecosystem: &'static str,
     pub kind: &'static str,
     pub layers: Vec<String>,
     pub uploads: bool,

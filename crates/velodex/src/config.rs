@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use velodex_format::Ecosystem;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 use velodex_policy::PolicyConfig;
 
@@ -34,6 +35,8 @@ pub struct IndexConfig {
     pub name: String,
     /// URL prefix the index is served under, for example `root/pypi`.
     pub route: String,
+    /// The package ecosystem this index serves. Immutable once created.
+    pub ecosystem: Ecosystem,
     pub kind: IndexKind,
     pub policy: PolicyConfig,
     pub webhooks: Vec<WebhookConfig>,
@@ -184,6 +187,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
+            ecosystem: Ecosystem::Pypi,
             policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Proxy {
@@ -199,6 +203,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "local".to_owned(),
             route: "local".to_owned(),
+            ecosystem: Ecosystem::Pypi,
             policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Hosted {
@@ -209,6 +214,7 @@ fn default_indexes() -> Vec<IndexConfig> {
         IndexConfig {
             name: "root/pypi".to_owned(),
             route: "root/pypi".to_owned(),
+            ecosystem: Ecosystem::Pypi,
             policy: PolicyConfig::default(),
             webhooks: Vec::new(),
             kind: IndexKind::Virtual {
@@ -254,6 +260,13 @@ impl Config {
 /// `mirror` makes a mirror, else `local`/`upload_token` makes a local store.
 fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
     let route = raw.route.clone().unwrap_or_else(|| raw.name.clone());
+    let ecosystem = match &raw.ecosystem {
+        Some(value) => value.parse().map_err(|_| ConfigError::Index {
+            name: raw.name.clone(),
+            reason: "unknown ecosystem",
+        })?,
+        None => Ecosystem::default(),
+    };
     let kind = if let Some(layers) = raw.layers {
         IndexKind::Virtual {
             layers,
@@ -283,6 +296,7 @@ fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
     Ok(IndexConfig {
         name: raw.name,
         route,
+        ecosystem,
         kind,
         policy: raw.policy,
         webhooks: raw
@@ -408,6 +422,7 @@ pub struct PartialConfig {
 pub struct RawIndex {
     pub name: String,
     pub route: Option<String>,
+    pub ecosystem: Option<String>,
     #[serde(default)]
     pub policy: PolicyConfig,
     pub proxy: Option<String>,

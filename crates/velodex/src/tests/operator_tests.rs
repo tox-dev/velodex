@@ -557,6 +557,7 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
             route: "pypi".to_owned(),
             policy: velodex_policy::PolicyConfig::default(),
             webhooks: Vec::new(),
+            ecosystem: velodex_format::Ecosystem::Pypi,
             kind: IndexKind::Proxy {
                 upstream: "https://pypi.org/simple/".to_owned(),
                 username: None,
@@ -576,6 +577,7 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
             route: "overlay".to_owned(),
             policy: velodex_policy::PolicyConfig::default(),
             webhooks: Vec::new(),
+            ecosystem: velodex_format::Ecosystem::Pypi,
             kind: IndexKind::Virtual {
                 layers: Vec::new(),
                 upload: None,

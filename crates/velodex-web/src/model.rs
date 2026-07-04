@@ -20,9 +20,11 @@ pub struct UiSnapshot {
 pub struct UiIndex {
     pub name: String,
     pub route: String,
-    /// `mirror`, `local`, or `overlay`.
+    /// The package ecosystem, for example `pypi`.
+    pub ecosystem: String,
+    /// The role: `proxy`, `hosted`, or `virtual`.
     pub kind: String,
-    /// Layer names for an overlay; empty otherwise.
+    /// Member names for a virtual index; empty otherwise.
     pub layers: Vec<String>,
     /// Whether uploads are enabled (a local layer with a token).
     pub uploads: bool,
@@ -73,6 +75,7 @@ impl UiSnapshot {
             .map(|index| UiIndex {
                 name: string_at(index, "name"),
                 route: string_at(index, "route"),
+                ecosystem: string_at(index, "ecosystem"),
                 kind: string_at(index, "kind"),
                 layers: index["layers"]
                     .as_array()

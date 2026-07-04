@@ -19,6 +19,7 @@ fn mirror_config(data_dir: &Path, upstream: &str) -> Config {
             route: "pypi".to_owned(),
             policy: PolicyConfig::default(),
             webhooks: Vec::new(),
+            ecosystem: velodex_format::Ecosystem::Pypi,
             kind: IndexKind::Proxy {
                 upstream: upstream.to_owned(),
                 username: None,
@@ -42,6 +43,7 @@ fn overlay_config(data_dir: &Path, upstream: &str) -> Config {
                 route: "local".to_owned(),
                 policy: PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Hosted {
                     upload_token: None,
                     volatile: true,
@@ -52,6 +54,7 @@ fn overlay_config(data_dir: &Path, upstream: &str) -> Config {
                 route: "pypi".to_owned(),
                 policy: PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Proxy {
                     upstream: upstream.to_owned(),
                     username: None,
@@ -67,6 +70,7 @@ fn overlay_config(data_dir: &Path, upstream: &str) -> Config {
                 route: "root/pypi".to_owned(),
                 policy: PolicyConfig::default(),
                 webhooks: Vec::new(),
+                ecosystem: velodex_format::Ecosystem::Pypi,
                 kind: IndexKind::Virtual {
                     layers: vec!["local".to_owned(), "pypi".to_owned()],
                     upload: Some("local".to_owned()),
@@ -922,6 +926,7 @@ async fn test_mirror_rejects_non_mirror_targets() {
         route: "mirror-two".to_owned(),
         policy: PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Proxy {
             upstream: format!("{}/simple/", server.uri()),
             username: None,
@@ -937,6 +942,7 @@ async fn test_mirror_rejects_non_mirror_targets() {
         route: "double".to_owned(),
         policy: PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Virtual {
             layers: vec!["pypi".to_owned(), "mirror-two".to_owned()],
             upload: None,
@@ -947,6 +953,7 @@ async fn test_mirror_rejects_non_mirror_targets() {
         route: "local-overlay".to_owned(),
         policy: PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Virtual {
             layers: vec!["local".to_owned()],
             upload: Some("local".to_owned()),

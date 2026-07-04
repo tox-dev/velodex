@@ -14,6 +14,7 @@ fn mirror(name: &str, upstream: &str) -> IndexConfig {
         route: name.to_owned(),
         policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Proxy {
             upstream: upstream.to_owned(),
             username: None,
@@ -32,6 +33,7 @@ fn local(name: &str) -> IndexConfig {
         route: name.to_owned(),
         policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Hosted {
             upload_token: None,
             volatile: true,
@@ -45,6 +47,7 @@ fn overlay(layers: &[&str], upload: Option<&str>) -> IndexConfig {
         route: "team/dev".to_owned(),
         policy: velodex_policy::PolicyConfig::default(),
         webhooks: Vec::new(),
+        ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Virtual {
             layers: layers.iter().map(|&name| name.to_owned()).collect(),
             upload: upload.map(str::to_owned),

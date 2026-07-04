@@ -4636,6 +4636,7 @@ dependencies = [
  "tracing-journald",
  "tracing-subscriber",
  "velodex-ecosystem-pypi",
+ "velodex-format",
  "velodex-http",
  "velodex-policy",
  "velodex-storage",

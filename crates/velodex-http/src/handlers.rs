@@ -1816,6 +1816,7 @@ pub async fn status(State(state): State<Arc<AppState>>, Query(query): Query<Stat
             let mut object = serde_json::Map::from_iter([
                 ("name".to_owned(), serde_json::json!(index.name)),
                 ("route".to_owned(), serde_json::json!(index.route)),
+                ("ecosystem".to_owned(), serde_json::json!(index.ecosystem)),
                 ("kind".to_owned(), serde_json::json!(index.kind)),
                 ("layers".to_owned(), serde_json::json!(index.layers)),
                 ("uploads".to_owned(), serde_json::json!(index.uploads)),

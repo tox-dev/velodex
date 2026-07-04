@@ -103,6 +103,7 @@ fn snapshot_with_summaries(recent_limit: Option<usize>) -> UiSnapshot {
             UiIndex {
                 name: index.name,
                 route: index.route,
+                ecosystem: index.ecosystem.to_owned(),
                 kind: index.kind.to_owned(),
                 layers: index.layers,
                 uploads: index.uploads,
