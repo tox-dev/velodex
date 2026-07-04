@@ -1,4 +1,5 @@
-//! Storage for velodex: the content-addressed blob store, and later the metadata and serial log.
+//! Storage for velodex: the content-addressed blob store and the metadata store, which holds the
+//! cached index, uploads, overrides, and the append-only journal (the serial changelog).
 
 pub mod blob;
 pub mod meta;

@@ -1291,7 +1291,7 @@ pub fn promote_release(
         .get_project(source, normalized)?
         .unwrap_or_else(|| normalized.to_owned());
     state.meta.put_uploads(target, normalized, &display, &records)?;
-    state.meta.next_serial()?;
+    state.meta.append_journal("promote", normalized, None, None)?;
     state.bump_epoch();
     Ok(records.len())
 }

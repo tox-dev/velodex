@@ -264,7 +264,7 @@ pub fn store_prepared(
     record.file.set_metadata(CoreMetadata::Hashes(hashes));
     meta.put_upload(name, &normalized, &filename, &to_json(&record).into_bytes())?;
     meta.put_project(name, &normalized, &display_name)?;
-    meta.next_serial()?;
+    meta.append_journal("add-file", name, Some(record.version.as_str()), Some(filename.as_str()))?;
     Ok(true)
 }
 
