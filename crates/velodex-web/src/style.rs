@@ -111,9 +111,9 @@ main { max-width: 70rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .badge.kind-mirror { color: #2f81f7; border-color: #2f81f7; }
 .badge.kind-local { color: #34c496; border-color: #34c496; }
 .badge.kind-overlay { color: var(--accent); border-color: var(--accent); }
-.badge.source-hosted { color: #34c496; border-color: #34c496; }
-.badge.source-upstream { color: #2f81f7; border-color: #2f81f7; }
-.badge.source-upstream-overrides { color: #8b5cf6; border-color: #8b5cf6; }
+.badge.source-uploaded { color: #34c496; border-color: #34c496; }
+.badge.source-cached { color: #2f81f7; border-color: #2f81f7; }
+.badge.source-override { color: #8b5cf6; border-color: #8b5cf6; }
 .badge.uploads { background: linear-gradient(120deg, var(--brand-a), var(--brand-b)); color: #fff; border: none; }
 .badge.yanked-badge { color: #e5484d; border-color: #e5484d; }
 .badge.meta-badge { color: #34c496; border-color: #34c496; }

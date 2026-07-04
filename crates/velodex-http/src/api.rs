@@ -296,8 +296,8 @@ fn package_search(scoped: bool) -> OperationBuilder {
         ))
         .parameter(query_param(
             "type",
-            "`hosted`, `upstream`, or `upstream-overrides`; omit for all sources.",
-            json!("upstream-overrides"),
+            "`uploaded`, `cached`, or `override`; omit for all sources.",
+            json!("override"),
         ))
         .parameter(query_param("page", "One-based page number.", json!(1)))
         .parameter(query_param("page_size", "Page size: 25, 50, or 100.", json!(25)))
@@ -316,7 +316,7 @@ fn package_search(scoped: bool) -> OperationBuilder {
                         "normalized_name": "flask",
                         "route": "root/pypi",
                         "repository": "root/pypi",
-                        "type": "upstream",
+                        "type": "cached",
                         "summary": "A simple framework for building complex web applications.",
                     }],
                 }),

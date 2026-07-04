@@ -281,9 +281,9 @@ impl UiSearchResult {
 #[must_use]
 pub fn source_label(source_type: &str) -> &'static str {
     match source_type {
-        "hosted" => "Hosted",
-        "upstream-overrides" => "Upstream+",
-        _ => "Upstream",
+        "uploaded" => "Uploaded",
+        "override" => "Override",
+        _ => "Cached",
     }
 }
 

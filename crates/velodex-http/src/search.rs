@@ -206,7 +206,7 @@ impl PackageSearch {
             route: stored_text(doc, self.fields.route),
             repository: stored_text(doc, self.fields.repository),
             source_type: PackageSource::from_value(&stored_text(doc, self.fields.source))
-                .unwrap_or(PackageSource::Upstream),
+                .unwrap_or(PackageSource::Cached),
             summary: non_empty_string(stored_text(doc, self.fields.summary)),
         }
     }
@@ -351,9 +351,9 @@ impl SearchParams {
 #[serde(rename_all = "kebab-case")]
 pub enum SourceFilter {
     All,
-    Hosted,
-    Upstream,
-    UpstreamOverrides,
+    Uploaded,
+    Cached,
+    Override,
 }
 
 impl SourceFilter {
@@ -361,9 +361,9 @@ impl SourceFilter {
     pub fn from_value(value: &str) -> Option<Self> {
         match value {
             "all" => Some(Self::All),
-            "hosted" => Some(Self::Hosted),
-            "upstream" => Some(Self::Upstream),
-            "upstream-overrides" => Some(Self::UpstreamOverrides),
+            "uploaded" => Some(Self::Uploaded),
+            "cached" => Some(Self::Cached),
+            "override" => Some(Self::Override),
             _ => None,
         }
     }
@@ -372,18 +372,18 @@ impl SourceFilter {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
-            Self::Hosted => "hosted",
-            Self::Upstream => "upstream",
-            Self::UpstreamOverrides => "upstream-overrides",
+            Self::Uploaded => "uploaded",
+            Self::Cached => "cached",
+            Self::Override => "override",
         }
     }
 
     const fn package_source(self) -> Option<PackageSource> {
         match self {
             Self::All => None,
-            Self::Hosted => Some(PackageSource::Hosted),
-            Self::Upstream => Some(PackageSource::Upstream),
-            Self::UpstreamOverrides => Some(PackageSource::UpstreamOverrides),
+            Self::Uploaded => Some(PackageSource::Uploaded),
+            Self::Cached => Some(PackageSource::Cached),
+            Self::Override => Some(PackageSource::Override),
         }
     }
 }
@@ -391,18 +391,18 @@ impl SourceFilter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PackageSource {
-    Hosted,
-    Upstream,
-    UpstreamOverrides,
+    Uploaded,
+    Cached,
+    Override,
 }
 
 impl PackageSource {
     #[must_use]
     pub fn from_value(value: &str) -> Option<Self> {
         match value {
-            "hosted" => Some(Self::Hosted),
-            "upstream" => Some(Self::Upstream),
-            "upstream-overrides" => Some(Self::UpstreamOverrides),
+            "uploaded" => Some(Self::Uploaded),
+            "cached" => Some(Self::Cached),
+            "override" => Some(Self::Override),
             _ => None,
         }
     }
@@ -410,18 +410,18 @@ impl PackageSource {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Hosted => "hosted",
-            Self::Upstream => "upstream",
-            Self::UpstreamOverrides => "upstream-overrides",
+            Self::Uploaded => "uploaded",
+            Self::Cached => "cached",
+            Self::Override => "override",
         }
     }
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Hosted => "Hosted",
-            Self::Upstream => "Upstream",
-            Self::UpstreamOverrides => "Upstream+",
+            Self::Uploaded => "Uploaded",
+            Self::Cached => "Cached",
+            Self::Override => "Override",
         }
     }
 }
@@ -736,19 +736,19 @@ fn apply_project_status(detail: &mut ProjectDetail) {
 
 fn package_source(state: &AppState, index: &Index, normalized: &str) -> Result<PackageSource, SearchError> {
     Ok(match &index.kind {
-        IndexKind::Local { .. } => PackageSource::Hosted,
-        IndexKind::Mirror { .. } => PackageSource::Upstream,
+        IndexKind::Local { .. } => PackageSource::Uploaded,
+        IndexKind::Mirror { .. } => PackageSource::Cached,
         IndexKind::Overlay { upload, .. } => {
             let Some(upload) = upload else {
-                return Ok(PackageSource::Upstream);
+                return Ok(PackageSource::Cached);
             };
             let upload = state.index_at(*upload);
             if !state.meta.list_upload_entries(&upload.name, normalized)?.is_empty()
                 || !state.meta.list_overrides(&upload.name, normalized)?.is_empty()
             {
-                PackageSource::UpstreamOverrides
+                PackageSource::Override
             } else {
-                PackageSource::Upstream
+                PackageSource::Cached
             }
         }
     })

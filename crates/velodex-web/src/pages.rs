@@ -528,7 +528,7 @@ pub fn Search() -> impl IntoView {
         query_map
             .read()
             .get("type")
-            .filter(|value| matches!(value.as_str(), "hosted" | "upstream" | "upstream-overrides"))
+            .filter(|value| matches!(value.as_str(), "uploaded" | "cached" | "override"))
             .unwrap_or_else(|| "all".to_owned())
     });
     let page = Memo::new(move |_| {
@@ -577,9 +577,9 @@ fn SearchForm(query: String, source_type: String, page_size: usize) -> impl Into
             <input class="search" type="search" name="q" value=query placeholder="Search packages" />
             <select name="type" aria-label="Source type">
                 <option value="all" selected=source_type == "all">"All"</option>
-                <option value="hosted" selected=source_type == "hosted">"Hosted"</option>
-                <option value="upstream" selected=source_type == "upstream">"Upstream"</option>
-                <option value="upstream-overrides" selected=source_type == "upstream-overrides">"Upstream+"</option>
+                <option value="uploaded" selected=source_type == "uploaded">"Uploaded"</option>
+                <option value="cached" selected=source_type == "cached">"Cached"</option>
+                <option value="override" selected=source_type == "override">"Override"</option>
             </select>
             <select
                 name="page_size"
@@ -646,7 +646,7 @@ fn SearchResults(query: String, source_type: String, page_data: UiSearchPage) ->
                         .map(|result| {
                             let href = browse_project_url(&result.route, &result.normalized_name);
                             let source_class = format!("badge source-{}", result.source_type);
-                            let source_title = (result.source_type == "upstream-overrides")
+                            let source_title = (result.source_type == "override")
                                 .then_some("Hosted files or local overrides affect this upstream package");
                             view! {
                                 <tr>

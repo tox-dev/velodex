@@ -66,9 +66,9 @@
           {
             "name": "type",
             "in": "query",
-            "description": "`hosted`, `upstream`, or `upstream-overrides`; omit for all sources.",
+            "description": "`uploaded`, `cached`, or `override`; omit for all sources.",
             "required": false,
-            "example": "upstream-overrides"
+            "example": "override"
           },
           {
             "name": "page",
@@ -101,7 +101,7 @@
                       "repository": "root/pypi",
                       "route": "root/pypi",
                       "summary": "A simple framework for building complex web applications.",
-                      "type": "upstream"
+                      "type": "cached"
                     }
                   ],
                   "total": 1,
@@ -475,9 +475,9 @@
           {
             "name": "type",
             "in": "query",
-            "description": "`hosted`, `upstream`, or `upstream-overrides`; omit for all sources.",
+            "description": "`uploaded`, `cached`, or `override`; omit for all sources.",
             "required": false,
-            "example": "upstream-overrides"
+            "example": "override"
           },
           {
             "name": "page",
@@ -517,7 +517,7 @@
                       "repository": "root/pypi",
                       "route": "root/pypi",
                       "summary": "A simple framework for building complex web applications.",
-                      "type": "upstream"
+                      "type": "cached"
                     }
                   ],
                   "total": 1,

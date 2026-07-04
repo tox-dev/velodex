@@ -27,7 +27,7 @@ async fn test_search_indexes_uploaded_metadata_and_route_scope() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/local/+search?q=package%20cache&type=hosted&page_size=25",
+        "/local/+search?q=package%20cache&type=uploaded&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -37,7 +37,7 @@ async fn test_search_indexes_uploaded_metadata_and_route_scope() {
     assert_eq!(value["route"], "local");
     assert_eq!(value["results"][0]["display_name"], "VelodexPkg");
     assert_eq!(value["results"][0]["normalized_name"], "velodexpkg");
-    assert_eq!(value["results"][0]["type"], "hosted");
+    assert_eq!(value["results"][0]["type"], "uploaded");
 }
 
 #[tokio::test]
@@ -93,7 +93,7 @@ async fn test_search_collects_direct_mirror_and_local_projects() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/pypi/+search?q=direct-mirror&type=upstream&page_size=25",
+        "/pypi/+search?q=direct-mirror&type=cached&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -104,7 +104,7 @@ async fn test_search_collects_direct_mirror_and_local_projects() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/local/+search?q=local-only&type=hosted&page_size=25",
+        "/local/+search?q=local-only&type=uploaded&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -277,21 +277,21 @@ async fn test_search_rebuilds_after_yank_and_hide_overrides() {
         .unwrap();
     let (status, _headers, body) = get(
         &h.state,
-        "/root/pypi/+search?q=flask&type=upstream-overrides&page_size=25",
+        "/root/pypi/+search?q=flask&type=override&page_size=25",
         Some("application/json"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(value["total"], 1);
-    assert_eq!(value["results"][0]["type"], "upstream-overrides");
+    assert_eq!(value["results"][0]["type"], "override");
 
     cache::remove_files(&h.state, h.state.index_at(2), "local", true, "flask", None)
         .await
         .unwrap();
     let (status, _headers, body) = get(
         &h.state,
-        "/root/pypi/+search?q=flask&type=upstream-overrides&page_size=25",
+        "/root/pypi/+search?q=flask&type=override&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -321,14 +321,14 @@ async fn test_search_classifies_overlay_upstream_without_overrides() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/root/pypi/+search?q=statused&type=upstream&page_size=25",
+        "/root/pypi/+search?q=statused&type=cached&page_size=25",
         Some("application/json"),
     )
     .await;
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["total"], 1);
-    assert_eq!(value["results"][0]["type"], "upstream");
+    assert_eq!(value["results"][0]["type"], "cached");
 }
 
 #[tokio::test]
@@ -353,14 +353,14 @@ async fn test_search_classifies_overlay_without_upload_as_upstream() {
 
     let (status, _headers, body) = get(
         &state,
-        "/root/pypi/+search?q=no-upload&type=upstream&page_size=25",
+        "/root/pypi/+search?q=no-upload&type=cached&page_size=25",
         Some("application/json"),
     )
     .await;
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["total"], 1);
-    assert_eq!(value["results"][0]["type"], "upstream");
+    assert_eq!(value["results"][0]["type"], "cached");
 }
 
 #[tokio::test]
@@ -450,7 +450,7 @@ async fn test_search_skips_unusable_metadata_and_quarantined_projects() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/pypi/+search?q=metadata-skips&type=upstream&page_size=25",
+        "/pypi/+search?q=metadata-skips&type=cached&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -461,7 +461,7 @@ async fn test_search_skips_unusable_metadata_and_quarantined_projects() {
 
     let (status, _headers, body) = get(
         &h.state,
-        "/pypi/+search?q=quarantined&type=upstream&page_size=25",
+        "/pypi/+search?q=quarantined&type=cached&page_size=25",
         Some("application/json"),
     )
     .await;
@@ -519,20 +519,20 @@ fn test_search_public_filter_labels_and_scan_errors() {
     assert_eq!(
         [
             SourceFilter::All.as_str(),
-            SourceFilter::Hosted.as_str(),
-            SourceFilter::Upstream.as_str(),
-            SourceFilter::UpstreamOverrides.as_str(),
+            SourceFilter::Uploaded.as_str(),
+            SourceFilter::Cached.as_str(),
+            SourceFilter::Override.as_str(),
         ],
-        ["all", "hosted", "upstream", "upstream-overrides"]
+        ["all", "uploaded", "cached", "override"]
     );
     assert_eq!(SourceFilter::from_value("blocked"), None);
     assert_eq!(
         [
-            PackageSource::Hosted.label(),
-            PackageSource::Upstream.label(),
-            PackageSource::UpstreamOverrides.label(),
+            PackageSource::Uploaded.label(),
+            PackageSource::Cached.label(),
+            PackageSource::Override.label(),
         ],
-        ["Hosted", "Upstream", "Upstream+"]
+        ["Uploaded", "Cached", "Override"]
     );
     assert_eq!(PackageSource::from_value("blocked"), None);
     assert!(matches!(

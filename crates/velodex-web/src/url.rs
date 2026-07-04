@@ -299,8 +299,8 @@ mod tests {
     #[test]
     fn test_stats_and_admin_urls_encode_arguments() {
         assert_eq!(
-            search_page_url("flask cache", "upstream-overrides", 2, 50),
-            "/search?q=flask%20cache&type=upstream-overrides&page=2&page_size=50"
+            search_page_url("flask cache", "override", 2, 50),
+            "/search?q=flask%20cache&type=override&page=2&page_size=50"
         );
         assert_eq!(
             search_api_url(Some("root/pypi"), "flask", "all", 1, 25),
