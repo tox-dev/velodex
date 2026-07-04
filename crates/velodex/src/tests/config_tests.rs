@@ -4,7 +4,8 @@ use velodex_http::policy::PackageType;
 use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 
 use crate::config::{
-    self, Config, IndexKind, LogConfig, LogFormat, LogSink, PartialConfig, PartialLogConfig, WebhookSecret,
+    self, Config, IndexKind, LogConfig, LogFormat, LogSink, MirrorPrefetchMode, PartialConfig, PartialLogConfig,
+    WebhookSecret,
 };
 
 fn toml_config(text: &str) -> Config {
@@ -18,6 +19,7 @@ fn test_default_config() {
     assert_eq!(c.host, "127.0.0.1");
     assert_eq!(c.port, 4433);
     assert_eq!(c.data_dir, PathBuf::from("velodex-data"));
+    assert!(!c.offline);
     assert_eq!(c.cache_ttl_secs, 300);
     assert_eq!(c.log, LogConfig::default());
     assert_eq!(c.rate_limit, RateLimitConfig::default());
@@ -35,12 +37,14 @@ fn test_apply_overlays_only_present_fields() {
         .apply(PartialConfig {
             host: Some("0.0.0.0".to_owned()),
             port: Some(9000),
+            offline: Some(true),
             cache_ttl_secs: Some(60),
             ..PartialConfig::default()
         })
         .unwrap();
     assert_eq!(merged.host, "0.0.0.0");
     assert_eq!(merged.port, 9000);
+    assert!(merged.offline);
     assert_eq!(merged.cache_ttl_secs, 60);
     assert_eq!(merged.data_dir, PathBuf::from("velodex-data"));
     assert_eq!(merged.indexes.len(), 3); // untouched, so the defaults remain
@@ -71,6 +75,45 @@ fn test_apply_data_dir_and_log() {
 fn test_log_config_apply_empty_keeps_defaults() {
     let base = LogConfig::default();
     assert_eq!(base.clone().apply(PartialLogConfig::default()), base);
+}
+
+#[test]
+fn test_mirror_prefetch_from_toml() {
+    let c = toml_config(
+        "\
+offline = true
+[[index]]
+name = \"pypi\"
+mirror = \"https://pypi.org/simple/\"
+offline = true
+
+[index.prefetch]
+mode = \"metadata-only\"
+packages = [\"requests>=2,<3\"]
+requirements = [\"requirements.txt\"]
+include_wheels = false
+include_sdists = true
+python_tags = [\"py3\"]
+abi_tags = [\"none\"]
+platform_tags = [\"any\"]
+max_file_size_bytes = 1048576
+",
+    );
+    assert!(c.offline);
+    let IndexKind::Mirror { offline, prefetch, .. } = &c.indexes[0].kind else {
+        panic!("expected mirror");
+    };
+    assert!(*offline);
+    assert_eq!(prefetch.mode, MirrorPrefetchMode::MetadataOnly);
+    assert_eq!(prefetch.packages, vec!["requests>=2,<3".to_owned()]);
+    assert_eq!(prefetch.requirements, vec![PathBuf::from("requirements.txt")]);
+    assert!(!prefetch.include_wheels);
+    assert!(prefetch.include_sdists);
+    assert_eq!(prefetch.python_tags, vec!["py3".to_owned()]);
+    assert_eq!(prefetch.abi_tags, vec!["none".to_owned()]);
+    assert_eq!(prefetch.platform_tags, vec!["any".to_owned()]);
+    assert_eq!(prefetch.max_file_size_bytes, Some(1_048_576));
+    assert!(prefetch.metadata_only);
 }
 
 #[test]

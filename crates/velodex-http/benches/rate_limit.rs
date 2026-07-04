@@ -57,7 +57,10 @@ fn mirror(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
         vec![Index {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
-            kind: IndexKind::Mirror(upstream),
+            kind: IndexKind::Mirror {
+                client: upstream,
+                offline: false,
+            },
             policy: Policy::default(),
         }],
         Arc::new(|| 1000),

@@ -4,9 +4,10 @@ use clap::Parser as _;
 use velodex_http::discovery::SnippetKind;
 
 use crate::cli::{
-    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, PolicyCommand, RuntimeArgs, SnippetFormat,
+    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, MirrorCommand, PolicyCommand, RuntimeArgs,
+    SnippetFormat,
 };
-use crate::config::{LogFormat, LogSink};
+use crate::config::{LogFormat, LogSink, MirrorPrefetchMode};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(args).unwrap()
@@ -21,6 +22,7 @@ fn runtime(cli: Cli) -> RuntimeArgs {
         Command::Restore(_) => panic!("restore takes explicit data-dir args"),
         Command::ImportDir(_) => panic!("import-dir carries nested runtime args"),
         Command::Policy(_) => panic!("policy commands carry nested runtime args"),
+        Command::Mirror(_) => panic!("mirror commands carry nested runtime args"),
         other @ Command::Openapi => panic!("no runtime args on {other:?}"),
     }
 }
@@ -46,6 +48,7 @@ fn test_parse_init_with_flags() {
         "9",
         "--data-dir",
         "/d",
+        "--offline",
         "--log-level",
         "debug",
         "--log-format",
@@ -60,6 +63,7 @@ fn test_parse_init_with_flags() {
     assert_eq!(o.host.as_deref(), Some("0.0.0.0"));
     assert_eq!(o.port, Some(9));
     assert_eq!(o.data_dir, Some(PathBuf::from("/d")));
+    assert_eq!(o.offline, Some(true));
     assert_eq!(o.log.level.as_deref(), Some("debug"));
     assert_eq!(o.log.format, Some(LogFormat::Json));
     assert_eq!(o.log.sink, Some(LogSink::File));
@@ -321,6 +325,66 @@ fn test_policy_commands_expose_runtime_args() {
         panic!("expected policy dry-run");
     };
     assert_eq!(command.runtime_args().data_dir, Some(PathBuf::from("/policy")));
+}
+
+#[test]
+fn test_parse_mirror_plan_options() {
+    let cli = parse(&[
+        "velodex",
+        "mirror",
+        "plan",
+        "--data-dir",
+        "/d",
+        "--offline",
+        "root/pypi",
+        "--package",
+        "Requests>=2,<3",
+        "--requirements",
+        "requirements.txt",
+        "--mode",
+        "metadata-only",
+        "--metadata-only",
+        "--no-wheels",
+        "--no-sdists",
+        "--python-tag",
+        "py3",
+        "--abi-tag",
+        "none",
+        "--platform-tag",
+        "any",
+        "--max-file-size-bytes",
+        "1024",
+    ]);
+    let Command::Mirror(MirrorCommand::Plan(args)) = cli.command else {
+        panic!("expected mirror plan");
+    };
+    assert_eq!(args.options.runtime.data_dir, Some(PathBuf::from("/d")));
+    assert!(args.options.runtime.offline);
+    assert_eq!(args.options.repo, "root/pypi");
+    assert_eq!(args.options.packages, vec!["Requests>=2,<3".to_owned()]);
+    assert_eq!(args.options.requirements, vec![PathBuf::from("requirements.txt")]);
+    assert_eq!(args.options.mode, Some(MirrorPrefetchMode::MetadataOnly));
+    assert!(args.options.metadata_only);
+    assert!(args.options.no_wheels);
+    assert!(args.options.no_sdists);
+    assert_eq!(args.options.python_tags, vec!["py3".to_owned()]);
+    assert_eq!(args.options.abi_tags, vec!["none".to_owned()]);
+    assert_eq!(args.options.platform_tags, vec!["any".to_owned()]);
+    assert_eq!(args.options.max_file_size_bytes, Some(1024));
+}
+
+#[test]
+fn test_mirror_commands_expose_runtime_args() {
+    for cli in [
+        parse(&["velodex", "mirror", "plan", "--data-dir", "/plan", "pypi"]),
+        parse(&["velodex", "mirror", "sync", "--data-dir", "/sync", "pypi"]),
+        parse(&["velodex", "mirror", "verify", "--data-dir", "/verify", "pypi"]),
+    ] {
+        let Command::Mirror(command) = cli.command else {
+            panic!("expected mirror command");
+        };
+        assert!(command.runtime_args().data_dir.is_some());
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::config::{LogFormat, LogSink, PartialConfig, PartialLogConfig, PartialRateLimitConfig};
+use crate::config::{LogFormat, LogSink, MirrorPrefetchMode, PartialConfig, PartialLogConfig, PartialRateLimitConfig};
 
 /// uv-style help colors: bold green section headers, cyan literals and placeholders.
 const STYLES: Styles = Styles::styled()
@@ -56,12 +56,108 @@ pub enum Command {
     /// Preview repository policy decisions against cached records.
     #[command(subcommand)]
     Policy(PolicyCommand),
+    /// Plan, sync, and verify a configured mirror set.
+    #[command(subcommand)]
+    Mirror(MirrorCommand),
     /// Print the `OpenAPI` description of the HTTP API as JSON.
     Openapi,
     /// Manage this velodex installation.
     #[cfg(feature = "self-update")]
     #[command(subcommand, name = "self")]
     SelfManage(SelfCommand),
+}
+
+/// Mirror synchronization commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum MirrorCommand {
+    /// Print the selected projects and files without writing cache entries.
+    Plan(MirrorPlanArgs),
+    /// Fetch selected project pages, metadata siblings, and artifacts.
+    Sync(MirrorSyncArgs),
+    /// Check cached pages, metadata siblings, and artifacts for a mirror set.
+    Verify(MirrorVerifyArgs),
+}
+
+impl MirrorCommand {
+    #[must_use]
+    pub const fn runtime_args(&self) -> &RuntimeArgs {
+        match self {
+            Self::Plan(args) => &args.options.runtime,
+            Self::Sync(args) => &args.options.runtime,
+            Self::Verify(args) => &args.options.runtime,
+        }
+    }
+}
+
+/// Options shared by mirror commands.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct MirrorOptions {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+
+    /// Configured index name or route to sync.
+    pub repo: String,
+
+    /// Add a package selector such as `requests>=2,<3`.
+    #[arg(long = "package", short = 'p')]
+    pub packages: Vec<String>,
+
+    /// Read package selectors from a requirements or constraints file.
+    #[arg(long = "requirements", short = 'r')]
+    pub requirements: Vec<PathBuf>,
+
+    /// Override the configured prefetch mode.
+    #[arg(long, value_enum)]
+    pub mode: Option<MirrorPrefetchMode>,
+
+    /// Fetch Simple pages and PEP 658 metadata, but skip artifacts.
+    #[arg(long)]
+    pub metadata_only: bool,
+
+    /// Exclude wheel artifacts.
+    #[arg(long)]
+    pub no_wheels: bool,
+
+    /// Exclude source distributions.
+    #[arg(long)]
+    pub no_sdists: bool,
+
+    /// Keep only wheels with this Python tag; repeat for more tags.
+    #[arg(long = "python-tag")]
+    pub python_tags: Vec<String>,
+
+    /// Keep only wheels with this ABI tag; repeat for more tags.
+    #[arg(long = "abi-tag")]
+    pub abi_tags: Vec<String>,
+
+    /// Keep only wheels with this platform tag; repeat for more tags.
+    #[arg(long = "platform-tag")]
+    pub platform_tags: Vec<String>,
+
+    /// Skip files larger than this many bytes when upstream reports a size.
+    #[arg(long)]
+    pub max_file_size_bytes: Option<u64>,
+}
+
+/// Options for `velodex mirror plan`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct MirrorPlanArgs {
+    #[command(flatten)]
+    pub options: MirrorOptions,
+}
+
+/// Options for `velodex mirror sync`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct MirrorSyncArgs {
+    #[command(flatten)]
+    pub options: MirrorOptions,
+}
+
+/// Options for `velodex mirror verify`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct MirrorVerifyArgs {
+    #[command(flatten)]
+    pub options: MirrorOptions,
 }
 
 /// Actions on the velodex installation itself.
@@ -339,6 +435,10 @@ pub struct RuntimeArgs {
     #[arg(long)]
     pub data_dir: Option<PathBuf>,
 
+    /// Serve configured mirrors from cache only.
+    #[arg(long)]
+    pub offline: bool,
+
     /// Log level filter, e.g. `info` or `velodex_upstream=debug`.
     #[arg(long, help_heading = "Logging")]
     pub log_level: Option<String>,
@@ -373,6 +473,7 @@ impl RuntimeArgs {
             host: self.host.clone(),
             port: self.port,
             data_dir: self.data_dir.clone(),
+            offline: self.offline.then_some(true),
             cache_ttl_secs: None,
             indexes: None,
             log: PartialLogConfig {

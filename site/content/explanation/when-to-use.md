@@ -40,9 +40,9 @@ releases for a while" instead of "nobody can deploy".
 
 Full mirrors are the traditional air-gap answer, and a full PyPI mirror is
 [double-digit terabytes](https://github.com/pypa/bandersnatch/issues/1105) and growing. A read-through cache is a
-partial mirror that populates itself with exactly the packages you use, at the moment you first use them. On a network
-with controlled egress, velodex is the one approved path to PyPI; for a true air gap, warm the cache on a connected
-network and carry the data directory across. The [air-gap guide](@/guides/air-gapped.md) covers both.
+partial mirror that can populate itself on first use or through `velodex mirror sync` before clients touch it. On a
+network with controlled egress, velodex is the one approved path to PyPI; for a true air gap, sync the working set on a
+connected network and carry the data directory across. The [air-gap guide](@/guides/air-gapped.md) covers both.
 
 ### Wheels are big and your bandwidth is not
 
@@ -59,8 +59,9 @@ file, and one data directory.
 
 ## …and when not
 
-- **You need a complete offline PyPI**, every package and every release, without a warm-up phase. That is a full mirror;
-  run [bandersnatch](https://github.com/pypa/bandersnatch) and budget the terabytes.
+- **You need PyPI's serial mirror protocol or delta mirror tooling.** `velodex mirror sync --mode all` can walk an
+  upstream Simple index, but [bandersnatch](https://github.com/pypa/bandersnatch) owns the official full-mirror workflow
+  and its operational conventions.
 - **You need one registry for many ecosystems**: npm, Maven, Docker images, Debian packages. That is
   [Artifactory](https://jfrog.com/artifactory/) and [Nexus](https://www.sonatype.com/products/nexus-repository)
   territory; velodex only speaks Python's index protocols.

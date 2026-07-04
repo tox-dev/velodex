@@ -20,6 +20,8 @@ fn mirror(name: &str, upstream: &str) -> IndexConfig {
             password: None,
             token: None,
             upstream_concurrency: velodex_http::rate_limit::DEFAULT_UPSTREAM_CONCURRENCY,
+            offline: false,
+            prefetch: Box::default(),
         },
     }
 }
@@ -246,7 +248,7 @@ fn test_build_router_data_dir_error() {
 
 #[test]
 fn test_build_indexes_rejects_bad_upstream() {
-    let err = build_indexes(&[mirror("pypi", "not a url")]).unwrap_err();
+    let err = build_indexes(&[mirror("pypi", "not a url")], false).unwrap_err();
     assert!(err.to_string().contains("build mirror index pypi"));
     assert!(err.to_string().contains("<invalid upstream URL>"));
 }
@@ -255,13 +257,13 @@ fn test_build_indexes_rejects_bad_upstream() {
 fn test_build_indexes_rejects_invalid_policy() {
     let mut index = mirror("pypi", "https://pypi.org/simple/");
     index.policy.allow_versions = Some("not a specifier".to_owned());
-    let err = build_indexes(&[index]).unwrap_err();
+    let err = build_indexes(&[index], false).unwrap_err();
     assert!(err.to_string().contains("compile policy for pypi"));
 }
 
 #[test]
 fn test_build_indexes_rejects_duplicate_name() {
-    let err = build_indexes(&[local("a"), local("a")]).unwrap_err();
+    let err = build_indexes(&[local("a"), local("a")], false).unwrap_err();
     assert!(err.to_string().contains("duplicate index name"));
 }
 
@@ -269,7 +271,7 @@ fn test_build_indexes_rejects_duplicate_name() {
 fn test_build_indexes_rejects_duplicate_route() {
     let mut second = local("b");
     second.route = "a".to_owned();
-    let err = build_indexes(&[local("a"), second]).unwrap_err();
+    let err = build_indexes(&[local("a"), second], false).unwrap_err();
     assert!(err.to_string().contains("duplicate index route"));
 }
 
@@ -277,7 +279,7 @@ fn test_build_indexes_rejects_duplicate_route() {
 fn test_build_indexes_rejects_unsafe_route() {
     let mut index = local("safe");
     index.route = "root/../pypi".to_owned();
-    let err = build_indexes(&[index]).unwrap_err();
+    let err = build_indexes(&[index], false).unwrap_err();
     assert!(err.to_string().contains("invalid index route root/../pypi"));
 }
 
@@ -285,13 +287,13 @@ fn test_build_indexes_rejects_unsafe_route() {
 fn test_build_indexes_rejects_reserved_route() {
     let mut index = local("safe");
     index.route = "browse/private".to_owned();
-    let err = build_indexes(&[index]).unwrap_err();
+    let err = build_indexes(&[index], false).unwrap_err();
     assert!(err.to_string().contains("invalid index route browse/private"));
 }
 
 #[test]
 fn test_build_indexes_rejects_unknown_layer() {
-    let err = build_indexes(&[local("x"), overlay(&["ghost"], None)]).unwrap_err();
+    let err = build_indexes(&[local("x"), overlay(&["ghost"], None)], false).unwrap_err();
     assert!(err.to_string().contains("unknown index ghost"));
 }
 
@@ -301,7 +303,7 @@ fn test_build_indexes_rejects_non_local_upload_target() {
         mirror("pypi", "https://pypi.org/simple/"),
         overlay(&["pypi"], Some("pypi")),
     ];
-    let err = build_indexes(&configs).unwrap_err();
+    let err = build_indexes(&configs, false).unwrap_err();
     assert!(err.to_string().contains("not a local index"));
 }
 
@@ -312,7 +314,7 @@ fn test_build_indexes_defaults_upload_to_first_local_layer() {
         local("store"),
         overlay(&["pypi", "store"], None),
     ];
-    let indexes = build_indexes(&configs).unwrap();
+    let indexes = build_indexes(&configs, false).unwrap();
     let RuntimeKind::Overlay { upload, layers } = &indexes[2].kind else {
         panic!("expected overlay");
     };
@@ -323,7 +325,7 @@ fn test_build_indexes_defaults_upload_to_first_local_layer() {
 #[test]
 fn test_build_indexes_overlay_without_local_layer_has_no_upload() {
     let configs = [mirror("pypi", "https://pypi.org/simple/"), overlay(&["pypi"], None)];
-    let indexes = build_indexes(&configs).unwrap();
+    let indexes = build_indexes(&configs, false).unwrap();
     let RuntimeKind::Overlay { upload, .. } = &indexes[1].kind else {
         panic!("expected overlay");
     };

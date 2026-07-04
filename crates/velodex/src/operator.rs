@@ -549,7 +549,7 @@ fn prepare_restore_dir(data_dir: &Path, force: bool) -> anyhow::Result<()> {
 }
 
 fn import_target(config: &Config, repo: &str) -> anyhow::Result<ImportTarget> {
-    let indexes = crate::server::build_indexes(&config.indexes)?;
+    let indexes = crate::server::build_indexes(&config.indexes, config.offline)?;
     let position = indexes
         .iter()
         .position(|index| index.name == repo)
@@ -573,7 +573,7 @@ fn import_target(config: &Config, repo: &str) -> anyhow::Result<ImportTarget> {
         velodex_http::IndexKind::Overlay { upload: None, .. } => {
             bail!("repository {repo:?} has no local upload target")
         }
-        velodex_http::IndexKind::Mirror(_) => bail!("repository {repo:?} is read-only"),
+        velodex_http::IndexKind::Mirror { .. } => bail!("repository {repo:?} is read-only"),
     }
 }
 
@@ -803,6 +803,7 @@ fn snapshot_index(index: &crate::config::IndexConfig) -> SnapshotIndex {
             password,
             token,
             upstream_concurrency,
+            ..
         } => SnapshotIndex {
             name: index.name.clone(),
             route: index.route.clone(),

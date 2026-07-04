@@ -1429,6 +1429,7 @@ fn runtime_args() -> RuntimeArgs {
         host: None,
         port: None,
         data_dir: None,
+        offline: false,
         log_level: None,
         verbose: 0,
         log_format: None,

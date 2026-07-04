@@ -33,7 +33,10 @@ pub struct Index {
 /// policy, an overlay the resolved positions of its layers and upload target.
 #[derive(Debug)]
 pub enum IndexKind {
-    Mirror(UpstreamClient),
+    Mirror {
+        client: UpstreamClient,
+        offline: bool,
+    },
     Local {
         upload_token: Option<String>,
         volatile: bool,
@@ -296,7 +299,7 @@ impl AppState {
         let upstream_limits = indexes
             .iter()
             .filter_map(|index| match &index.kind {
-                IndexKind::Mirror(_) => Some((
+                IndexKind::Mirror { .. } => Some((
                     index.name.clone(),
                     configured
                         .get(&index.name)
@@ -421,7 +424,7 @@ pub fn describe_indexes(indexes: &[Index]) -> Vec<IndexDescription> {
 pub(crate) fn describe_index(indexes: &[Index], position: usize) -> IndexDescription {
     let index = &indexes[position];
     let (kind, layers, uploads, volatile_deletes, upload_to) = match &index.kind {
-        IndexKind::Mirror(_) => ("mirror", Vec::new(), false, false, None),
+        IndexKind::Mirror { .. } => ("mirror", Vec::new(), false, false, None),
         IndexKind::Local { upload_token, volatile } => (
             "local",
             Vec::new(),
@@ -454,10 +457,11 @@ pub(crate) fn describe_index(indexes: &[Index], position: usize) -> IndexDescrip
         }
     };
     let (upstream, local) = match &index.kind {
-        IndexKind::Mirror(client) => (
+        IndexKind::Mirror { client, offline } => (
             Some(UpstreamDescription {
                 url: client.redacted_base_url(),
                 auth: client.auth_status().as_str(),
+                offline: *offline,
             }),
             None,
         ),
@@ -503,6 +507,7 @@ pub struct IndexDescription {
 pub struct UpstreamDescription {
     pub url: String,
     pub auth: &'static str,
+    pub offline: bool,
 }
 
 /// Local-store status data that excludes upload-token values.

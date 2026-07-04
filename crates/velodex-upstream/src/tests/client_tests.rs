@@ -63,6 +63,58 @@ async fn test_fetch_project_json_with_metadata() {
 }
 
 #[tokio::test]
+async fn test_fetch_index_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            b"{\"meta\":{},\"projects\":[]}".to_vec(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let response = client.fetch_index().await.unwrap();
+
+    assert_eq!(response.status, 200);
+    assert_eq!(&response.body[..], b"{\"meta\":{},\"projects\":[]}");
+    assert_eq!(response.url.as_str(), format!("{}/simple/", server.uri()));
+}
+
+#[tokio::test]
+async fn test_fetch_index_retries_body_errors() {
+    let base = truncated_then_ok_server(
+        b"{\"meta\":{},\"projects\":[]}",
+        Some("application/vnd.pypi.simple.v1+json"),
+    );
+    let client = UpstreamClient::new(&base).unwrap();
+
+    let response = client.fetch_index().await.unwrap();
+
+    assert_eq!(&response.body[..], b"{\"meta\":{},\"projects\":[]}");
+}
+
+#[tokio::test]
+async fn test_fetch_index_reports_decode_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-encoding", "gzip")
+                .set_body_raw(b"not gzip".to_vec(), "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+
+    let err = client.fetch_index().await.unwrap_err();
+
+    assert_eq!(err.user_message(), "upstream response could not be decoded");
+}
+
+#[tokio::test]
 async fn test_fetch_project_revalidate_304() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

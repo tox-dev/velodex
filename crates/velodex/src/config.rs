@@ -16,6 +16,8 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub data_dir: PathBuf,
+    /// Disable upstream network access and serve only cached mirror data.
+    pub offline: bool,
     /// Fallback freshness for cached simple pages, in seconds. Upstream `Cache-Control` lifetimes
     /// take precedence; this applies only when the server granted none.
     pub cache_ttl_secs: i64,
@@ -50,6 +52,10 @@ pub enum IndexKind {
         token: Option<String>,
         /// Concurrent upstream fetches allowed for this mirror in this process; `0` disables the cap.
         upstream_concurrency: usize,
+        /// Serve only cached data for this mirror.
+        offline: bool,
+        /// Optional package set and artifact filters for `velodex mirror`.
+        prefetch: Box<MirrorPrefetchConfig>,
     },
     /// A hosted store that accepts uploads. `upload_token` is the Basic-auth password an upload must
     /// present (`None` disables uploads); `volatile` allows delete and overwrite.
@@ -63,6 +69,83 @@ pub enum IndexKind {
         layers: Vec<String>,
         upload: Option<String>,
     },
+}
+
+/// Mirror prefetch behavior configured under `[index.prefetch]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorPrefetchConfig {
+    pub mode: MirrorPrefetchMode,
+    pub packages: Vec<String>,
+    pub requirements: Vec<PathBuf>,
+    pub include_wheels: bool,
+    pub include_sdists: bool,
+    pub python_tags: Vec<String>,
+    pub abi_tags: Vec<String>,
+    pub platform_tags: Vec<String>,
+    pub max_file_size_bytes: Option<u64>,
+    pub metadata_only: bool,
+}
+
+impl Default for MirrorPrefetchConfig {
+    fn default() -> Self {
+        Self {
+            mode: MirrorPrefetchMode::Selected,
+            packages: Vec::new(),
+            requirements: Vec::new(),
+            include_wheels: true,
+            include_sdists: true,
+            python_tags: Vec::new(),
+            abi_tags: Vec::new(),
+            platform_tags: Vec::new(),
+            max_file_size_bytes: None,
+            metadata_only: false,
+        }
+    }
+}
+
+/// Which projects `velodex mirror` selects before artifact filters apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum MirrorPrefetchMode {
+    All,
+    Selected,
+    MetadataOnly,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawMirrorPrefetch {
+    pub mode: Option<MirrorPrefetchMode>,
+    pub packages: Option<Vec<String>>,
+    pub requirements: Option<Vec<PathBuf>>,
+    pub include_wheels: Option<bool>,
+    pub include_sdists: Option<bool>,
+    pub python_tags: Option<Vec<String>>,
+    pub abi_tags: Option<Vec<String>>,
+    pub platform_tags: Option<Vec<String>>,
+    pub max_file_size_bytes: Option<u64>,
+    pub metadata_only: Option<bool>,
+}
+
+impl RawMirrorPrefetch {
+    #[must_use]
+    pub fn resolve(self) -> MirrorPrefetchConfig {
+        let mode = self.mode.unwrap_or(MirrorPrefetchMode::Selected);
+        MirrorPrefetchConfig {
+            mode,
+            packages: self.packages.unwrap_or_default(),
+            requirements: self.requirements.unwrap_or_default(),
+            include_wheels: self.include_wheels.unwrap_or(true),
+            include_sdists: self.include_sdists.unwrap_or(true),
+            python_tags: self.python_tags.unwrap_or_default(),
+            abi_tags: self.abi_tags.unwrap_or_default(),
+            platform_tags: self.platform_tags.unwrap_or_default(),
+            max_file_size_bytes: self.max_file_size_bytes,
+            metadata_only: self
+                .metadata_only
+                .unwrap_or(matches!(mode, MirrorPrefetchMode::MetadataOnly)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +168,7 @@ impl Default for Config {
             host: "127.0.0.1".to_owned(),
             port: 4433,
             data_dir: PathBuf::from("velodex-data"),
+            offline: false,
             cache_ttl_secs: 300,
             indexes: default_indexes(),
             log: LogConfig::default(),
@@ -108,6 +192,8 @@ fn default_indexes() -> Vec<IndexConfig> {
                 password: None,
                 token: None,
                 upstream_concurrency: DEFAULT_UPSTREAM_CONCURRENCY,
+                offline: false,
+                prefetch: Box::default(),
             },
         },
         IndexConfig {
@@ -149,6 +235,9 @@ impl Config {
         if let Some(data_dir) = partial.data_dir {
             self.data_dir = data_dir;
         }
+        if let Some(offline) = partial.offline {
+            self.offline = offline;
+        }
         if let Some(cache_ttl_secs) = partial.cache_ttl_secs {
             self.cache_ttl_secs = cache_ttl_secs;
         }
@@ -177,6 +266,8 @@ fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
             password: raw.password,
             token: raw.token,
             upstream_concurrency: raw.upstream_concurrency.unwrap_or(DEFAULT_UPSTREAM_CONCURRENCY),
+            offline: raw.offline.unwrap_or(false),
+            prefetch: Box::new(raw.prefetch.unwrap_or_default().resolve()),
         }
     } else if raw.local == Some(true) || raw.upload_token.is_some() {
         IndexKind::Local {
@@ -301,6 +392,7 @@ pub struct PartialConfig {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub data_dir: Option<PathBuf>,
+    pub offline: Option<bool>,
     pub cache_ttl_secs: Option<i64>,
     /// The `[[index]]` array from the TOML file. When present it replaces the default topology.
     #[serde(rename = "index")]
@@ -323,6 +415,8 @@ pub struct RawIndex {
     pub password: Option<String>,
     pub token: Option<String>,
     pub upstream_concurrency: Option<usize>,
+    pub offline: Option<bool>,
+    pub prefetch: Option<RawMirrorPrefetch>,
     pub local: Option<bool>,
     pub upload_token: Option<String>,
     pub volatile: Option<bool>,

@@ -1074,7 +1074,7 @@ fn status() -> OperationBuilder {
                         "indexes": [
                             {"name": "pypi", "route": "pypi", "kind": "mirror", "layers": [],
                              "uploads": false, "volatile_deletes": false, "upload_to": null,
-                             "upstream": {"url": "https://pypi.org/simple/", "auth": {"kind": "none", "redacted": null}, "status": "configured"},
+                             "upstream": {"url": "https://pypi.org/simple/", "auth": {"kind": "none", "redacted": null}, "status": "configured", "offline": false},
                              "local": null, "project_count": 128, "upload_count": 0, "recent_uploads": []},
                             {"name": "local", "route": "local", "kind": "local", "layers": [],
                              "uploads": true, "volatile_deletes": true, "upload_to": null, "upstream": null,

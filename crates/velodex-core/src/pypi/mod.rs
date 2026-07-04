@@ -12,13 +12,14 @@ mod simple;
 mod version;
 
 pub use filename::{DistributionFilename, DistributionFilenameError, DistributionKind, parse_distribution_filename};
-pub use html::parse_detail_html;
+pub use html::{parse_detail_html, parse_index_html};
 pub use legacy_json::render_legacy_json;
 pub use metadata::{CoreMetadataDoc, parse_metadata};
 pub use name::{PackageName, file_matches_version, is_valid_name, normalize_name};
 pub use simple::{
     API_VERSION, CoreMetadata, File, Meta, ParsedDetail, ProjectDetail, ProjectList, ProjectListEntry, ProjectStatus,
-    Provenance, SimpleError, Yanked, parse_detail, parse_meta, render_detail_html, render_index_html, to_json,
+    Provenance, SimpleError, Yanked, parse_detail, parse_index, parse_meta, render_detail_html, render_index_html,
+    to_json,
 };
 pub use version::{Version, VersionSpecifiers, parse_version, parse_version_specifiers, sorted_desc};
 

@@ -99,7 +99,7 @@ fn run_server(config: &Config) -> anyhow::Result<()> {
     runtime.block_on(async {
         let state = velodex::server::build_state(config)?;
         for index in &state.indexes {
-            if let velodex_http::IndexKind::Mirror(client) = &index.kind {
+            if let velodex_http::IndexKind::Mirror { client, offline: false } = &index.kind {
                 let client = client.clone();
                 tokio::spawn(async move { client.warm().await });
             }
@@ -190,6 +190,11 @@ fn main() -> anyhow::Result<()> {
         velodex::cli::Command::Policy(command) => {
             let config = resolve_config(command.runtime_args())?;
             app::policy(&config, &command, &mut std::io::stdout())
+        }
+        velodex::cli::Command::Mirror(command) => {
+            let config = resolve_config(command.runtime_args())?;
+            let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+            runtime.block_on(velodex::mirror::run(&config, &command, &mut std::io::stdout()))
         }
         velodex::cli::Command::Openapi => {
             print!("{}", velodex_http::api::openapi_json());

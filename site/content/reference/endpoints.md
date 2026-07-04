@@ -153,7 +153,8 @@ concurrency denials by mirror index. HTTP request counters stay at zero while th
 
 `GET /+status` returns version, serial, request counters, configured index descriptions, mirror status, and redacted
 token metadata. It includes sanitized upstream URLs with user info, query strings, and fragments removed. It does not
-include upload-token values, upstream usernames, passwords, bearer tokens, URL query secrets, or URL fragments.
+include upload-token values, upstream usernames, passwords, bearer tokens, URL query secrets, or URL fragments. Mirror
+entries also include `upstream.offline`, which is `true` when that mirror is serving only cached data.
 
 Add `?details=admin` for the read-only admin status page. That shape also includes observed project counts, uploaded
 file counts, and capped recent uploads. The summary scans metadata keys once and does not fetch upstreams or read cached

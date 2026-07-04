@@ -563,6 +563,8 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
                 password: None,
                 token: None,
                 upstream_concurrency: velodex_http::rate_limit::DEFAULT_UPSTREAM_CONCURRENCY,
+                offline: false,
+                prefetch: Box::default(),
             },
         }],
         ..Config::default()
