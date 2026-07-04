@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate an llms.txt (llmstxt.org format) from the Zola content tree.
 
 Zola cannot template arbitrary output files, so this runs after `zola build`: it reads the
@@ -6,6 +5,7 @@ front-matter of each content page and writes an LLM-friendly index of the docume
 
 Usage: gen_llms.py --base-url URL --content DIR --out FILE
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,9 +49,12 @@ def front_matter(path: Path) -> tuple[str, str, int]:
 
 def collect(content: Path, base_url: str) -> tuple[str, list[tuple[str, list[Entry]]]]:
     _, root_desc, _ = front_matter(content / "_index.md")
-    if not root_desc and (config := content.parent / "config.toml").is_file():
-        if match := DESC_RE.search(config.read_text(encoding="utf-8")):
-            root_desc = match.group(1)
+    if (
+        not root_desc
+        and (config := content.parent / "config.toml").is_file()
+        and (match := DESC_RE.search(config.read_text(encoding="utf-8")))
+    ):
+        root_desc = match.group(1)
     groups: list[tuple[str, list[Entry]]] = []
     for slug, label in SECTIONS:
         section = content / slug
@@ -75,8 +78,11 @@ def render(base_url: str, root_desc: str, groups: list[tuple[str, list[Entry]]])
         "",
         f"> {root_desc}",
         "",
-        "Documentation follows the Diátaxis framework: learning-oriented tutorials, task-oriented "
-        "how-to guides, information-oriented reference, and understanding-oriented explanation.",
+        (
+            "Documentation follows the Diátaxis framework: learning-oriented tutorials, "
+            "task-oriented how-to guides, information-oriented reference, and "
+            "understanding-oriented explanation."
+        ),
         "",
     ]
     for label, entries in groups:
@@ -98,7 +104,7 @@ def main() -> None:
     base_url = args.base_url.rstrip("/")
     root_desc, groups = collect(args.content, base_url)
     args.out.write_text(render(base_url, root_desc, groups), encoding="utf-8")
-    print(f"wrote {args.out} ({sum(len(e) for _, e in groups)} pages)")
+    print(f"wrote {args.out} ({sum(len(e) for _, e in groups)} pages)")  # noqa: T201 - build-step status line
 
 
 if __name__ == "__main__":

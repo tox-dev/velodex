@@ -282,6 +282,20 @@ a {
     color: var(--accent);
   }
 
+  // Keyboard-selected result (arrow keys); highlights the result title link.
+  .pf-selected {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  .search-unavailable {
+    margin: 0;
+    padding: 0.6rem 0.2rem;
+    color: var(--text-soft);
+  }
+
   &::backdrop {
     background: rgba(0, 0, 0, 0.5);
   }
@@ -791,10 +805,14 @@ $header-offset: 4.3rem;
   }
 }
 
-// Desktop keeps both rails open (JS holds the open attribute in sync with the breakpoint); the
-// summary reads as a static heading rather than a toggle.
+// Desktop keeps both rails open (JS holds the open attribute in sync with the breakpoint). The
+// sidebar's "Documentation" summary is only the mobile toggle, so it is hidden here; the TOC's
+// summary stays as a static "On this page" heading.
 @media (min-width: #{$docs-break-nav + 0.01rem}) {
-  .docs-nav > summary,
+  .docs-nav > summary {
+    display: none;
+  }
+
   .docs-toc > summary {
     pointer-events: none;
   }
