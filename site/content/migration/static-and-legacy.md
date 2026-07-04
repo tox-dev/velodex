@@ -43,7 +43,7 @@ hard-coded and no uploads or private packages. velodex adds the index-aware half
 
 | Setup                         | velodex                                        |
 | ----------------------------- | ---------------------------------------------- |
-| dumb-pypi regenerate + S3     | `twine upload` to a local index                |
+| dumb-pypi regenerate + S3     | `twine upload` to a hosted index               |
 | `--find-links /shared/wheels` | `--index-url http://host:4433/{route}/simple/` |
 | `pip2pi` snapshot + rsync     | warm the cache, carry `data_dir`               |
-| nginx `proxy_cache` config    | a mirror index                                 |
+| nginx `proxy_cache` config    | a cached index                                 |

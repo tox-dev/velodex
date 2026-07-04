@@ -25,34 +25,34 @@ the file. Precedence is `defaults < TOML file < flags`.
 `no-cache`/`no-store`, or zero. Artifacts never expire; they are content-addressed by sha256, so a changed upstream file
 is a new entry on the page rather than a mutation.
 
-`offline = true` disables upstream network access for configured mirrors. Cached project pages, PEP 658 metadata
-siblings, and artifacts serve from disk. A cold mirror miss returns `503`; overlay routes still serve any local layer
-that can answer. Use `velodex mirror sync` before enabling offline mode on a machine that must run without network
-access.
+`offline = true` disables upstream network access for configured cached indexes. Cached project pages, PEP 658 metadata
+siblings, and artifacts serve from disk. A cold cached-index miss returns `503`; virtual-index routes still serve any
+hosted layer that can answer. Use `velodex mirror sync` before enabling offline mode on a machine that must run without
+network access.
 
 ## `[[index]]`
 
-Each `[[index]]` table declares one index. `name` is required; exactly one of `mirror`, `local`, or `layers` selects the
-kind. velodex rejects unknown keys.
+Each `[[index]]` table declares one index. `name` is required; exactly one of `cached`, `hosted`, or `layers` selects
+the role. velodex rejects unknown keys.
 
-| Key                    | Applies to | Meaning                                                           | Default           |
-| ---------------------- | ---------- | ----------------------------------------------------------------- | ----------------- |
-| `name`                 | all        | Identifier other indexes reference in `layers`                    | (required)        |
-| `route`                | all        | URL prefix the index is served under                              | same as `name`    |
-| `mirror`               | mirror     | Upstream simple-index URL                                         |                   |
-| `username`             | mirror     | Basic-auth username for the upstream                              | (none)            |
-| `password`             | mirror     | Basic-auth password for the upstream                              | (none)            |
-| `token`                | mirror     | Bearer token; takes precedence over username/password             | (none)            |
-| `upstream_concurrency` | mirror     | Concurrent upstream fetches for this mirror; `0` disables the cap | `8`               |
-| `offline`              | mirror     | Serve this mirror from cache only                                 | `false`           |
-| `prefetch`             | mirror     | Package and artifact selection for `velodex mirror`               | (see below)       |
-| `local`                | local      | `true` marks a hosted store (implied by `upload_token`)           | `false`           |
-| `upload_token`         | local      | Basic-auth password uploads must present; unset disables uploads  | (none)            |
-| `volatile`             | local      | Allow delete and overwrite                                        | `true`            |
-| `layers`               | overlay    | Ordered index names to compose; first match per filename wins     |                   |
-| `upload`               | overlay    | Local layer that receives uploads                                 | first local layer |
-| `policy`               | all        | Nested repository policy table                                    | empty             |
-| `webhook`              | all        | Signed delivery targets for upload and index-change events        | none              |
+| Key                    | Role    | Meaning                                                               | Default            |
+| ---------------------- | ------- | --------------------------------------------------------------------- | ------------------ |
+| `name`                 | all     | Identifier other indexes reference in `layers`                        | (required)         |
+| `route`                | all     | URL prefix the index is served under                                  | same as `name`     |
+| `cached`               | cached  | Upstream simple-index URL to cache                                    |                    |
+| `username`             | cached  | Basic-auth username for the upstream                                  | (none)             |
+| `password`             | cached  | Basic-auth password for the upstream                                  | (none)             |
+| `token`                | cached  | Bearer token; takes precedence over username/password                 | (none)             |
+| `upstream_concurrency` | cached  | Concurrent upstream fetches for this index; `0` disables the cap      | `8`                |
+| `offline`              | cached  | Serve this cached index from disk only                                | `false`            |
+| `prefetch`             | cached  | Package and artifact selection for `velodex mirror`                   | (see below)        |
+| `hosted`               | hosted  | `true` marks this index as a hosted store (implied by `upload_token`) | `false`            |
+| `upload_token`         | hosted  | Basic-auth password uploads must present; unset disables uploads      | (none)             |
+| `volatile`             | hosted  | Allow delete and overwrite                                            | `true`             |
+| `layers`               | virtual | Ordered index names to compose; first match per filename wins         |                    |
+| `upload`               | virtual | Hosted layer that receives uploads                                    | first hosted layer |
+| `policy`               | all     | Nested index policy table                                             | empty              |
+| `webhook`              | all     | Signed delivery targets for upload and index-change events            | none               |
 
 A `route` is a raw URL path prefix. It must be one or more non-empty path segments separated by `/`; each segment may
 contain only ASCII letters, digits, `-`, `.`, `_`, and `~`. Startup rejects routes with a leading or trailing `/`, empty
@@ -64,32 +64,32 @@ Declaring any `[[index]]` replaces the default topology, which is:
 ```toml
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 
 [[index]]
-name = "local"
-local = true
+name = "hosted"
+hosted = true
 
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 ```
 
 Startup rejects duplicate names, duplicate routes, invalid routes, `layers` entries that name no index, and an `upload`
-target that is not a local index.
+target that is not a hosted index.
 
 ### `[index.policy]`
 
-Policy rules apply to the index that owns the table. A mirror policy filters that mirror; a local policy filters direct
-uploads and local-route reads; an overlay policy filters the merged repository clients use. Project names are compared
+Policy rules apply to the index that owns the table. A cached-index policy filters that cache; a hosted policy filters
+direct uploads and hosted-route reads; a virtual policy filters the merged index clients use. Project names are compared
 after PEP 503 normalization.
 
 ```toml
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 
 [index.policy]
 allow_projects = ["flask", "requests"]
@@ -123,13 +123,13 @@ Simple-page path so file lists and PEP 691 `versions` are filtered together befo
 
 ### `[index.prefetch]`
 
-Mirror indexes can declare the default selection for `velodex mirror plan`, `velodex mirror sync`, and
+Cached indexes can declare the default selection for `velodex mirror plan`, `velodex mirror sync`, and
 `velodex mirror verify`. CLI flags add package selectors and override booleans or `mode` for one run.
 
 ```toml
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 
 [index.prefetch]
 mode = "selected"
@@ -198,20 +198,20 @@ window_secs = 60
 
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 upstream_concurrency = 4
 ```
 
 ## `[[index.webhook]]`
 
-Put webhook tables under the index that should emit them. A target on an overlay receives events for requests made
-through the overlay route; the payload also names the local layer that stored the change.
+Put webhook tables under the index that should emit them. A target on a virtual index receives events for requests made
+through the virtual-index route; the payload also names the hosted layer that stored the change.
 
 ```toml
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 
 [[index.webhook]]
 name = "ci"

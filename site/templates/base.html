@@ -176,7 +176,7 @@
       // no-op rather than a loop.
       var searchRoot = document.getElementById("pagefind-search");
       if (searchRoot) {
-        var SECTION_LABELS = { tutorials: "Tutorial", guides: "How-to", reference: "Reference", explanation: "Explanation", migration: "Migration" };
+        var SECTION_LABELS = { tutorials: "Tutorial", guides: "How-to", ecosystems: "Ecosystem", reference: "Reference", explanation: "Explanation", migration: "Migration" };
         var update = function () {
           var message = modal.querySelector(".pagefind-ui__message");
           if (message) {
@@ -192,7 +192,7 @@
           modal.querySelectorAll(".pagefind-ui__result-title").forEach(function (title) {
             if (title.querySelector(".pf-badge")) return;
             var link = title.querySelector("a[href]");
-            var section = link && link.getAttribute("href").match(/\/(tutorials|guides|reference|explanation|migration)\//);
+            var section = link && link.getAttribute("href").match(/\/(tutorials|guides|ecosystems|reference|explanation|migration)\//);
             if (!section) return;
             var badge = document.createElement("span");
             badge.className = "pf-badge";

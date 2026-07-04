@@ -40,10 +40,10 @@ uvx maturin build --release   # one wheel for this machine, in target/wheels/
 uvx maturin sdist
 ```
 
-## Promote between local indexes
+## Promote between hosted indexes
 
-Use promotion after staging accepts a release and another local index needs the same files without re-uploading artifact
-bytes:
+Use promotion after staging accepts a release and another hosted index needs the same files without re-uploading
+artifact bytes:
 
 ```shell
 curl -u __token__:prod-secret -X PUT \
@@ -55,5 +55,5 @@ yank state, and metadata sibling hashes, and reuses the existing content-address
 different sha256 returns `409 Conflict`.
 
 Project status applies on the target route. Active and deprecated projects accept promotion; archived and quarantined
-projects return `403`. Direct local routes have no upstream project-status source today, so velodex treats them as
+projects return `403`. Direct hosted routes have no upstream project-status source today, so velodex treats them as
 active.

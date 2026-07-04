@@ -44,8 +44,8 @@ cargo build --release
 
 ## Start velodex
 
-Start the server. It needs no configuration; the defaults give you a pypi.org mirror with a private local store overlaid
-in front of it, served at `root/pypi`:
+Start the server. It needs no configuration; the defaults give you a pypi.org cached index with a private hosted store,
+combined by a virtual index in front of them, served at `root/pypi`:
 
 ```shell
 velodex serve            # ./target/release/velodex serve when built from source
@@ -94,16 +94,16 @@ Uploads are disabled until you set a token. Stop velodex, write a minimal config
 # velodex.toml
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 
 [[index]]
-name = "local"
+name = "hosted"
 upload_token = "demo-secret"
 
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 ```
 
 ```shell
@@ -116,8 +116,8 @@ Now publish a wheel with [twine](https://twine.readthedocs.io/) or uv (any usern
 uv publish --publish-url http://127.0.0.1:4433/root/pypi/ -u __token__ -p demo-secret dist/*
 ```
 
-Your package installs from the same URL as everything else: the overlay serves your upload and pypi.org side by side,
-and your file shadows any upstream file with the same name.
+Your package installs from the same URL as everything else: the virtual index serves your upload and pypi.org side by
+side, and your file shadows any upstream file with the same name.
 
 ## Yank and delete it
 
@@ -141,6 +141,7 @@ per-project and per-file numbers. The same counters are JSON at `/+stats` and Pr
 
 ## Where next
 
-- [How-to guides](@/guides/_index.md) for specific tasks like proxying an Artifactory mirror or composing overlays.
+- [How-to guides](@/guides/_index.md) for specific tasks like proxying an Artifactory upstream or composing virtual
+  indexes.
 - [Configuration reference](@/reference/configuration.md) for every TOML key.
-- [The index model](@/explanation/indexes.md) to understand mirrors, locals, and overlays in depth.
+- [The index model](@/explanation/indexes.md) to understand cached, hosted, and virtual indexes in depth.

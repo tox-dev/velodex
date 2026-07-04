@@ -18,16 +18,17 @@ containers, and other content types with the same model.
 
 If Python packages are the only content type you need, the platform is the overhead: four services and a database
 against one binary and a data directory. velodex also serves at a plain index root instead of
-`/pypi/{base_path}/simple/`, and its pull-through composes: overlays can layer mirrors of mirrors, where Pulp documents
-that [chaining pull-through indices does not work](https://pulpproject.org/pulp_python/docs/user/guides/host/).
+`/pypi/{base_path}/simple/`, and its pull-through composes: virtual indexes can layer cached indexes of cached indexes,
+where Pulp documents that
+[chaining pull-through indices does not work](https://pulpproject.org/pulp_python/docs/user/guides/host/).
 
 ## The renames
 
 | Pulp (pulp_python)                   | velodex                                                      |
 | ------------------------------------ | ------------------------------------------------------------ |
 | repository + remote + distribution   | one `[[index]]` entry                                        |
-| `policy = "on_demand"` remote        | the mirror default                                           |
-| pull-through cache on a distribution | a mirror layer in an overlay                                 |
+| `policy = "on_demand"` remote        | the cached default                                           |
+| pull-through cache on a distribution | a cached layer in a virtual index                            |
 | includes/excludes curation           | shadowing plus [yank and hide overrides](@/guides/remove.md) |
 | `…/pypi/{base_path}/simple/`         | `/{route}/simple/`                                           |
 | `pulp python content upload` / twine | twine / `uv publish`, unchanged                              |

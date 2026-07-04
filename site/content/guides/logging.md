@@ -38,8 +38,8 @@ velodex validates the combination at startup and refuses, for example, a `file` 
 
 ## Security Events
 
-Repository actions emit structured records on the `velodex::security` target. Use JSON output when downstream tooling
-needs to filter by actor, action, target, or result.
+Index actions emit structured records on the `velodex::security` target. Use JSON output when downstream tooling needs
+to filter by actor, action, target, or result.
 
 ```shell
 velodex serve --log-format json --log-sink file --log-file /var/log/velodex/events.log

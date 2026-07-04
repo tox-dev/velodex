@@ -10,6 +10,7 @@
   {%- if section_slug == "reference" %}{% set search_weight = "1.5" %}
   {%- elif section_slug == "explanation" %}{% set search_weight = "1.3" %}
   {%- elif section_slug == "migration" %}{% set search_weight = "0.6" %}
+  {%- elif section_slug == "ecosystems" %}{% set search_weight = "1.3" %}
   {%- elif section_slug == "tutorials" or section_slug == "guides" %}{% set search_weight = "1.1" %}
   {%- else %}{% set search_weight = "1.0" %}{%- endif %}
   <div class="docs-main docs">

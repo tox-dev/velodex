@@ -26,7 +26,7 @@ The common pattern, a private index in `--extra-index-url` with pypi.org as fall
 [dependency confusion](https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610) works: pip happily takes a
 same-named, higher-versioned package from the public side. This is not theoretical; it compromised
 [PyTorch nightly users](https://pytorch.org/blog/compromised-nightly-dependency/) and earned one researcher bug bounties
-from 35 companies. velodex's overlay indexes answer it server-side: your uploads shadow upstream files with the same
+from 35 companies. velodex's virtual indexes answer it server-side: your uploads shadow upstream files with the same
 name, for every client; pip, uv, and poetry alike keep a single `index-url`. [The index model](@/explanation/indexes.md)
 explains the mechanics.
 
@@ -62,12 +62,14 @@ file, and one data directory.
 - **You need PyPI's serial mirror protocol or delta mirror tooling.** `velodex mirror sync --mode all` can walk an
   upstream Simple index, but [bandersnatch](https://github.com/pypa/bandersnatch) owns the official full-mirror workflow
   and its operational conventions.
-- **You need one registry for many ecosystems**: npm, Maven, Docker images, Debian packages. That is
+- **You need one registry for many ecosystems today**: npm, Maven, Docker images, Debian packages. velodex speaks PyPI
+  today; its architecture is per-ecosystem, and OCI and npm are planned (an index is a role paired with an ecosystem —
+  see [ecosystems](@/ecosystems/_index.md)), but if you need those formats served right now, that is
   [Artifactory](https://jfrog.com/artifactory/) and [Nexus](https://www.sonatype.com/products/nexus-repository)
-  territory; velodex only speaks Python's index protocols.
+  territory.
 - **You need high availability or replication.** velodex is one process with local state. Run it per site or per cluster
   (each instance warms independently), but there is no primary/replica story yet.
-- **You need per-user authentication and read ACLs.** Today's auth is one upload token per local index; reads are open
+- **You need per-user authentication and read ACLs.** Today's auth is one upload token per hosted index; reads are open
   to whoever can reach the port. Put it behind your network boundary or a reverse proxy that handles identity.
 - **You need build farms for source distributions** the way [piwheels](https://www.piwheels.org/) provides for Raspberry
   Pi. velodex serves what upstream has; it does not compile anything.
@@ -75,5 +77,5 @@ file, and one data directory.
 ## In practice
 
 - Set up the cache: [getting started](@/tutorials/getting-started.md), [CI guide](@/guides/ci-cache.md)
-- Host private packages safely: [compose overlays](@/guides/compose-overlays.md), [publish](@/guides/publish.md)
+- Host private packages safely: [compose virtual indexes](@/guides/compose-overlays.md), [publish](@/guides/publish.md)
 - Understand the machinery: [architecture](@/explanation/architecture.md), [the index model](@/explanation/indexes.md)

@@ -8,7 +8,7 @@ logos = [ "logos/gitlab.svg", "logos/googlecloud.svg"]
 
 The hosted registries integrate with their platform's identity and billing. That is the draw and the tax: metered
 storage and egress, tokens that expire mid-pipeline, and Python protocol support that lags years behind pypi.org.
-velodex either replaces them for Python or sits in front of them as a caching, protocol-upgrading mirror.
+velodex either replaces them for Python or sits in front of them as a caching, protocol-upgrading cached index.
 
 What their own documentation states today:
 
@@ -26,8 +26,8 @@ What their own documentation states today:
   (Python gets pypi.org and other Azure feeds), storage is
   [metered per GiB](https://azure.microsoft.com/en-us/pricing/details/devops/azure-devops-services/), and its lazy
   upstream indexing [confuses uv](https://github.com/astral-sh/uv/issues/11440).
-- **Google Artifact Registry** has remote (pull-through) and virtual (overlay) Python repositories (the closest cloud
-  analog to velodex's model, split across three resource types) with
+- **Google Artifact Registry** has remote (pull-through) and virtual (aggregation) Python repositories (the closest
+  cloud analog to velodex's model, split across three resource types) with
   [PEP 658 still an open feature request](https://issuetracker.google.com/issues/300035693) and
   [metered storage](https://cloud.google.com/artifact-registry/pricing).
 
@@ -35,12 +35,12 @@ What their own documentation states today:
 
 Self-hosted: no per-GiB meter, no token treadmill, PEP 691/658/700 served by default, and one config file instead of
 domain/repository/upstream resource graphs. When the packages must stay in the cloud registry (platform IAM,
-compliance), keep it as the upload target and put velodex in front as a mirror: clients get caching and modern
+compliance), keep it as the upload target and put velodex in front as a cached index: clients get caching and modern
 protocols; the registry keeps ownership.
 
 ## The renames
 
-| Registry        | Its simple URL                                                                      | As a velodex mirror                                                                                            |
+| Registry        | Its simple URL                                                                      | As a velodex cached index                                                                                      |
 | --------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | CodeArtifact    | `https://{domain}-{acct}.d.codeartifact.{region}.amazonaws.com/pypi/{repo}/simple/` | supported once static credentials exist; today's 12-hour tokens need refresh support velodex does not have yet |
 | GitLab          | `https://host/api/v4/projects/{id}/packages/pypi/simple`                            | `username` + `password` (a personal or deploy token)                                                           |

@@ -16,8 +16,8 @@ was archived on August 27, 2023 ("Pypicloud has transitioned to maintenance mode
 
 ### Overlap
 
-- **Read-through cache-on-miss.** pypicloud's `fallback = cache` is velodex's default mirror behavior: fetch a miss,
-  store it, serve it.
+- **Read-through cache-on-miss.** pypicloud's `fallback = cache` is velodex's default cached-index behavior: fetch a
+  miss, store it, serve it.
 - **Private hosting** of your own packages, private names taking precedence over public ones.
 - **Token or user-authenticated uploads.**
 
@@ -61,18 +61,18 @@ wheel the instant it lands.
 
 ## How to migrate
 
-Feature-wise this is the most direct migration: velodex's read-through mirror is pypicloud's `fallback = cache` made the
-default. Your cached mirror state refills on first use; only hosted uploads need to move. Map the config across:
+Feature-wise this is the most direct migration: velodex's read-through cached index is pypicloud's `fallback = cache`
+made the default. Your cached-index state refills on first use; only hosted uploads need to move. Map the config across:
 
-| pypicloud                                | velodex                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------ |
-| `ppc-make-config` + `pserve config.ini`  | a [TOML file](@/reference/configuration.md) + `velodex serve`            |
-| `pypi.fallback = cache`                  | the default mirror behavior                                              |
-| `pypi.fallback = redirect` / `none`      | not offered; misses serve through the cache or 404 on local-only indexes |
-| `storage = s3 / gcs / azure`             | local `data_dir` only                                                    |
-| `db = sqlalchemy / redis / dynamo` cache | embedded (redb), nothing to provision                                    |
-| access backends (config / SQL / LDAP)    | one `upload_token` per local index                                       |
-| `/simple/` and `/pypi/` routes           | `/{route}/simple/`                                                       |
+| pypicloud                                | velodex                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
+| `ppc-make-config` + `pserve config.ini`  | a [TOML file](@/reference/configuration.md) + `velodex serve`             |
+| `pypi.fallback = cache`                  | the default cached-index behavior                                         |
+| `pypi.fallback = redirect` / `none`      | not offered; misses serve through the cache or 404 on hosted-only indexes |
+| `storage = s3 / gcs / azure`             | local `data_dir` only                                                     |
+| `db = sqlalchemy / redis / dynamo` cache | embedded (redb), nothing to provision                                     |
+| access backends (config / SQL / LDAP)    | one `upload_token` per hosted index                                       |
+| `/simple/` and `/pypi/` routes           | `/{route}/simple/`                                                        |
 
 ## Gotchas
 

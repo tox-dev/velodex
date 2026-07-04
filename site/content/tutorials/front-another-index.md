@@ -22,7 +22,7 @@ data_dir = "velodex-data"
 
 [[index]]
 name = "testpypi"
-mirror = "https://test.pypi.org/simple/"
+cached = "https://test.pypi.org/simple/"
 ```
 
 ```shell
@@ -31,12 +31,12 @@ uv venv demo
 VIRTUAL_ENV=demo uv pip install --index-url http://127.0.0.1:4433/testpypi/simple/ sampleproject
 ```
 
-`sampleproject` is TestPyPI's demonstration package. It installed through your mirror, was verified against the hashes
-its index page advertised, and is now cached: rerun the install with a fresh environment and it comes from disk.
+`sampleproject` is TestPyPI's demonstration package. It installed through your cached index, was verified against the
+hashes its index page advertised, and is now cached: rerun the install with a fresh environment and it comes from disk.
 
 ## See the protocol upgrade
 
-Ask your mirror for the page and note what you get back:
+Ask your cached index for the page and note what you get back:
 
 ```shell
 curl -s -H "Accept: application/vnd.pypi.simple.v1+json" \
@@ -54,7 +54,7 @@ One route that prefers the private-ish index and falls back to the big one:
 ```toml
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 
 [[index]]
 name = "both"
@@ -73,6 +73,6 @@ first match wins per file. With a real private upstream you would add credential
 
 ## Where next
 
-- The provider-by-provider URL and credential reference: [proxy a private mirror](@/guides/private-mirror.md)
+- The provider-by-provider URL and credential reference: [proxy a private upstream](@/guides/private-mirror.md)
 - What layering means for security: [the index model](@/explanation/indexes.md)
 - Coming from one of these providers? [Migration](@/migration/_index.md)

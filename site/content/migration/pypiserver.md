@@ -29,8 +29,8 @@ and the project advertises that it is looking for new maintainers.
 
 ### Missing: what velodex adds
 
-- **A real caching mirror.** pypiserver's fallback is a `302` redirect to pypi.org; the file never enters its directory,
-  so every machine still needs pypi.org access and every miss pays full upstream latency. velodex's mirror layer serves
+- **A real cached index.** pypiserver's fallback is a `302` redirect to pypi.org; the file never enters its directory,
+  so every machine still needs pypi.org access and every miss pays full upstream latency. velodex's cached layer serves
   misses through itself and keeps them: one egress point,
   [cold installs at upstream speed](@/explanation/performance.md), and a content-addressed store that dedupes.
 - **Outage resilience.** An upstream outage takes pypiserver's fallback installs down with it. velodex serves the last
@@ -53,14 +53,14 @@ a miss because it caches nothing.
 Your package directory does not drop in: re-upload it once with twine, and velodex derives hashes and metadata
 server-side. Map the flags across:
 
-| pypiserver                                           | velodex                                              |
-| ---------------------------------------------------- | ---------------------------------------------------- |
-| `pypi-server run -p 8080 ~/packages`                 | `velodex serve`                                      |
-| `http://host:8080/simple/`                           | `http://host:4433/{route}/simple/`                   |
-| `-P htpasswd.txt -a update`                          | `upload_token` on the local index                    |
-| `--fallback-url https://pypi.org/simple/` (redirect) | a mirror layer under the overlay (served and cached) |
-| `--disable-fallback`                                 | a local-only index, no mirror layer                  |
-| `twine upload -r local dist/*`                       | the same command, pointed at the overlay route       |
+| pypiserver                                           | velodex                                                    |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `pypi-server run -p 8080 ~/packages`                 | `velodex serve`                                            |
+| `http://host:8080/simple/`                           | `http://host:4433/{route}/simple/`                         |
+| `-P htpasswd.txt -a update`                          | `upload_token` on the hosted index                         |
+| `--fallback-url https://pypi.org/simple/` (redirect) | a cached layer under the virtual index (served and cached) |
+| `--disable-fallback`                                 | a hosted-only index, no cached layer                       |
+| `twine upload -r local dist/*`                       | the same command, pointed at the virtual route             |
 
 Re-upload the directory in one pass:
 

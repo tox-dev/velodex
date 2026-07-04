@@ -24,12 +24,12 @@ requirements-based sync removes the guessing when clients already install from l
 
 | bandersnatch                                  | velodex                                                                      |
 | --------------------------------------------- | ---------------------------------------------------------------------------- |
-| `bandersnatch mirror` on a timer              | `velodex mirror sync <repo>` for prefetch, or read-through population        |
+| `bandersnatch mirror` on a timer              | `velodex mirror sync <index>` for prefetch, or read-through population       |
 | `/etc/bandersnatch.conf` `[mirror] directory` | `data_dir`                                                                   |
 | `allowlist_project` / requirements filters    | `[index.policy]` allow/block rules plus `[index.prefetch]` selectors         |
 | platform and Python wheel filters             | `[index.policy]` wheel rules for serving; `[index.prefetch]` for mirror sync |
 | nginx serving `web/`                          | built-in server                                                              |
-| `--force-check` full re-sync                  | `velodex mirror verify <repo>` plus targeted purge/resync                    |
+| `--force-check` full re-sync                  | `velodex mirror verify <index>` plus targeted purge/resync                   |
 
 ## Pitfalls
 

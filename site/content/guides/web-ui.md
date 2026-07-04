@@ -20,10 +20,10 @@ per-project table, and per-file download counts.
 
 ## Admin status
 
-`/admin/status` reads `GET /+status?details=admin` and top-level `GET /+stats`. It shows configured repositories,
-routes, overlay member order, upload targets by name, observed project counts, uploaded file counts, recent uploads,
-mirror URLs, redacted authentication state, and cache-health counters. It also links to the JSON status, JSON stats,
-Prometheus metrics, Simple API, browse, and usage pages.
+`/admin/status` reads `GET /+status?details=admin` and top-level `GET /+stats`. It shows configured indexes, routes,
+virtual-index member order, upload targets by name, observed project counts, uploaded file counts, recent uploads,
+cached index URLs, redacted authentication state, and cache-health counters. It also links to the JSON status, JSON
+stats, Prometheus metrics, Simple API, browse, and usage pages.
 
 The admin status document scans metadata keys once to count observed projects and uploaded files, then keeps only a
 capped recent-upload list per index. It does not fetch upstreams, read package detail pages, read artifacts, or expose
@@ -32,12 +32,12 @@ upload tokens, upstream passwords, bearer tokens, URL user info, URL queries, or
 ## Browsing packages
 
 The header search box starts suggesting packages after two characters. Suggestions and the full `/search` page use the
-same `GET /+search` API, so hosted uploads, cached upstream pages, and overlay overrides rank from one indexed view.
-Repository policy filters search results before they reach the UI.
+same `GET /+search` API, so uploaded files, cached upstream pages, and virtual-index overrides rank from one indexed
+view. Index policy filters search results before they reach the UI.
 
-`/search` keeps `q`, `type`, `page`, and `page_size` in the URL. The `type` filter accepts hosted, upstream, and
-upstream-overrides packages; the UI labels the last one as `Upstream+`. Page size choices are 25, 50, and 100, and the
-browser stores the last selected size for the next search.
+`/search` keeps `q`, `type`, `page`, and `page_size` in the URL. The `type` filter accepts uploaded, cached, and
+override packages; the UI labels the last one as `Override`. Page size choices are 25, 50, and 100, and the browser
+stores the last selected size for the next search.
 
 An index card links to its project list, filterable as you type. A project page shows what pypi.org would: the rendered
 long description, summary, install command with a copy button, versions, dependencies, keywords, license, author,
@@ -60,7 +60,8 @@ context the server can provide.
 
 "Manage uploads" on a project page takes the index's upload token and offers yank, un-yank, and delete per version, plus
 whole-project delete. The buttons drive the same HTTP endpoints as [curl would](@/guides/remove.md), so the rules match:
-deleting uploads needs a `volatile` index, and files served from a mirror are hidden reversibly rather than deleted.
+deleting uploads needs a `volatile` index, and files served from a cached index are hidden reversibly rather than
+deleted.
 
 ## Requirements
 

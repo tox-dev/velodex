@@ -73,6 +73,6 @@ your clients need a bounded wheel set.
 ## What to check
 
 - `curl http://<host>:4433/+status` shows the index list and counters.
-- `curl http://<host>:4433/+status | jq '.indexes[].upstream?.offline'` shows which mirrors run offline.
+- `curl http://<host>:4433/+status | jq '.indexes[].upstream?.offline'` shows which cached indexes run offline.
 - `curl 'http://<host>:4433/+stats?index=root/pypi'` shows what the cache is serving.
-- A `503` from a mirror route means a client asked for something the offline cache does not contain.
+- A `503` from a cached index route means a client asked for something the offline cache does not contain.

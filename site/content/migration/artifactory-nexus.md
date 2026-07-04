@@ -25,24 +25,24 @@ request open since 2022; every resolve against it downloads wheels to read their
 default, backfills them for upstreams that lack them, and idles in tens of megabytes of RAM.
 
 If the rest of the organization stays on Artifactory or Nexus, velodex can also sit in front: configure the existing
-repository as a [mirror with credentials](@/guides/private-mirror.md), and clients get the JSON and metadata fast paths
-the upstream does not offer.
+repository as a [cached index with credentials](@/guides/private-mirror.md), and clients get the JSON and metadata fast
+paths the upstream does not offer.
 
 ## The renames
 
-| Artifactory / Nexus                          | velodex                        |
-| -------------------------------------------- | ------------------------------ |
-| remote repository                            | mirror index                   |
-| local / hosted repository                    | local index                    |
-| virtual / group repository                   | overlay index                  |
-| `…/api/pypi/{repo}/simple` (Artifactory)     | `/{route}/simple/`             |
-| `…/repository/{repo}/simple` (Nexus)         | `/{route}/simple/`             |
-| deploy via UI or REST                        | `twine upload` / `uv publish`  |
-| access tokens, user tokens (Nexus: Pro only) | `upload_token` per local index |
+| Artifactory / Nexus                          | velodex                         |
+| -------------------------------------------- | ------------------------------- |
+| remote repository                            | cached index                    |
+| local / hosted repository                    | hosted index                    |
+| virtual / group repository                   | virtual index                   |
+| `…/api/pypi/{repo}/simple` (Artifactory)     | `/{route}/simple/`              |
+| `…/repository/{repo}/simple` (Nexus)         | `/{route}/simple/`              |
+| deploy via UI or REST                        | `twine upload` / `uv publish`   |
+| access tokens, user tokens (Nexus: Pro only) | `upload_token` per hosted index |
 
 ## Pitfalls
 
 - One ecosystem only: npm, Maven, Docker, and friends do not move.
 - No LDAP/SSO, per-user permissions, HA clustering, or lifecycle/cleanup policies.
-- Their virtual repositories can include many members with priority rules; overlays compose the same way, but
-  member-specific routing rules (per-pattern includes) become separate overlay routes.
+- Their virtual repositories can include many members with priority rules; virtual indexes compose the same way, but
+  member-specific routing rules (per-pattern includes) become separate virtual routes.

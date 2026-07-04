@@ -15,9 +15,11 @@ A request travels through three layers:
 
 1. **Routing.** The HTTP layer validates configured index routes at startup, then resolves each request path by longest
    prefix. Routes are configuration data rather than compiled-in paths, and each request avoids decoding or normalizing
-   route text.
-1. **Resolution.** The cache layer answers from local state when it can and talks to upstreams when it must. An overlay
-   walks its layers in order and merges their answers.
+   route text. A route also carries its index's **ecosystem** (pypi today; OCI and npm planned), which selects the
+   format driver — the wire protocol and artifact rules for that packaging format — at the routing boundary. Dispatch is
+   a static match, not a runtime lookup, so an ecosystem a request does not use costs it nothing.
+1. **Resolution.** The cache layer answers from local state when it can and talks to upstreams when it must. A virtual
+   index walks its layers in order and merges their answers.
 1. **Storage.** Two stores under one data directory hold all state.
 
 {% mermaid() %}
@@ -29,7 +31,7 @@ cache --> hot["hot page cache (RAM)"]
 cache --> meta["metadata store (redb)"]
 cache --> blobs["artifact store (disk)"]
 end
-cache -.->|"only on miss"| upstream["pypi.org, or any mirror"]
+cache -.->|"only on miss"| upstream["pypi.org, or any upstream"]
 classDef accent fill:#0072B2,stroke:#0072B2,color:#ffffff
 class cache accent
 {% end %}
@@ -41,7 +43,7 @@ A simple-index page (say `/root/pypi/simple/pandas/`) can be answered three ways
 1. **Hot:** the transformed page sits in an in-memory cache, keyed by a mutation epoch so any upload or override
    invalidates it instantly. Serving is a lookup and a memcpy.
 1. **Warm:** the raw upstream page sits in the metadata store and is still within its freshness window. velodex
-   transforms it for the requesting route in one in-memory pass (file URLs rewritten, local uploads injected, yanked and
+   transforms it for the requesting route in one in-memory pass (file URLs rewritten, hosted uploads injected, yanked and
    hidden files applied) and remembers the result in the hot cache.
 1. **Cold:** nothing usable is stored. velodex opens the upstream request and streams.
 
@@ -59,8 +61,8 @@ class cold,serve2 accent
 {% end %}
 
 The stored form is always the **raw upstream document** (HTML upstreams are canonicalized to PEP 691 JSON once, at fetch
-time). Transformation happens per request. That ordering matters for overlays: one cached pypi.org page can serve any
-number of routes that layer it, each with different local files shadowing it, without storing a variant per route.
+time). Transformation happens per request. That ordering matters for virtual indexes: one cached pypi.org page can serve
+any number of routes that layer it, each with different hosted files shadowing it, without storing a variant per route.
 
 ## How bytes reach the client before they reach the disk
 
@@ -84,7 +86,7 @@ V-->>-C: the same bytes, teed to a temp file
 Note over V: after the client has everything:<br/>verify sha256, rename into the store
 {% end %}
 
-For pages, a chunk-at-a-time transformer rewrites each `files[]` element mid-flight (URL rewriting, local-file
+For pages, a chunk-at-a-time transformer rewrites each `files[]` element mid-flight (URL rewriting, hosted-file
 injection, yank and hide overrides), so the client starts parsing while the upstream transfer is still running. For
 artifacts, the tee hashes into a temp file that is verified and atomically renamed into the store after the client
 already has its bytes. A digest mismatch still forwards (pip and uv verify hashes themselves) but is never cached, and
@@ -154,7 +156,7 @@ references before deletion, so a purge for one project does not break another pr
 
 Artifacts live in a content-addressed store keyed by sha256, fanned out two hex levels deep (`sha256/ab/cd/<digest>`).
 Writes go to a temp file, fsync, then an atomic rename, so a crash cannot leave a partial blob visible; the path is the
-digest, so anything present is by construction correct. One wheel uploaded to two indexes, or cached from two mirrors,
+digest, so anything present is by construction correct. One wheel uploaded to two indexes, or cached from two upstreams,
 occupies disk once.
 
 Cache validation streams each blob through sha256 and compares the result to the digest in the path. Orphaned-blob purge
@@ -179,7 +181,7 @@ caches it like any blob. When the upstream page lacks that sibling, velodex read
 HTTP byte ranges, fetches only the `METADATA` member, and records the generated sibling for later page responses. If an
 index does not satisfy range requests, velodex remembers that for the process and streams the artifact into the blob
 store before extracting metadata from the cached file. Sdist backfill uses the same cached-file path and buffers only
-capped `PKG-INFO` content. For local uploads, velodex writes the sibling from verified wheel `METADATA` or sdist
+capped `PKG-INFO` content. For hosted uploads, velodex writes the sibling from verified wheel `METADATA` or sdist
 `PKG-INFO`. The `velodex_metadata_requests_total` metric counts these; the end-to-end tests assert on it to prove real
 clients take this path. Few third-party indexes serve PEP 658 yet, so fronting one with velodex can make resolution
 faster than the upstream itself once metadata is cached.
@@ -234,6 +236,6 @@ way.
 ## In practice
 
 - See what it does under load: [performance and methodology](@/explanation/performance.md)
-- Compose mirrors, locals, and overlays: [the index model](@/explanation/indexes.md)
+- Compose cached, hosted, and virtual indexes: [the index model](@/explanation/indexes.md)
 - Run it: [getting started](@/tutorials/getting-started.md), [configuration](@/reference/configuration.md)
 - Watch it: [monitoring](@/guides/monitor.md)

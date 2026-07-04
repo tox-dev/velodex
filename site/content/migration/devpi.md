@@ -19,13 +19,13 @@ core in one static Rust binary.
 
 ### Overlap
 
-Both are read-through pypi.org mirrors that cache what they fetch, host private uploads, and let local names shadow the
-mirror. For a caching mirror the two overlap almost completely:
+Both are read-through pypi.org mirrors that cache what they fetch, host private uploads, and let hosted names shadow the
+cached index. For a caching mirror the two overlap almost completely:
 
 - **Read-through mirroring** of pypi.org (or any simple index), cached on first use.
-- **Private uploads** over the twine API, served from the same host as the mirror.
-- **Composition**: devpi's index inheritance (`bases`) maps onto velodex's [overlays](@/explanation/indexes.md), and
-  local files shadow upstream ones in both.
+- **Private uploads** over the twine API, served from the same host as the cached index.
+- **Composition**: devpi's index inheritance (`bases`) maps onto velodex's [virtual indexes](@/explanation/indexes.md),
+  and hosted files shadow upstream ones in both.
 - **Yank and delete** of hosted files.
 - **A web UI** for browsing packages (devpi-web; built into velodex at `/`).
 - **Streaming artifact downloads**: devpi's `FileStreamer` and velodex both tee a wheel to disk while the client reads
@@ -36,7 +36,7 @@ mirror. For a caching mirror the two overlap almost completely:
 Migrating to velodex means giving these up:
 
 - **Users and per-index ACLs.** devpi indexes belong to users, each with its own `acl_upload`. velodex has one upload
-  token per local index and open reads.
+  token per hosted index and open reads.
 - **Replication.** devpi's primary/replica protocol streams a changelog to read-only replicas. velodex has no
   equivalent; you run one instance per site and let each warm itself.
 - **Promotion (`push`).** devpi can promote a release from one index to another server-side. In velodex that is a
@@ -78,24 +78,24 @@ The request workload drives a swarm of resolvers reading full project pages:
 ## How to migrate
 
 devpi's mirror state does not migrate and does not need to: velodex's cache refills on first use. Only your uploaded
-packages need a `twine upload` pass into the new local index. Map the commands and knobs across:
+packages need a `twine upload` pass into the new hosted index. Map the commands and knobs across:
 
 | devpi                                        | velodex                                                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `devpi-init` then `devpi-server --port 3141` | `velodex serve` (no init step)                                                                              |
 | `http://host:3141/{user}/{index}/+simple/`   | `http://host:4433/{route}/simple/`                                                                          |
-| `devpi index -c dev bases=root/pypi`         | an overlay index with `layers = ["dev-local", "pypi"]` in [TOML](@/reference/configuration.md)              |
+| `devpi index -c dev bases=root/pypi`         | a virtual index with `layers = ["dev-hosted", "pypi"]` in [TOML](@/reference/configuration.md)              |
 | `devpi login` + `devpi upload`               | `twine upload --repository-url http://host:4433/{route}/ dist/*` (any username, `upload_token` as password) |
 | `devpi remove pkg==1.0`                      | `DELETE /{route}/{project}/{version}/` ([removal guide](@/guides/remove.md))                                |
-| `volatile=False`                             | `volatile = false` on the local index                                                                       |
-| `mirror_whitelist`                           | not needed: local names shadow the mirror by default ([why](@/explanation/indexes.md))                      |
-| `acl_upload`                                 | one `upload_token` per local index                                                                          |
+| `volatile=False`                             | `volatile = false` on the hosted index                                                                      |
+| `mirror_whitelist`                           | not needed: hosted names shadow the cached index by default ([why](@/explanation/indexes.md))               |
+| `acl_upload`                                 | one `upload_token` per hosted index                                                                         |
 | devpi-web plugin                             | built in at `/`                                                                                             |
 
 ## Gotchas
 
 - **One upload token replaces per-person write control.** If you relied on distinct `acl_upload` per user, issue a
-  distinct local index (and token) per team instead.
+  distinct hosted index (and token) per team instead.
 - **No `push` between indexes.** Promoting a release is a re-upload into the target index.
 - **Plugin hooks have no counterpart.** Anything you drove through devpi-ldap or devpi-lockdown moves to a layer in
   front of velodex or into your own automation against its HTTP API.

@@ -7,7 +7,7 @@ template = "index.html"
   streams upstream bytes to the client while writing them aside, so the first install pays no penalty; every later one
   comes from disk. Each artifact verifies against its sha256 and is stored once, content-addressed, however many
   projects pull it.
-- **Private packages that shadow upstream** twine and `uv publish` upload over the standard API into overlay indexes,
+- **Private packages that shadow upstream** twine and `uv publish` upload over the standard API into virtual indexes,
   where your `utils` beats the `utils` someone registered on pypi.org. One `index-url`, no `--extra-index-url`, no
   [dependency confusion](@/explanation/indexes.md).
 - **Modern resolver protocols** PEP 691 JSON with PEP 503 HTML fallback, PEP 700 fields, and the PEP 658/714 `.metadata`

@@ -20,8 +20,8 @@ its file cache defaults to a temporary directory, and it has no uploads and no p
 - **JSON and HTML** simple responses.
 - **PEP 658 metadata**: proxpi passes through `.metadata` siblings (with the PEP 714 `data-core-metadata` key) when the
   upstream offers them; velodex serves and synthesizes them.
-- **Multiple upstreams**: proxpi's `PROXPI_EXTRA_INDEX_URLS` maps onto velodex mirror indexes composed by an
-  [overlay](@/guides/compose-overlays.md).
+- **Multiple upstreams**: proxpi's `PROXPI_EXTRA_INDEX_URLS` maps onto velodex cached indexes composed by a
+  [virtual index](@/guides/compose-overlays.md).
 
 ### Extra: what proxpi does that velodex does not
 
@@ -62,8 +62,8 @@ refills on first use. Map the environment knobs across:
 | proxpi                                 | velodex                                                                                                            |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `http://host:5000/index/`              | `http://host:4433/{route}/simple/`                                                                                 |
-| `PROXPI_INDEX_URL`                     | `mirror = "https://pypi.org/simple/"` on a mirror index                                                            |
-| `PROXPI_EXTRA_INDEX_URLS`              | extra mirror indexes, composed by an [overlay](@/guides/compose-overlays.md)                                       |
+| `PROXPI_INDEX_URL`                     | `cached = "https://pypi.org/simple/"` on a cached index                                                            |
+| `PROXPI_EXTRA_INDEX_URLS`              | extra cached indexes, composed by a [virtual index](@/guides/compose-overlays.md)                                  |
 | `PROXPI_INDEX_TTL`                     | upstream `Cache-Control`, with `cache_ttl_secs` as fallback ([how freshness works](@/explanation/architecture.md)) |
 | `PROXPI_CACHE_DIR` (default: temp dir) | `data_dir` (persistent)                                                                                            |
 | `PROXPI_CACHE_SIZE` eviction           | no size cap yet; the store grows with your working set                                                             |

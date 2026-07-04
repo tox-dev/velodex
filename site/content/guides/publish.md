@@ -6,26 +6,26 @@ weight = 5
 
 velodex accepts the [legacy upload API](https://docs.pypi.org/api/upload/), the wire protocol both
 [twine](https://twine.readthedocs.io/) and [`uv publish`](https://docs.astral.sh/uv/guides/package/) speak. Uploads need
-a local index with an `upload_token`; the default topology's `local` index has none, so uploads are off until you set
+a hosted index with an `upload_token`; the default topology's `hosted` index has none, so uploads are off until you set
 one:
 
 ```toml
 [[index]]
 name = "pypi"
-mirror = "https://pypi.org/simple/"
+cached = "https://pypi.org/simple/"
 
 [[index]]
-name = "local"
+name = "hosted"
 upload_token = "<secret>"
 
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 ```
 
-Then publish to the overlay's route. velodex accepts any username; the token is the password, matching the pypi.org
-`__token__` convention:
+Then publish to the virtual index's route. velodex accepts any username; the token is the password, matching the
+pypi.org `__token__` convention:
 
 ```shell
 twine upload --repository-url http://127.0.0.1:4433/root/pypi/ -u __token__ -p <secret> dist/*
@@ -53,7 +53,7 @@ The filename, form fields, and `METADATA` or `PKG-INFO` `Name` and `Version` mus
 metadata model can represent them. `Requires-Python`, when present in the form or metadata, must parse as Python version
 specifiers.
 
-Accepted files are stored content-addressed and served from `/root/pypi/simple/<project>/` alongside the mirror's
+Accepted files are stored content-addressed and served from `/root/pypi/simple/<project>/` alongside the cached index's
 packages. Your file shadows an upstream file of the same name. For wheels, velodex extracts `METADATA`; for sdists, it
 extracts the verified `PKG-INFO`. Both are served as PEP 658/714 `.metadata` siblings, so resolvers get the fast path
 for your uploads and the web UI can show the full package page.
@@ -76,7 +76,7 @@ password = <secret>
 `twine upload -r velodex dist/*` then works without flags.
 
 `GET /root/pypi/+api` returns the same `.pypirc` shape when the request reaches Velodex with the public `Host` header.
-The discovery document keeps the password as `<upload-token>`; replace it with the local index token before publishing.
+The discovery document keeps the password as `<upload-token>`; replace it with the hosted index token before publishing.
 For offline setup, print the same snippet from the config file:
 
 ```shell

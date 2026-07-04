@@ -32,8 +32,8 @@ index (`velodex_index_downloads_total{index="root/pypi"}` and friends) alongside
 
 `/admin/status` combines `GET /+status?details=admin` with top-level `GET /+stats`. It shows the configured index
 topology next to the same cache-health counters listed below, plus observed project counts, upload counts, recent
-uploads, mirror URLs, and redacted token/authentication state. The page does not fetch upstreams or read artifacts while
-it renders.
+uploads, cached index URLs, and redacted token/authentication state. The page does not fetch upstreams or read artifacts
+while it renders.
 
 ## What the cache-health counters mean
 

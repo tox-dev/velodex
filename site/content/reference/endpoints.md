@@ -9,7 +9,7 @@ velodex resolves a request to the index with the longest matching route prefix. 
 breaks each endpoint down with copyable example requests and responses.
 
 - `GET /{route}/simple/`: project list, JSON or HTML by `Accept`.
-- `GET /{route}/simple/{project}/`: project detail, merged across overlay layers.
+- `GET /{route}/simple/{project}/`: project detail, merged across virtual-index layers.
 - `GET /{route}/{project}/json`: legacy PyPI project JSON: `info`, `releases`, and latest-release `urls`.
 - `GET /{route}/{project}/{version}/json`: legacy PyPI release JSON for one version.
 - `GET /{route}/files/{sha256}/{filename}`: artifact download, cached content-addressed.
@@ -18,12 +18,12 @@ breaks each endpoint down with copyable example requests and responses.
 - `GET /{route}/+api`: index discovery, absolute URLs, capabilities, and redacted client config.
 - `GET /{route}/inspect/{sha256}/{filename}`: archive member listing as JSON.
 - `GET /{route}/inspect/{sha256}/{filename}/{member}`: one archive member's content.
-- `PUT /{route}/{project}/[{version}/]yank`: yank files ([PEP 592](https://peps.python.org/pep-0592/)); mirror files get
+- `PUT /{route}/{project}/[{version}/]yank`: yank files ([PEP 592](https://peps.python.org/pep-0592/)); cached files get
   an override.
 - `DELETE /{route}/{project}/[{version}/]yank`: un-yank.
-- `DELETE /{route}/{project}/[{version}/]`: delete uploads (volatile only); hide mirror files.
-- `PUT /{route}/{project}/[{version}/]restore`: restore hidden mirror files.
-- `PUT /{route}/{project}/{version}/promote?from=...`: promote uploaded records from another route's local layer.
+- `DELETE /{route}/{project}/[{version}/]`: delete uploads (volatile only); hide cached files.
+- `PUT /{route}/{project}/[{version}/]restore`: restore hidden cached files.
+- `PUT /{route}/{project}/{version}/promote?from=...`: promote uploaded records from another route's hosted layer.
 - `GET /+api`: server discovery, global URLs plus every configured index.
 - `GET /+status`: JSON health, version, counters, index descriptions.
 - `GET /+stats`: usage counters, drillable to project and file level.
@@ -47,7 +47,7 @@ size, and `requires_python` match the Simple API. Simple pages do not carry PyPI
 database, ownership data, download counts, last serial values, or MD5/BLAKE2 hashes when the upstream did not advertise
 them; those fields are null, empty, `0`, or `-1`.
 
-## Repository policy
+## Index policy
 
 Policy rules configured under `[index.policy]` run before Simple API bytes leave the server. Project-list responses omit
 blocked projects. Project-detail responses omit blocked files and remove their versions from PEP 691 `versions`; when a
@@ -83,24 +83,24 @@ snippet uses `__token__` as the username and `<upload-token>` as the password, a
 upload token. Read-only indexes omit upload URLs and `.pypirc`.
 
 Capability flags describe the current route only. `uploads`, `yanking`, and `volatile_deletes` follow the configured
-local upload target; Simple HTML/JSON, PEP 658 metadata siblings, project status, provenance, and legacy JSON are true
+hosted upload target; Simple HTML/JSON, PEP 658 metadata siblings, project status, provenance, and legacy JSON are true
 for all indexes.
 
 ## Authentication
 
-`POST`, `PUT`, and `DELETE` require `Authorization: Basic` where the password is the `upload_token` for the target local
-index; the username is ignored. Promotion authenticates against the target route. Responses:
+`POST`, `PUT`, and `DELETE` require `Authorization: Basic` where the password is the `upload_token` for the target
+hosted index; the username is ignored. Promotion authenticates against the target route. Responses:
 
 - `200`: accepted; removal responses state how many files changed.
 - `400`: malformed upload, bad promotion query, or unsafe path segment.
 - `401`: missing or wrong token.
-- `403`: uploads disabled, target project status rejects writes, repository policy denies the request, or the index is
-  not volatile.
+- `403`: uploads disabled, target project status rejects writes, index policy denies the request, or the index is not
+  volatile.
 - `404`: unknown route, project, or nothing matched.
 - `405`: the route's index does not accept writes.
 - `409`: promotion target already has the filename with different bytes.
-- `429`: a route-class limit or mirror upstream concurrency cap rejected the request; retry after the `Retry-After`
-  seconds.
+- `429`: a route-class limit or cached index upstream concurrency cap rejected the request; retry after the
+  `Retry-After` seconds.
 
 ## Webhooks
 
@@ -143,18 +143,20 @@ sha256 hash, but they do not get PEP 658 metadata.
 
 When `[rate_limit] enabled = true` and a client exceeds a configured route-class window, velodex returns
 `429 Too Many Requests` before the handler reads multipart bodies, cache state, or upstreams. The response includes
-`Retry-After` in seconds. The same status and header apply when a mirror `upstream_concurrency` cap has no free slot.
+`Retry-After` in seconds. The same status and header apply when a cached index's `upstream_concurrency` cap has no free
+slot.
 
-Velodex writes a security log for each denial with `event = "rate_limit"`, the denied class or repository, and the retry
+Velodex writes a security log for each denial with `event = "rate_limit"`, the denied class or index, and the retry
 delay. It never logs credentials. Prometheus includes allowed and denied HTTP request counters by class, plus upstream
-concurrency denials by mirror index. HTTP request counters stay at zero while the request limiter is disabled.
+concurrency denials by cached index. HTTP request counters stay at zero while the request limiter is disabled.
 
 ## Status and usage
 
-`GET /+status` returns version, serial, request counters, configured index descriptions, mirror status, and redacted
-token metadata. It includes sanitized upstream URLs with user info, query strings, and fragments removed. It does not
-include upload-token values, upstream usernames, passwords, bearer tokens, URL query secrets, or URL fragments. Mirror
-entries also include `upstream.offline`, which is `true` when that mirror is serving only cached data.
+`GET /+status` returns version, serial, request counters, configured index descriptions, cached index status, and
+redacted token metadata. It includes sanitized upstream URLs with user info, query strings, and fragments removed. It
+does not include upload-token values, upstream usernames, passwords, bearer tokens, URL query secrets, or URL fragments.
+Cached index entries also include `upstream.offline`, which is `true` when that cached index is serving only cached
+data.
 
 Add `?details=admin` for the read-only admin status page. That shape also includes observed project counts, uploaded
 file counts, and capped recent uploads. The summary scans metadata keys once and does not fetch upstreams or read cached
@@ -180,7 +182,7 @@ were not cached). Counters reset on restart; scrape `/metrics` for durable time 
   the metadata fast path rather than by downloading artifacts.
 - `velodex_rate_limit_allowed_total{class="<class>"}`: HTTP requests the local rate limiter allowed.
 - `velodex_rate_limit_denied_total{class="<class>"}`: HTTP requests the local rate limiter denied.
-- `velodex_upstream_rate_limit_denied_total{index="<name>"}`: mirror concurrency cap denials.
+- `velodex_upstream_rate_limit_denied_total{index="<name>"}`: cached index concurrency cap denials.
 - `velodex_upstream_inflight_fetches{index="<name>"}`: current upstream fetches holding a concurrency slot.
 - `velodex_index_*_total{index="<route>"}`: the `/+stats` counter set per index route (`pages`, `downloads`,
   `download_bytes`, `metadata`, `uploads`, `refreshes`, `pages_changed`, `stale_served`, `upstream_errors`, `rejected`).

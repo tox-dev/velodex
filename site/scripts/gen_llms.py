@@ -17,6 +17,7 @@ from typing import Final, NamedTuple
 SECTIONS: Final = [
     ("tutorials", "Tutorials"),
     ("guides", "How-to guides"),
+    ("ecosystems", "Ecosystems"),
     ("reference", "Reference"),
     ("explanation", "Explanation"),
     ("migration", "Migration"),
