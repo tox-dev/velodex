@@ -43,8 +43,8 @@ A simple-index page (say `/root/pypi/simple/pandas/`) can be answered three ways
 1. **Hot:** the transformed page sits in an in-memory cache, keyed by a mutation epoch so any upload or override
    invalidates it instantly. Serving is a lookup and a memcpy.
 1. **Warm:** the raw upstream page sits in the metadata store and is still within its freshness window. velodex
-   transforms it for the requesting route in one in-memory pass (file URLs rewritten, hosted uploads injected, yanked and
-   hidden files applied) and remembers the result in the hot cache.
+   transforms it for the requesting route in one in-memory pass (file URLs rewritten, hosted uploads injected, yanked
+   and hidden files applied) and remembers the result in the hot cache.
 1. **Cold:** nothing usable is stored. velodex opens the upstream request and streams.
 
 {% mermaid() %}
