@@ -1,8 +1,9 @@
 # <img src="assets/icon.svg" width="28" alt=""> velodex
 
-A PyPI-compatible read-through cache and private index, written in Rust. Point pip, uv, or twine at velodex: it caches
-pypi.org (or any upstream), hosts your own uploads, and serves both from one virtual index through the wire protocols
-the clients already speak.
+A blazing-fast artifact server written in Rust: a caching proxy of an upstream index, a hosted store you publish to, and
+a virtual index that merges the two so local packages transparently override upstream. It speaks PyPI today (point pip,
+uv, or twine at it), and its architecture is built to add more ecosystems without a rewrite. One async process runs
+zero-config on a laptop and scales to a cluster when configured.
 
 ```shell
 cargo build --release

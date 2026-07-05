@@ -4,11 +4,11 @@ build-backend = "maturin"
 
 [project]
 name = "velodex"
-description = "A PyPI-compatible read-through cache and private index"
+description = "A blazing-fast artifact server: caching proxy, hosted store, and virtual index — PyPI today"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-keywords = ["pypi", "index", "mirror", "cache", "packaging"]
+keywords = ["pypi", "index", "mirror", "cache", "packaging", "artifact-server"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Web Environment",
