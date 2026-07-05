@@ -15,6 +15,7 @@ velodex <COMMAND>
 | `serve`          | Run the server                                                                        |
 | `init`           | Create the data directory and its stores, then exit                                   |
 | `config-snippet` | Print `pip.conf`, `uv.toml`, or `.pypirc` for one configured index                    |
+| `index`          | List and inspect the configured indexes                                               |
 | `cache`          | Inspect, validate, and clean the on-disk cache                                        |
 | `backup`         | Create and verify offline backups                                                     |
 | `restore`        | Restore an offline backup into a data directory                                       |
@@ -46,6 +47,18 @@ velodex <COMMAND>
 
 Flags override the config file; see [Configuration](@/reference/configuration.md) for the full precedence and the
 `[[index]]` schema.
+
+## `index`
+
+Read the configured topology without starting the server. `list` prints one tab-separated row per index (name, route,
+ecosystem, kind, uploads); `show` prints one index's details, including a virtual index's layer stack and upload target
+or a cached index's upstream. `--ecosystem` filters `list` to one ecosystem (only `pypi` today; the flag reserves the
+axis for future ecosystems).
+
+```
+velodex index list [--ecosystem pypi] [--config <path>] [--data-dir <path>]
+velodex index show <index> [--config <path>] [--data-dir <path>]
+```
 
 ## `config-snippet`
 

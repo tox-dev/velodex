@@ -8,7 +8,8 @@ use velodex_storage::meta::{CachedIndex, MetaStore};
 use crate::app::{self, init_data_dir};
 use crate::cli::{
     CacheCommand, CacheListArgs, CachePurgeCommand, CachePurgeOrphanedBlobsArgs, CachePurgeProjectArgs,
-    CacheRuntimeArgs, PolicyCommand, PolicyDryRunArgs, RuntimeArgs,
+    CacheRuntimeArgs, EcosystemArg, IndexCommand, IndexListArgs, IndexShowArgs, PolicyCommand, PolicyDryRunArgs,
+    RuntimeArgs,
 };
 use crate::config::{Config, IndexKind};
 
@@ -96,6 +97,113 @@ fn test_init_logs_both_branches_when_subscriber_enabled() {
         app::init(&config).unwrap(); // created
         app::init(&config).unwrap(); // already exists
     });
+}
+
+fn index_list_command(ecosystem: Option<EcosystemArg>) -> IndexCommand {
+    IndexCommand::List(IndexListArgs {
+        runtime: RuntimeArgs::default(),
+        ecosystem,
+    })
+}
+
+#[test]
+fn test_index_list_prints_every_configured_index() {
+    let mut out = Vec::new();
+    app::index(&Config::default(), &index_list_command(None), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.starts_with("name\troute\tecosystem\tkind\tuploads\n"));
+    assert!(text.contains("pypi\tpypi\tpypi\tcached\tfalse"));
+    assert!(text.contains("hosted\thosted\tpypi\thosted\tfalse"));
+    assert!(text.contains("root/pypi\troot/pypi\tpypi\tvirtual\tfalse"));
+}
+
+#[test]
+fn test_index_list_filters_by_ecosystem() {
+    let mut out = Vec::new();
+    app::index(
+        &Config::default(),
+        &index_list_command(Some(EcosystemArg::Pypi)),
+        &mut out,
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(text.lines().filter(|line| line.contains("\tpypi\t")).count(), 3);
+}
+
+#[test]
+fn test_index_show_prints_virtual_detail() {
+    let command = IndexCommand::Show(IndexShowArgs {
+        runtime: RuntimeArgs::default(),
+        index: "root/pypi".to_owned(),
+    });
+    let mut out = Vec::new();
+    app::index(&Config::default(), &command, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("kind\tvirtual"));
+    assert!(text.contains("layers\thosted, pypi"));
+    assert!(text.contains("upload_to\thosted"));
+}
+
+#[test]
+fn test_index_show_prints_cached_upstream() {
+    let command = IndexCommand::Show(IndexShowArgs {
+        runtime: RuntimeArgs::default(),
+        index: "pypi".to_owned(),
+    });
+    let mut out = Vec::new();
+    app::index(&Config::default(), &command, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("kind\tcached"));
+    assert!(text.contains("upstream\thttps://pypi.org/simple/"));
+    assert!(text.contains("offline\tfalse"));
+}
+
+#[test]
+fn test_index_show_rejects_unknown_index() {
+    let command = IndexCommand::Show(IndexShowArgs {
+        runtime: RuntimeArgs::default(),
+        index: "nope".to_owned(),
+    });
+    let err = app::index(&Config::default(), &command, &mut Vec::new()).unwrap_err();
+    assert!(err.to_string().contains("unknown index \"nope\""));
+}
+
+#[test]
+fn test_index_list_propagates_header_write_failure() {
+    let err = app::index(&Config::default(), &index_list_command(None), &mut FailImmediately).unwrap_err();
+    assert!(err.to_string().contains("write failed"));
+}
+
+#[test]
+fn test_index_list_propagates_row_write_failure() {
+    let err = app::index(
+        &Config::default(),
+        &index_list_command(None),
+        &mut FailOnText {
+            needle: "cached",
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("write failed"));
+}
+
+#[test]
+fn test_index_show_propagates_write_failure() {
+    let command = IndexCommand::Show(IndexShowArgs {
+        runtime: RuntimeArgs::default(),
+        index: "root/pypi".to_owned(),
+    });
+    let err = app::index(
+        &Config::default(),
+        &command,
+        &mut FailOnText {
+            needle: "layers",
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("write failed"));
 }
 
 #[test]

@@ -4,8 +4,8 @@ use clap::Parser as _;
 use velodex_ecosystem_pypi::discovery::SnippetKind;
 
 use crate::cli::{
-    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, PolicyCommand, PrefetchCommand, RuntimeArgs,
-    SnippetFormat,
+    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, EcosystemArg, IndexCommand, PolicyCommand,
+    PrefetchCommand, RuntimeArgs, SnippetFormat,
 };
 use crate::config::{LogFormat, LogSink, PrefetchMode};
 
@@ -17,6 +17,7 @@ fn runtime(cli: Cli) -> RuntimeArgs {
     match cli.command {
         Command::Serve(args) | Command::Init(args) => args,
         Command::ConfigSnippet(_) => panic!("no runtime args on config-snippet"),
+        Command::Index(_) => panic!("index commands carry nested runtime args"),
         Command::Cache(_) => panic!("cache commands carry nested runtime args"),
         Command::Backup(_) => panic!("backup commands carry nested runtime args"),
         Command::Restore(_) => panic!("restore takes explicit data-dir args"),
@@ -25,6 +26,28 @@ fn runtime(cli: Cli) -> RuntimeArgs {
         Command::Prefetch(_) => panic!("prefetch commands carry nested runtime args"),
         other @ Command::Openapi => panic!("no runtime args on {other:?}"),
     }
+}
+
+#[test]
+fn test_parse_index_list_and_show() {
+    let Command::Index(list) = parse(&["velodex", "index", "list", "--ecosystem", "pypi", "--data-dir", "/d"]).command
+    else {
+        panic!("expected index command");
+    };
+    let IndexCommand::List(args) = &list else {
+        panic!("expected index list");
+    };
+    assert_eq!(args.ecosystem, Some(EcosystemArg::Pypi));
+    assert_eq!(list.runtime_args().data_dir, Some(PathBuf::from("/d")));
+
+    let Command::Index(show) = parse(&["velodex", "index", "show", "root/pypi"]).command else {
+        panic!("expected index command");
+    };
+    let IndexCommand::Show(args) = &show else {
+        panic!("expected index show");
+    };
+    assert_eq!(args.index, "root/pypi");
+    assert_eq!(show.runtime_args().data_dir, None);
 }
 
 #[test]

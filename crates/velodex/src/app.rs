@@ -10,13 +10,14 @@ use velodex_ecosystem_pypi::discovery::{BaseUrl, SnippetKind, snippet_text};
 use velodex_ecosystem_pypi::policy::PypiPolicy;
 use velodex_ecosystem_pypi::upload::Uploaded;
 use velodex_ecosystem_pypi::{CoreMetadata, ProjectDetail, normalize_name, parse_detail};
+use velodex_http::IndexDescription;
 use velodex_policy::{PolicyAction, PolicyDenial};
 use velodex_storage::blob::{BlobEntry, BlobStore, Digest};
 use velodex_storage::meta::{CachedIndex, MetaStore, ProjectCachePurgeCounts};
 
 use crate::cli::{
-    CacheCommand, CacheListArgs, CachePurgeCommand, CachePurgeOrphanedBlobsArgs, CachePurgeProjectArgs, PolicyCommand,
-    PolicyDryRunArgs,
+    CacheCommand, CacheListArgs, CachePurgeCommand, CachePurgeOrphanedBlobsArgs, CachePurgeProjectArgs, EcosystemArg,
+    IndexCommand, PolicyCommand, PolicyDryRunArgs,
 };
 use crate::config::Config;
 use crate::server;
@@ -61,6 +62,61 @@ pub fn config_snippet(config: &Config, route: &str, base_url: &str, kind: Snippe
         bail!("index route {route:?} does not accept uploads");
     };
     Ok(text)
+}
+
+/// List or show the configured indexes.
+///
+/// # Errors
+/// Returns an error if the configured indexes cannot be built, the index is unknown, or output
+/// fails.
+pub fn index(config: &Config, command: &IndexCommand, out: &mut dyn Write) -> anyhow::Result<()> {
+    let indexes = velodex_http::describe_indexes(&server::build_indexes(&config.indexes, config.offline)?);
+    match command {
+        IndexCommand::List(args) => index_list(&indexes, args.ecosystem, out),
+        IndexCommand::Show(args) => index_show(&indexes, &args.index, out),
+    }
+}
+
+fn index_list(
+    indexes: &[IndexDescription],
+    ecosystem: Option<EcosystemArg>,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    writeln!(out, "name\troute\tecosystem\tkind\tuploads")?;
+    for index in indexes
+        .iter()
+        .filter(|index| ecosystem.is_none_or(|wanted| wanted.as_str() == index.ecosystem))
+    {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}",
+            index.name, index.route, index.ecosystem, index.kind, index.uploads
+        )?;
+    }
+    Ok(())
+}
+
+fn index_show(indexes: &[IndexDescription], selector: &str, out: &mut dyn Write) -> anyhow::Result<()> {
+    let index = indexes
+        .iter()
+        .find(|index| index.name == selector || index.route == selector)
+        .with_context(|| format!("unknown index {selector:?}"))?;
+    writeln!(out, "name\t{}", index.name)?;
+    writeln!(out, "route\t{}", index.route)?;
+    writeln!(out, "ecosystem\t{}", index.ecosystem)?;
+    writeln!(out, "kind\t{}", index.kind)?;
+    writeln!(out, "uploads\t{}", index.uploads)?;
+    if !index.layers.is_empty() {
+        writeln!(out, "layers\t{}", index.layers.join(", "))?;
+    }
+    if let Some(upstream) = &index.upstream {
+        writeln!(out, "upstream\t{}", upstream.url)?;
+        writeln!(out, "offline\t{}", upstream.offline)?;
+    }
+    if let Some(upload_to) = &index.upload_to {
+        writeln!(out, "upload_to\t{upload_to}")?;
+    }
+    Ok(())
 }
 
 /// Run a cache inspection or maintenance command.

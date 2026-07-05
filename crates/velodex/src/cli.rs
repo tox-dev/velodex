@@ -14,7 +14,7 @@ const STYLES: Styles = Styles::styled()
     .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
     .placeholder(AnsiColor::Cyan.on_default());
 
-/// velodex: a PyPI-compatible read-through cache and private index.
+/// velodex: a blazing-fast artifact server: caching proxy, hosted store, and virtual index.
 #[derive(Debug, Parser)]
 #[command(
     name = "velodex",
@@ -43,6 +43,9 @@ pub enum Command {
         after_help = "Examples:\n  velodex config-snippet --base-url https://packages.example --index root/pypi pip.conf\n  velodex config-snippet --base-url https://packages.example --index root/pypi uv.toml\n  velodex config-snippet --base-url https://packages.example --index root/pypi .pypirc"
     )]
     ConfigSnippet(ConfigSnippetArgs),
+    /// List and inspect the configured indexes.
+    #[command(subcommand)]
+    Index(IndexCommand),
     /// Inspect and maintain the on-disk cache.
     #[command(subcommand)]
     Cache(CacheCommand),
@@ -65,6 +68,63 @@ pub enum Command {
     #[cfg(feature = "self-update")]
     #[command(subcommand, name = "self")]
     SelfManage(SelfCommand),
+}
+
+/// The ecosystem a command targets. One variant today; the axis is reserved so `OCI`, npm, and more
+/// slot in without reshaping the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum EcosystemArg {
+    Pypi,
+}
+
+impl EcosystemArg {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pypi => "pypi",
+        }
+    }
+}
+
+/// Inspect the configured indexes.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum IndexCommand {
+    /// List the configured indexes.
+    List(IndexListArgs),
+    /// Show one index in detail.
+    Show(IndexShowArgs),
+}
+
+impl IndexCommand {
+    #[must_use]
+    pub const fn runtime_args(&self) -> &RuntimeArgs {
+        match self {
+            Self::List(args) => &args.runtime,
+            Self::Show(args) => &args.runtime,
+        }
+    }
+}
+
+/// Options for `velodex index list`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct IndexListArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+
+    /// Show only indexes of this ecosystem.
+    #[arg(long, value_enum)]
+    pub ecosystem: Option<EcosystemArg>,
+}
+
+/// Options for `velodex index show`.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct IndexShowArgs {
+    #[command(flatten)]
+    pub runtime: RuntimeArgs,
+
+    /// Configured index name or route.
+    pub index: String,
 }
 
 /// Prefetch synchronization commands.
@@ -417,7 +477,7 @@ impl From<SnippetFormat> for velodex_ecosystem_pypi::discovery::SnippetKind {
 }
 
 /// Configuration flags shared by the commands that read the runtime configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Args)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
 pub struct RuntimeArgs {
     /// Path to a TOML config file.
     #[arg(long, short = 'c')]
