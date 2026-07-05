@@ -3200,8 +3200,7 @@ async fn test_metrics_exposes_per_index_counters() {
 #[tokio::test]
 async fn test_index_response_error_is_bad_gateway() {
     use crate::cache::CacheError;
-    use crate::serving::index_response;
-    use velodex_http::handlers::Format;
+    use crate::serving::{Format, index_response};
     let response = index_response(Err(CacheError::Unavailable), Format::Json, "pypi");
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let body = response.into_body().collect().await.unwrap().to_bytes();

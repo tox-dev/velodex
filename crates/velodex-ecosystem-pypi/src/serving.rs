@@ -21,7 +21,7 @@ use axum::response::{IntoResponse, Response};
 use blake2::Blake2bVar;
 use blake2::digest::{Update as _, VariableOutput as _};
 use velodex_format::Ecosystem;
-use velodex_http::handlers::{Format, negotiate, not_found, search_error_response, search_response};
+use velodex_http::handlers::{not_found, search_error_response, search_response};
 use velodex_http::metrics::{Event, MetricFamily};
 use velodex_http::path_safety::{self, PathSafetyError};
 use velodex_http::rate_limit::RouteClass;
@@ -52,6 +52,27 @@ const MAX_UPLOAD_TEXT_FIELD_BYTES: usize = 64 * 1024;
 /// The `PyPI` ecosystem serving driver.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PypiServing;
+
+/// The negotiated wire format for a Simple-API response.
+#[derive(Clone, Copy)]
+pub enum Format {
+    Json,
+    Html,
+}
+
+/// Pick a response format from the `Accept` header: JSON when it asks for it, HTML otherwise.
+#[must_use]
+pub fn negotiate(headers: &HeaderMap) -> Format {
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if accept.contains("json") {
+        Format::Json
+    } else {
+        Format::Html
+    }
+}
 
 /// The PEP 658 `.metadata` sibling: a resolver reads a distribution's `METADATA` without downloading
 /// the whole wheel. Any role that serves files can serve it, so it is not role-scoped.

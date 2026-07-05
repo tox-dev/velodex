@@ -16,27 +16,6 @@ use axum::response::{IntoResponse, Response};
 use crate::search::{SearchError, SearchParams};
 use crate::state::AppState;
 
-/// The negotiated wire format for a Simple-API response.
-#[derive(Clone, Copy)]
-pub enum Format {
-    Json,
-    Html,
-}
-
-/// Pick a response format from the `Accept` header: JSON when it asks for it, HTML otherwise.
-#[must_use]
-pub fn negotiate(headers: &HeaderMap) -> Format {
-    let accept = headers
-        .get(header::ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    if accept.contains("json") {
-        Format::Json
-    } else {
-        Format::Html
-    }
-}
-
 /// `GET /{route}/...` — resolve the index's ecosystem driver and let it serve the request.
 pub async fn dispatch_get(
     State(state): State<Arc<AppState>>,
