@@ -23,13 +23,13 @@ name = "pypi"
 cached = "https://pypi.org/simple/"
 
 [[index]]
-name = "local"
+name = "hosted"
 upload_token = "playwright-secret"
 
 [[index]]
 name = "root/pypi"
-layers = ["local", "pypi"]
-upload = "local"
+layers = ["hosted", "pypi"]
+upload = "hosted"
 `,
 );
 

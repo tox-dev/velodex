@@ -616,7 +616,7 @@ fn store_search_page_size(value: &str) {
 fn SearchResults(query: String, source_type: String, page_data: UiSearchPage) -> impl IntoView {
     if page_data.total == 0 {
         let message = if query.trim().is_empty() {
-            "No indexed packages yet. Mirror projects appear after their pages are cached."
+            "No indexed packages yet. Cached projects appear after their pages are fetched."
         } else {
             "No packages matched this search."
         };
@@ -637,7 +637,7 @@ fn SearchResults(query: String, source_type: String, page_data: UiSearchPage) ->
                         <th>"Package"</th>
                         <th>"Normalized"</th>
                         <th>"Source"</th>
-                        <th>"Repository"</th>
+                        <th>"Index"</th>
                         <th>"Summary"</th>
                     </tr>
                 </thead>

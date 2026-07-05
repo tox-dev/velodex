@@ -14,14 +14,18 @@ async function goto(page, url) {
 test("dashboard shows identity, counters, and the topology", async ({ page }) => {
   await goto(page, "/");
   await expect(page.locator(".stat-row .stat")).toHaveCount(4);
-  // The overlay folds its member indexes into one card with an ordered layer stack.
+  // The virtual index folds its member indexes into one card with an ordered layer stack.
   await expect(page.locator(".index-grid .card")).toHaveCount(1);
-  const overlay = page.locator(".card", { hasText: "root/pypi" });
-  await expect(overlay.locator(".badge.kind-overlay")).toBeVisible();
-  await expect(overlay.locator(".layer")).toHaveCount(2);
-  await expect(overlay.locator(".layer").first()).toContainText("local");
-  await expect(overlay.locator(".layer").first()).toContainText("uploads land here");
-  await expect(overlay.locator(".layer-hint")).toContainText("first file match wins");
+  const virtualIndex = page.locator(".card", { hasText: "root/pypi" });
+  await expect(virtualIndex.locator(".badge.kind-virtual")).toBeVisible();
+  await expect(virtualIndex.locator(".layer")).toHaveCount(2);
+  // The role trio is visible in the stack: a hosted store (the upload target) resolved over a cache.
+  const hostedLayer = virtualIndex.locator(".layer").first();
+  await expect(hostedLayer).toContainText("hosted");
+  await expect(hostedLayer.locator(".badge.kind-hosted")).toBeVisible();
+  await expect(hostedLayer).toContainText("uploads land here");
+  await expect(virtualIndex.locator(".layer").nth(1).locator(".badge.kind-cached")).toBeVisible();
+  await expect(virtualIndex.locator(".layer-hint")).toContainText("first file match wins");
 });
 
 test("admin status is read-only and tolerates failed stats fetches", async ({ page }) => {
@@ -31,8 +35,14 @@ test("admin status is read-only and tolerates failed stats fetches", async ({ pa
 
   await expect(page).toHaveURL(/\/admin\/status$/);
   await expect(page.locator(".ops-title")).toContainText("read-only");
-  await expect(page.locator(".ops-table").first()).toContainText("root/pypi");
-  await expect(page.locator(".ops-table").first()).toContainText("redacted");
+  const topology = page.locator(".ops-table").first();
+  await expect(topology).toContainText("root/pypi");
+  await expect(topology).toContainText("redacted");
+  // The topology table renders both axes: the pypi ecosystem and every role (cached/hosted/virtual).
+  await expect(topology.locator(".badge.ecosystem-pypi").first()).toBeVisible();
+  await expect(topology.locator(".badge.kind-cached")).toBeVisible();
+  await expect(topology.locator(".badge.kind-hosted")).toBeVisible();
+  await expect(topology.locator(".badge.kind-virtual")).toBeVisible();
   await expect(page.locator(".ops-table", { hasText: "veloxdemo-1.0.0" })).toBeVisible();
   await expect(page.locator(".ops-table").first()).not.toContainText(TOKEN);
   await expect(page.locator(".dim", { hasText: "No usage recorded yet." })).toBeVisible();
@@ -143,6 +153,28 @@ test("wrong token surfaces the auth failure", async ({ page }) => {
   await expect(page.locator(".outcome")).toContainText("401");
 });
 
+test("search surfaces provenance facets and the owning index", async ({ page }) => {
+  await goto(page, "/search?q=veloxdemo");
+  // The results table names the owning index (the renamed vocab, not "repository") and a per-result
+  // provenance source badge.
+  await expect(page.locator("table.search-results th", { hasText: "Index" })).toBeVisible();
+  await expect(page.locator("table.search-results th", { hasText: "Repository" })).toHaveCount(0);
+  const row = page.locator("table.search-results tbody tr", { hasText: "veloxdemo" }).first();
+  await expect(row).toBeVisible();
+  await expect(row.locator("[class*='source-']")).toBeVisible();
+
+  // The uploaded fixture is reachable through the "Uploaded" provenance facet, tagged source-uploaded.
+  await goto(page, "/search?q=veloxdemo&type=uploaded");
+  const uploaded = page.locator("table.search-results tbody tr", { hasText: "veloxdemo" }).first();
+  await expect(uploaded).toBeVisible();
+  await expect(uploaded.locator(".badge.source-uploaded")).toBeVisible();
+
+  // The facet select reflects the active facet and offers the renamed provenance vocabulary.
+  const select = page.locator(".search-controls select[name='type']");
+  await expect(select).toHaveValue("uploaded");
+  await expect(select.locator("option")).toContainText(["All", "Uploaded", "Cached", "Override"]);
+});
+
 test("usage stats drill from index to project to file", async ({ page }) => {
   // Generate traffic the counters can show: a page view and a file download.
   const detail = await page.request.get("/root/pypi/simple/veloxdemo/", {
@@ -152,9 +184,9 @@ test("usage stats drill from index to project to file", async ({ page }) => {
   await page.request.get(files[0].url);
 
   await goto(page, "/");
-  const overlay = page.locator(".card", { hasText: "root/pypi" });
-  await expect(overlay.locator(".card-usage")).toContainText("downloads");
-  await overlay.locator(".card-usage a", { hasText: "usage" }).click();
+  const virtualIndex = page.locator(".card", { hasText: "root/pypi" });
+  await expect(virtualIndex.locator(".card-usage")).toContainText("downloads");
+  await virtualIndex.locator(".card-usage a", { hasText: "usage" }).click();
 
   await expect(page.locator(".breadcrumb")).toContainText("root/pypi");
   await expect.poll(async () => page.locator(".stats-table tbody tr").count()).toBeGreaterThan(0);
