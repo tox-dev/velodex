@@ -655,7 +655,7 @@ fn SearchResults(query: String, source_type: String, page_data: UiSearchPage) ->
                                     <td><a href=href>{result.display_name}</a></td>
                                     <td><code>{result.normalized_name}</code></td>
                                     <td><span class=source_class title=source_title>{source_label(&result.source_type)}</span></td>
-                                    <td><code>{result.repository}</code></td>
+                                    <td><code>{result.index}</code></td>
                                     <td>{result.summary.unwrap_or_default()}</td>
                                 </tr>
                             }

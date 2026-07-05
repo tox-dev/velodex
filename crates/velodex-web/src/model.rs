@@ -243,7 +243,7 @@ pub struct UiSearchResult {
     pub display_name: String,
     pub normalized_name: String,
     pub route: String,
-    pub repository: String,
+    pub index: String,
     pub source_type: String,
     pub summary: Option<String>,
 }
@@ -265,7 +265,7 @@ impl UiSearchPage {
                     display_name: string_at(result, "display_name"),
                     normalized_name: string_at(result, "normalized_name"),
                     route: string_at(result, "route"),
-                    repository: string_at(result, "repository"),
+                    index: string_at(result, "index"),
                     source_type: string_at(result, "type"),
                     summary: result["summary"].as_str().map(str::to_owned),
                 })

@@ -315,7 +315,7 @@ fn package_search(scoped: bool) -> OperationBuilder {
                         "display_name": "Flask",
                         "normalized_name": "flask",
                         "route": "root/pypi",
-                        "repository": "root/pypi",
+                        "index": "root/pypi",
                         "type": "cached",
                         "summary": "A simple framework for building complex web applications.",
                     }],

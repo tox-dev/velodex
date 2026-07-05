@@ -204,7 +204,7 @@ impl PackageSearch {
             display_name: stored_text(doc, self.fields.display),
             normalized_name: stored_text(doc, self.fields.normalized),
             route: stored_text(doc, self.fields.route),
-            repository: stored_text(doc, self.fields.repository),
+            index: stored_text(doc, self.fields.index),
             source_type: PackageSource::from_value(&stored_text(doc, self.fields.source))
                 .unwrap_or(PackageSource::Cached),
             summary: non_empty_string(stored_text(doc, self.fields.summary)),
@@ -223,7 +223,7 @@ impl PackageSearch {
         doc.add_text(self.fields.normalized, &package.normalized_name);
         doc.add_text(self.fields.display, &package.display_name);
         doc.add_text(self.fields.source, package.source.as_str());
-        doc.add_text(self.fields.repository, &package.repository);
+        doc.add_text(self.fields.index, &package.index);
         doc.add_text(self.fields.summary, package.summary.as_deref().unwrap_or_default());
         doc.add_text(self.fields.sort, sort);
         doc.add_text(self.fields.search, &package.text);
@@ -444,7 +444,7 @@ pub struct SearchResult {
     pub display_name: String,
     pub normalized_name: String,
     pub route: String,
-    pub repository: String,
+    pub index: String,
     #[serde(rename = "type")]
     pub source_type: PackageSource,
     pub summary: Option<String>,
@@ -456,7 +456,7 @@ struct SearchFields {
     normalized: Field,
     display: Field,
     source: Field,
-    repository: Field,
+    index: Field,
     summary: Field,
     sort: Field,
     search: Field,
@@ -467,7 +467,7 @@ struct PackageDocument {
     display_name: String,
     normalized_name: String,
     route: String,
-    repository: String,
+    index: String,
     source: PackageSource,
     summary: Option<String>,
     text: String,
@@ -495,7 +495,7 @@ fn search_schema() -> (Schema, SearchFields) {
         normalized: builder.add_text_field("normalized", exact.clone()),
         display: builder.add_text_field("display", stored.clone()),
         source: builder.add_text_field("source", exact),
-        repository: builder.add_text_field("repository", stored.clone()),
+        index: builder.add_text_field("index", stored.clone()),
         summary: builder.add_text_field("summary", stored),
         sort: builder.add_text_field("sort", sort),
         search: builder.add_text_field("search", search),
@@ -565,7 +565,7 @@ fn package_document(state: &AppState, index: &Index, normalized: &str) -> Result
         display_name,
         normalized_name: normalized.to_owned(),
         route: index.route.clone(),
-        repository: index.name.clone(),
+        index: index.name.clone(),
         source,
         summary,
     }))

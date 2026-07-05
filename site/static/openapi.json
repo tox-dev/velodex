@@ -97,8 +97,8 @@
                   "results": [
                     {
                       "display_name": "Flask",
+                      "index": "root/pypi",
                       "normalized_name": "flask",
-                      "repository": "root/pypi",
                       "route": "root/pypi",
                       "summary": "A simple framework for building complex web applications.",
                       "type": "cached"
@@ -513,8 +513,8 @@
                   "results": [
                     {
                       "display_name": "Flask",
+                      "index": "root/pypi",
                       "normalized_name": "flask",
-                      "repository": "root/pypi",
                       "route": "root/pypi",
                       "summary": "A simple framework for building complex web applications.",
                       "type": "cached"
