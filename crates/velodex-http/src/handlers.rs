@@ -1557,7 +1557,7 @@ fn search_error_response(err: &SearchError) -> Response {
         | SearchError::Meta(_)
         | SearchError::Blob(_)
         | SearchError::Json(_)
-        | SearchError::Simple(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        | SearchError::Indexer(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, axum::Json(serde_json::json!({ "error": err.to_string() }))).into_response()
 }

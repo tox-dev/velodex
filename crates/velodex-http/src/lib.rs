@@ -12,6 +12,7 @@ pub mod path_safety;
 pub mod rate_limit;
 pub mod router;
 pub mod search;
+pub mod search_pypi;
 pub mod security;
 pub mod serving;
 pub mod state;
