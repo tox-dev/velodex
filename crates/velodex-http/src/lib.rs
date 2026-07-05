@@ -12,6 +12,7 @@ pub mod rate_limit;
 pub mod router;
 pub mod search;
 pub mod security;
+pub mod serving;
 pub mod state;
 pub mod stream;
 pub mod upload;

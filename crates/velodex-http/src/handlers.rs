@@ -60,12 +60,49 @@ fn negotiate(headers: &HeaderMap) -> Format {
     }
 }
 
-/// `GET /{route}/...` — project list, project detail, or a file/metadata download.
+/// `GET /{route}/...` — resolve the index's ecosystem driver and let it serve the request.
 pub async fn dispatch_get(
     State(state): State<Arc<AppState>>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
+    let serving = state.serving.clone();
+    serving.get(state, uri, headers).await
+}
+
+/// `POST /{route}/` — hand the upload to the index's ecosystem driver.
+pub async fn dispatch_post(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Response {
+    let serving = state.serving.clone();
+    serving.post(state, path, headers, multipart).await
+}
+
+/// `PUT /{route}/...` — hand the mutation to the index's ecosystem driver.
+pub async fn dispatch_put(
+    State(state): State<Arc<AppState>>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let serving = state.serving.clone();
+    serving.put(state, uri, headers).await
+}
+
+/// `DELETE /{route}/...` — hand the mutation to the index's ecosystem driver.
+pub async fn dispatch_delete(
+    State(state): State<Arc<AppState>>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let serving = state.serving.clone();
+    serving.delete(state, uri, headers).await
+}
+
+/// `GET /{route}/...` — project list, project detail, or a file/metadata download.
+pub(crate) async fn pypi_dispatch_get(state: Arc<AppState>, uri: axum::http::Uri, headers: HeaderMap) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
     let path = uri.path().trim_start_matches('/');
     let Some((position, rest)) = state.resolve_position(path) else {
@@ -479,9 +516,9 @@ async fn serve_blob(state: &Arc<AppState>, route: String, filename: &str, digest
 }
 
 /// `POST /{route}/` — the legacy multipart upload API, used unchanged by twine and `uv publish`.
-pub async fn dispatch_post(
-    State(state): State<Arc<AppState>>,
-    Path(path): Path<String>,
+pub(crate) async fn pypi_dispatch_post(
+    state: Arc<AppState>,
+    path: String,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> Response {
@@ -811,11 +848,7 @@ fn promotion_source<'a>(state: &'a AppState, route: &str) -> Result<&'a Index, R
 
 /// `PUT /{route}/{project}/[{version}/]yank` marks files yanked (PEP 592, reversible);
 /// `PUT .../restore` clears the hidden marker a DELETE left on read-only upstream files.
-pub async fn dispatch_put(
-    State(state): State<Arc<AppState>>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-) -> Response {
+pub(crate) async fn pypi_dispatch_put(state: Arc<AppState>, uri: axum::http::Uri, headers: HeaderMap) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
     let path = uri.path().trim_start_matches('/');
     let actor = crate::security::actor(&headers);
@@ -959,11 +992,7 @@ fn restore_request(
 
 /// `DELETE /{route}/{project}/[{version}/]` removes files: uploads are deleted outright (volatile
 /// indexes only), read-only upstream files are hidden reversibly. A `.../yank` suffix un-yanks.
-pub async fn dispatch_delete(
-    State(state): State<Arc<AppState>>,
-    OriginalUri(uri): OriginalUri,
-    headers: HeaderMap,
-) -> Response {
+pub(crate) async fn pypi_dispatch_delete(state: Arc<AppState>, uri: axum::http::Uri, headers: HeaderMap) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
     let path = uri.path().trim_start_matches('/');
     let actor = crate::security::actor(&headers);

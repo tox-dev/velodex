@@ -105,6 +105,9 @@ pub struct AppState {
     pub upstream_limits: UpstreamLimits,
     /// Signed webhook delivery runtime.
     pub webhooks: WebhookRuntime,
+    /// The ecosystem serving driver requests are dispatched to. One per process today (`PyPI`); a
+    /// registry keyed by an index's ecosystem once a second ecosystem lands.
+    pub serving: Arc<dyn crate::serving::EcosystemServing>,
 }
 
 impl AppState {
@@ -337,6 +340,7 @@ impl AppState {
             rate_limits: RateLimiter::new(rate_limit),
             upstream_limits: UpstreamLimits::new(upstream_limits),
             webhooks,
+            serving: Arc::new(crate::serving::PypiServing),
         }
     }
 
