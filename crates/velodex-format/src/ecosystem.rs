@@ -75,3 +75,24 @@ pub trait EcosystemDriver: Send + Sync + 'static {
     /// The ecosystem this driver implements.
     fn ecosystem(&self) -> Ecosystem;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Ecosystem, UnknownEcosystem};
+
+    #[test]
+    fn test_ecosystem_string_forms_and_parsing() {
+        assert_eq!(Ecosystem::default(), Ecosystem::Pypi);
+        assert_eq!(Ecosystem::Pypi.as_str(), "pypi");
+        assert_eq!(Ecosystem::Pypi.to_string(), "pypi");
+        assert_eq!(Ecosystem::ALL, &[Ecosystem::Pypi]);
+        assert_eq!("pypi".parse::<Ecosystem>().unwrap(), Ecosystem::Pypi);
+    }
+
+    #[test]
+    fn test_unknown_ecosystem_reports_the_value() {
+        let err = "npm".parse::<Ecosystem>().unwrap_err();
+        assert_eq!(err, UnknownEcosystem("npm".to_owned()));
+        assert_eq!(err.to_string(), "unknown ecosystem: npm");
+    }
+}

@@ -168,3 +168,24 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 fn text(value: Option<&str>) -> &str {
     value.unwrap_or("")
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderMap;
+    use axum::http::header::{AUTHORIZATION, HeaderValue};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    fn basic(credentials: &str) -> HeaderValue {
+        HeaderValue::from_str(&format!("Basic {}", STANDARD.encode(credentials))).unwrap()
+    }
+
+    #[test]
+    fn test_actor_uses_username_or_unknown_when_empty() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, basic("alice:secret"));
+        assert_eq!(super::actor(&headers).as_deref(), Some("alice"));
+        headers.insert(AUTHORIZATION, basic(":secret"));
+        assert_eq!(super::actor(&headers).as_deref(), Some("unknown"));
+    }
+}

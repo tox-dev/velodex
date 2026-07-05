@@ -258,3 +258,19 @@ fn test_commit_into_an_unwritable_store_is_an_io_error() {
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(err, BlobError::Io(_)));
 }
+
+#[test]
+fn test_blob_backend_trait_round_trips() {
+    use crate::blob::{BlobBackend, BlobStore};
+    fn exercise(store: &impl BlobBackend) {
+        let digest = store.write(b"pkg").unwrap();
+        assert!(store.exists(&digest));
+        assert_eq!(store.read(&digest).unwrap(), b"pkg");
+        assert!(store.verify(&digest).unwrap());
+        store.write_verified(b"pkg", &digest).unwrap();
+        assert!(store.remove(&digest).unwrap());
+        assert!(!store.exists(&digest));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    exercise(&BlobStore::new(dir.path()));
+}

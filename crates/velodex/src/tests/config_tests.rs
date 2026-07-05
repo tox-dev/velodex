@@ -317,3 +317,22 @@ fn test_from_file_missing_errors() {
     let err = config::from_file(dir.path().join("nope.toml")).unwrap_err();
     assert!(err.to_string().contains("nope.toml"));
 }
+
+#[test]
+fn test_index_ecosystem_parses_and_defaults() {
+    let c = toml_config("[[index]]\nname = \"pypi\"\ncached = \"https://pypi.org/simple/\"\necosystem = \"pypi\"\n");
+    assert_eq!(c.indexes[0].ecosystem, velodex_format::Ecosystem::Pypi);
+    let d = toml_config("[[index]]\nname = \"pypi\"\ncached = \"https://pypi.org/simple/\"\n");
+    assert_eq!(d.indexes[0].ecosystem, velodex_format::Ecosystem::Pypi);
+}
+
+#[test]
+fn test_unknown_ecosystem_is_rejected() {
+    let partial = config::from_toml(
+        PathBuf::from("x.toml"),
+        "[[index]]\nname = \"pypi\"\ncached = \"https://pypi.org/simple/\"\necosystem = \"npm\"\n",
+    )
+    .unwrap();
+    let err = Config::default().apply(partial).unwrap_err();
+    assert!(err.to_string().contains("unknown ecosystem"), "{err}");
+}

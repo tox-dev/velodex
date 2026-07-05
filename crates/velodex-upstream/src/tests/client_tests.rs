@@ -844,3 +844,30 @@ async fn test_warm_reaches_the_upstream_host() {
     let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
     client.warm().await;
 }
+
+#[tokio::test]
+async fn test_upstream_protocol_trait_dispatches_to_the_client() {
+    use crate::client::UpstreamProtocol;
+    let server = MockServer::start().await;
+    for p in ["/simple/", "/simple/flask/"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(b"{}".to_vec(), "application/vnd.pypi.simple.v1+json"),
+            )
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/file.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(b"wheel".to_vec(), "application/octet-stream"))
+        .mount(&server)
+        .await;
+    let client = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
+    UpstreamProtocol::fetch_index(&client).await.unwrap();
+    UpstreamProtocol::fetch_project(&client, "flask", None).await.unwrap();
+    let bytes = UpstreamProtocol::fetch_bytes(&client, &format!("{}/file.whl", server.uri()))
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"wheel");
+}
