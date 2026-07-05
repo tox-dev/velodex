@@ -17,28 +17,28 @@ use velodex_storage::blob::Digest;
 use velodex_storage::meta::CachedIndex;
 use velodex_upstream::{SimpleResponse, UpstreamClient};
 
-use crate::cli::{MirrorCommand, MirrorOptions};
-use crate::config::{Config, IndexKind as ConfigIndexKind, MirrorPrefetchConfig, MirrorPrefetchMode};
+use crate::cli::{PrefetchCommand, PrefetchOptions};
+use crate::config::{Config, IndexKind as ConfigIndexKind, PrefetchConfig, PrefetchMode};
 use crate::server;
 
 const HEADER: &str = "kind\tindex\tproject\tfilename\tdigest\turl\tbytes\tstatus\treason\n";
 
 type Output = dyn Write + Send;
 
-/// Run a `velodex mirror` subcommand.
+/// Run a `velodex prefetch` subcommand.
 ///
 /// # Errors
 /// Returns an error when configuration is invalid, upstream access fails, selected cache entries
 /// fail verification, or output cannot be written.
-pub async fn run(config: &Config, command: &MirrorCommand, out: &mut Output) -> anyhow::Result<()> {
+pub async fn run(config: &Config, command: &PrefetchCommand, out: &mut Output) -> anyhow::Result<()> {
     match command {
-        MirrorCommand::Plan(args) => plan(config, &args.options, out).await,
-        MirrorCommand::Sync(args) => sync(config, &args.options, out).await,
-        MirrorCommand::Verify(args) => verify(config, &args.options, out).await,
+        PrefetchCommand::Plan(args) => plan(config, &args.options, out).await,
+        PrefetchCommand::Sync(args) => sync(config, &args.options, out).await,
+        PrefetchCommand::Verify(args) => verify(config, &args.options, out).await,
     }
 }
 
-async fn plan(config: &Config, options: &MirrorOptions, out: &mut Output) -> anyhow::Result<()> {
+async fn plan(config: &Config, options: &PrefetchOptions, out: &mut Output) -> anyhow::Result<()> {
     let state = server::build_state(config)?;
     let target = target(config, &state, &options.index)?;
     let selection = selection(&state, &target, options, SelectionSource::Upstream).await?;
@@ -98,7 +98,7 @@ async fn plan(config: &Config, options: &MirrorOptions, out: &mut Output) -> any
     Ok(())
 }
 
-async fn sync(config: &Config, options: &MirrorOptions, out: &mut Output) -> anyhow::Result<()> {
+async fn sync(config: &Config, options: &PrefetchOptions, out: &mut Output) -> anyhow::Result<()> {
     let started_at = unix_now();
     let state = server::build_state(config)?;
     let target = target(config, &state, &options.index)?;
@@ -136,7 +136,7 @@ async fn sync(config: &Config, options: &MirrorOptions, out: &mut Output) -> any
     Ok(())
 }
 
-async fn verify(config: &Config, options: &MirrorOptions, out: &mut Output) -> anyhow::Result<()> {
+async fn verify(config: &Config, options: &PrefetchOptions, out: &mut Output) -> anyhow::Result<()> {
     let state = server::build_state(config)?;
     let target = target(config, &state, &options.index)?;
     let selection = selection(&state, &target, options, SelectionSource::Cache).await?;
@@ -425,13 +425,13 @@ fn cached_detail(state: &Arc<AppState>, target: &Target, project: &str) -> anyho
 async fn selection(
     state: &Arc<AppState>,
     target: &Target,
-    options: &MirrorOptions,
+    options: &PrefetchOptions,
     source: SelectionSource,
 ) -> anyhow::Result<Selection> {
     let mut filters = target.prefetch.clone();
     if let Some(mode) = options.mode {
         filters.mode = mode;
-        if matches!(mode, MirrorPrefetchMode::MetadataOnly) {
+        if matches!(mode, PrefetchMode::MetadataOnly) {
             filters.metadata_only = true;
         }
     }
@@ -459,8 +459,8 @@ async fn selection(
         insert_selector(&mut rules, &selector).context(format!("parse requirement {selector:?}"))?;
     }
     let projects = match filters.mode {
-        MirrorPrefetchMode::All => all_projects(state, target, source).await?,
-        MirrorPrefetchMode::Selected | MirrorPrefetchMode::MetadataOnly => {
+        PrefetchMode::All => all_projects(state, target, source).await?,
+        PrefetchMode::Selected | PrefetchMode::MetadataOnly => {
             if rules.is_empty() {
                 bail!(
                     "mirror {} has no selected packages; add [index.prefetch].packages or --package",
@@ -722,7 +722,7 @@ fn target_mirror(state: &AppState, index: &Index) -> anyhow::Result<(String, Ups
     }
 }
 
-fn mirror_prefetch<'a>(config: &'a Config, mirror: &str) -> anyhow::Result<&'a MirrorPrefetchConfig> {
+fn mirror_prefetch<'a>(config: &'a Config, mirror: &str) -> anyhow::Result<&'a PrefetchConfig> {
     config
         .indexes
         .iter()
@@ -963,8 +963,8 @@ struct ArtifactFilters {
     metadata_only: bool,
 }
 
-impl From<MirrorPrefetchConfig> for ArtifactFilters {
-    fn from(config: MirrorPrefetchConfig) -> Self {
+impl From<PrefetchConfig> for ArtifactFilters {
+    fn from(config: PrefetchConfig) -> Self {
         Self {
             include_wheels: config.include_wheels,
             include_sdists: config.include_sdists,
@@ -1003,7 +1003,7 @@ struct Target {
     mirror: String,
     client: UpstreamClient,
     offline: bool,
-    prefetch: MirrorPrefetchConfig,
+    prefetch: PrefetchConfig,
 }
 
 enum SyncOutcome {

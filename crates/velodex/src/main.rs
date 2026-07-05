@@ -191,7 +191,7 @@ fn main() -> anyhow::Result<()> {
             let config = resolve_config(command.runtime_args())?;
             app::policy(&config, &command, &mut std::io::stdout())
         }
-        velodex::cli::Command::Mirror(command) => {
+        velodex::cli::Command::Prefetch(command) => {
             let config = resolve_config(command.runtime_args())?;
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
             runtime.block_on(velodex::mirror::run(&config, &command, &mut std::io::stdout()))

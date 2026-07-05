@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::config::{LogFormat, LogSink, MirrorPrefetchMode, PartialConfig, PartialLogConfig, PartialRateLimitConfig};
+use crate::config::{LogFormat, LogSink, PartialConfig, PartialLogConfig, PartialRateLimitConfig, PrefetchMode};
 
 /// uv-style help colors: bold green section headers, cyan literals and placeholders.
 const STYLES: Styles = Styles::styled()
@@ -58,7 +58,7 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Plan, sync, and verify a configured mirror set.
     #[command(subcommand)]
-    Mirror(MirrorCommand),
+    Prefetch(PrefetchCommand),
     /// Print the `OpenAPI` description of the HTTP API as JSON.
     Openapi,
     /// Manage this velodex installation.
@@ -69,16 +69,16 @@ pub enum Command {
 
 /// Mirror synchronization commands.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
-pub enum MirrorCommand {
+pub enum PrefetchCommand {
     /// Print the selected projects and files without writing cache entries.
-    Plan(MirrorPlanArgs),
+    Plan(PrefetchPlanArgs),
     /// Fetch selected project pages, metadata siblings, and artifacts.
-    Sync(MirrorSyncArgs),
+    Sync(PrefetchSyncArgs),
     /// Check cached pages, metadata siblings, and artifacts for a mirror set.
-    Verify(MirrorVerifyArgs),
+    Verify(PrefetchVerifyArgs),
 }
 
-impl MirrorCommand {
+impl PrefetchCommand {
     #[must_use]
     pub const fn runtime_args(&self) -> &RuntimeArgs {
         match self {
@@ -91,7 +91,7 @@ impl MirrorCommand {
 
 /// Options shared by mirror commands.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct MirrorOptions {
+pub struct PrefetchOptions {
     #[command(flatten)]
     pub runtime: RuntimeArgs,
 
@@ -108,7 +108,7 @@ pub struct MirrorOptions {
 
     /// Override the configured prefetch mode.
     #[arg(long, value_enum)]
-    pub mode: Option<MirrorPrefetchMode>,
+    pub mode: Option<PrefetchMode>,
 
     /// Fetch Simple pages and PEP 658 metadata, but skip artifacts.
     #[arg(long)]
@@ -139,25 +139,25 @@ pub struct MirrorOptions {
     pub max_file_size_bytes: Option<u64>,
 }
 
-/// Options for `velodex mirror plan`.
+/// Options for `velodex prefetch plan`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct MirrorPlanArgs {
+pub struct PrefetchPlanArgs {
     #[command(flatten)]
-    pub options: MirrorOptions,
+    pub options: PrefetchOptions,
 }
 
-/// Options for `velodex mirror sync`.
+/// Options for `velodex prefetch sync`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct MirrorSyncArgs {
+pub struct PrefetchSyncArgs {
     #[command(flatten)]
-    pub options: MirrorOptions,
+    pub options: PrefetchOptions,
 }
 
-/// Options for `velodex mirror verify`.
+/// Options for `velodex prefetch verify`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct MirrorVerifyArgs {
+pub struct PrefetchVerifyArgs {
     #[command(flatten)]
-    pub options: MirrorOptions,
+    pub options: PrefetchOptions,
 }
 
 /// Actions on the velodex installation itself.

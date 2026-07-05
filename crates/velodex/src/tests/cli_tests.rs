@@ -4,10 +4,10 @@ use clap::Parser as _;
 use velodex_http::discovery::SnippetKind;
 
 use crate::cli::{
-    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, MirrorCommand, PolicyCommand, RuntimeArgs,
+    BackupCommand, CacheCommand, CachePurgeCommand, Cli, Command, PolicyCommand, PrefetchCommand, RuntimeArgs,
     SnippetFormat,
 };
-use crate::config::{LogFormat, LogSink, MirrorPrefetchMode};
+use crate::config::{LogFormat, LogSink, PrefetchMode};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(args).unwrap()
@@ -22,7 +22,7 @@ fn runtime(cli: Cli) -> RuntimeArgs {
         Command::Restore(_) => panic!("restore takes explicit data-dir args"),
         Command::ImportDir(_) => panic!("import-dir carries nested runtime args"),
         Command::Policy(_) => panic!("policy commands carry nested runtime args"),
-        Command::Mirror(_) => panic!("mirror commands carry nested runtime args"),
+        Command::Prefetch(_) => panic!("mirror commands carry nested runtime args"),
         other @ Command::Openapi => panic!("no runtime args on {other:?}"),
     }
 }
@@ -331,7 +331,7 @@ fn test_policy_commands_expose_runtime_args() {
 fn test_parse_mirror_plan_options() {
     let cli = parse(&[
         "velodex",
-        "mirror",
+        "prefetch",
         "plan",
         "--data-dir",
         "/d",
@@ -355,7 +355,7 @@ fn test_parse_mirror_plan_options() {
         "--max-file-size-bytes",
         "1024",
     ]);
-    let Command::Mirror(MirrorCommand::Plan(args)) = cli.command else {
+    let Command::Prefetch(PrefetchCommand::Plan(args)) = cli.command else {
         panic!("expected mirror plan");
     };
     assert_eq!(args.options.runtime.data_dir, Some(PathBuf::from("/d")));
@@ -363,7 +363,7 @@ fn test_parse_mirror_plan_options() {
     assert_eq!(args.options.index, "root/pypi");
     assert_eq!(args.options.packages, vec!["Requests>=2,<3".to_owned()]);
     assert_eq!(args.options.requirements, vec![PathBuf::from("requirements.txt")]);
-    assert_eq!(args.options.mode, Some(MirrorPrefetchMode::MetadataOnly));
+    assert_eq!(args.options.mode, Some(PrefetchMode::MetadataOnly));
     assert!(args.options.metadata_only);
     assert!(args.options.no_wheels);
     assert!(args.options.no_sdists);
@@ -376,11 +376,11 @@ fn test_parse_mirror_plan_options() {
 #[test]
 fn test_mirror_commands_expose_runtime_args() {
     for cli in [
-        parse(&["velodex", "mirror", "plan", "--data-dir", "/plan", "pypi"]),
-        parse(&["velodex", "mirror", "sync", "--data-dir", "/sync", "pypi"]),
-        parse(&["velodex", "mirror", "verify", "--data-dir", "/verify", "pypi"]),
+        parse(&["velodex", "prefetch", "plan", "--data-dir", "/plan", "pypi"]),
+        parse(&["velodex", "prefetch", "sync", "--data-dir", "/sync", "pypi"]),
+        parse(&["velodex", "prefetch", "verify", "--data-dir", "/verify", "pypi"]),
     ] {
-        let Command::Mirror(command) = cli.command else {
+        let Command::Prefetch(command) = cli.command else {
             panic!("expected mirror command");
         };
         assert!(command.runtime_args().data_dir.is_some());

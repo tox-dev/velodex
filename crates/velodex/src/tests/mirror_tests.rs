@@ -8,8 +8,10 @@ use velodex_storage::meta::{CachedIndex, MetaStore};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::cli::{MirrorCommand, MirrorOptions, MirrorPlanArgs, MirrorSyncArgs, MirrorVerifyArgs, RuntimeArgs};
-use crate::config::{Config, IndexConfig, IndexKind, MirrorPrefetchMode};
+use crate::cli::{
+    PrefetchCommand, PrefetchOptions, PrefetchPlanArgs, PrefetchSyncArgs, PrefetchVerifyArgs, RuntimeArgs,
+};
+use crate::config::{Config, IndexConfig, IndexKind, PrefetchMode};
 
 fn mirror_config(data_dir: &Path, upstream: &str) -> Config {
     Config {
@@ -81,8 +83,8 @@ fn overlay_config(data_dir: &Path, upstream: &str) -> Config {
     }
 }
 
-fn command_options(data_dir: &Path, packages: Vec<String>) -> MirrorOptions {
-    MirrorOptions {
+fn command_options(data_dir: &Path, packages: Vec<String>) -> PrefetchOptions {
+    PrefetchOptions {
         runtime: RuntimeArgs {
             config: None,
             host: None,
@@ -238,7 +240,7 @@ async fn test_mirror_plan_expands_nested_requirements_and_trims_options() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -265,7 +267,7 @@ async fn test_mirror_plan_rejects_unsupported_selectors() {
         let mut out = Vec::new();
         let err = crate::mirror::run(
             &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-            &MirrorCommand::Plan(MirrorPlanArgs {
+            &PrefetchCommand::Plan(PrefetchPlanArgs {
                 options: command_options(dir.path(), vec![raw.to_owned()]),
             }),
             &mut out,
@@ -304,7 +306,7 @@ async fn test_mirror_plan_reports_wheel_tag_filter() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -343,7 +345,7 @@ async fn test_mirror_plan_accepts_matching_wheel_tags() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -375,7 +377,7 @@ async fn test_mirror_plan_reports_selected_files_without_cache_writes() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs {
+        &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["Flask==1.0".to_owned()]),
         }),
         &mut out,
@@ -409,7 +411,7 @@ async fn test_mirror_plan_reports_missing_and_upstream_failures() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs {
+        &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["missing".to_owned(), "broken".to_owned()]),
         }),
         &mut out,
@@ -441,7 +443,7 @@ async fn test_mirror_plan_offline_reads_cached_pages() {
 
     crate::mirror::run(
         &config,
-        &MirrorCommand::Plan(MirrorPlanArgs {
+        &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
         }),
         &mut out,
@@ -456,9 +458,9 @@ async fn test_mirror_plan_offline_reads_cached_pages() {
     );
 
     let mut options = command_options(dir.path(), Vec::new());
-    options.mode = Some(MirrorPrefetchMode::All);
+    options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
-    crate::mirror::run(&config, &MirrorCommand::Plan(MirrorPlanArgs { options }), &mut out)
+    crate::mirror::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
         .await
         .unwrap();
     assert!(String::from_utf8(out).unwrap().contains("page\tpypi\tflask"));
@@ -474,7 +476,7 @@ async fn test_mirror_sync_downloads_then_reuses_cached_blobs() {
     let metadata_digest = Digest::of(&metadata);
     mount_project(&server, wheel, metadata).await;
     let config = mirror_config(dir.path(), &format!("{}/simple/", server.uri()));
-    let command = MirrorCommand::Sync(MirrorSyncArgs {
+    let command = PrefetchCommand::Sync(PrefetchSyncArgs {
         options: command_options(dir.path(), vec!["flask".to_owned()]),
     });
     let mut first = Vec::new();
@@ -523,7 +525,7 @@ async fn test_mirror_sync_downloads_file_without_metadata() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs {
+        &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
         }),
         &mut out,
@@ -567,7 +569,7 @@ async fn test_mirror_sync_overlay_target_and_metadata_only_skips_artifact() {
 
     crate::mirror::run(
         &overlay_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs { options }),
+        &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
     )
     .await
@@ -615,7 +617,7 @@ async fn test_mirror_sync_reports_missing_project_and_metadata_failure() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs {
+        &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned(), "missing".to_owned()]),
         }),
         &mut out,
@@ -656,7 +658,7 @@ async fn test_mirror_sync_reports_page_failure_and_skipped_file() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs { options }),
+        &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
     )
     .await
@@ -701,13 +703,13 @@ async fn test_mirror_sync_mode_and_size_options_override_prefetch() {
         .mount(&server)
         .await;
     let mut options = command_options(dir.path(), vec!["flask".to_owned()]);
-    options.mode = Some(MirrorPrefetchMode::MetadataOnly);
+    options.mode = Some(PrefetchMode::MetadataOnly);
     options.max_file_size_bytes = Some(10);
     let mut out = Vec::new();
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs { options }),
+        &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
     )
     .await
@@ -742,12 +744,12 @@ async fn test_mirror_sync_all_reads_project_list() {
         .await;
     mount_project(&server, b"wheel".to_vec(), b"metadata".to_vec()).await;
     let mut options = command_options(dir.path(), Vec::new());
-    options.mode = Some(MirrorPrefetchMode::All);
+    options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs { options }),
+        &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
     )
     .await
@@ -795,13 +797,13 @@ async fn test_mirror_sync_all_reads_html_project_list_and_filters_files() {
         .mount(&server)
         .await;
     let mut options = command_options(dir.path(), Vec::new());
-    options.mode = Some(MirrorPrefetchMode::All);
+    options.mode = Some(PrefetchMode::All);
     options.no_wheels = true;
     let mut out = Vec::new();
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -839,7 +841,7 @@ async fn test_mirror_plan_reads_html_detail_and_reports_version_filter() {
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs {
+        &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["flask[async]==1.0; python_version>'3.10'".to_owned()]),
         }),
         &mut out,
@@ -864,7 +866,7 @@ async fn test_mirror_requirements_parse_errors_include_context() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -883,12 +885,12 @@ async fn test_mirror_all_mode_errors_on_upstream_project_list_status() {
         .mount(&server)
         .await;
     let mut options = command_options(dir.path(), Vec::new());
-    options.mode = Some(MirrorPrefetchMode::All);
+    options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs { options }),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
     )
     .await
@@ -905,7 +907,7 @@ async fn test_mirror_selected_mode_requires_packages() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Plan(MirrorPlanArgs {
+        &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), Vec::new()),
         }),
         &mut out,
@@ -970,7 +972,7 @@ async fn test_mirror_rejects_non_mirror_targets() {
         let mut options = command_options(dir.path(), vec!["flask".to_owned()]);
         options.index = repo.to_owned();
         let mut out = Vec::new();
-        let err = crate::mirror::run(&config, &MirrorCommand::Plan(MirrorPlanArgs { options }), &mut out)
+        let err = crate::mirror::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
             .await
             .unwrap_err();
         assert!(err.to_string().contains(expected), "{repo}: {err}");
@@ -1005,7 +1007,7 @@ async fn test_mirror_sync_reports_digest_failure() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Sync(MirrorSyncArgs {
+        &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
         }),
         &mut out,
@@ -1060,7 +1062,7 @@ async fn test_mirror_verify_reports_missing_blob() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Verify(MirrorVerifyArgs {
+        &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
         }),
         &mut out,
@@ -1102,7 +1104,7 @@ async fn test_mirror_verify_reports_missing_project_and_metadata_blob() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Verify(MirrorVerifyArgs {
+        &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned(), "ghost".to_owned()]),
         }),
         &mut out,
@@ -1162,7 +1164,7 @@ async fn test_mirror_verify_reports_corrupt_page_invalid_digest_and_mismatch() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Verify(MirrorVerifyArgs {
+        &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["broken".to_owned(), "flask".to_owned()]),
         }),
         &mut out,
@@ -1202,7 +1204,7 @@ async fn test_mirror_verify_reports_blob_read_error() {
 
     let err = crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Verify(MirrorVerifyArgs {
+        &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
         }),
         &mut out,
@@ -1231,12 +1233,12 @@ async fn test_mirror_verify_all_uses_cached_project_list() {
         .write_verified(b"sdist", &Digest::of(b"sdist"))
         .unwrap();
     let mut options = command_options(dir.path(), Vec::new());
-    options.mode = Some(MirrorPrefetchMode::All);
+    options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
     crate::mirror::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
-        &MirrorCommand::Verify(MirrorVerifyArgs { options }),
+        &PrefetchCommand::Verify(PrefetchVerifyArgs { options }),
         &mut out,
     )
     .await

@@ -4,7 +4,7 @@ use velodex_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, Ro
 use velodex_policy::PackageType;
 
 use crate::config::{
-    self, Config, IndexKind, LogConfig, LogFormat, LogSink, MirrorPrefetchMode, PartialConfig, PartialLogConfig,
+    self, Config, IndexKind, LogConfig, LogFormat, LogSink, PartialConfig, PartialLogConfig, PrefetchMode,
     WebhookSecret,
 };
 
@@ -104,7 +104,7 @@ max_file_size_bytes = 1048576
         panic!("expected mirror");
     };
     assert!(*offline);
-    assert_eq!(prefetch.mode, MirrorPrefetchMode::MetadataOnly);
+    assert_eq!(prefetch.mode, PrefetchMode::MetadataOnly);
     assert_eq!(prefetch.packages, vec!["requests>=2,<3".to_owned()]);
     assert_eq!(prefetch.requirements, vec![PathBuf::from("requirements.txt")]);
     assert!(!prefetch.include_wheels);

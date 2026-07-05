@@ -57,8 +57,8 @@ pub enum IndexKind {
         upstream_concurrency: usize,
         /// Serve only cached data for this index.
         offline: bool,
-        /// Optional package set and artifact filters for `velodex mirror`.
-        prefetch: Box<MirrorPrefetchConfig>,
+        /// Optional package set and artifact filters for `velodex prefetch`.
+        prefetch: Box<PrefetchConfig>,
     },
     /// A hosted store that accepts uploads. `upload_token` is the Basic-auth password an upload must
     /// present (`None` disables uploads); `volatile` allows delete and overwrite.
@@ -76,8 +76,8 @@ pub enum IndexKind {
 
 /// Mirror prefetch behavior configured under `[index.prefetch]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MirrorPrefetchConfig {
-    pub mode: MirrorPrefetchMode,
+pub struct PrefetchConfig {
+    pub mode: PrefetchMode,
     pub packages: Vec<String>,
     pub requirements: Vec<PathBuf>,
     pub include_wheels: bool,
@@ -89,10 +89,10 @@ pub struct MirrorPrefetchConfig {
     pub metadata_only: bool,
 }
 
-impl Default for MirrorPrefetchConfig {
+impl Default for PrefetchConfig {
     fn default() -> Self {
         Self {
-            mode: MirrorPrefetchMode::Selected,
+            mode: PrefetchMode::Selected,
             packages: Vec::new(),
             requirements: Vec::new(),
             include_wheels: true,
@@ -106,10 +106,10 @@ impl Default for MirrorPrefetchConfig {
     }
 }
 
-/// Which projects `velodex mirror` selects before artifact filters apply.
+/// Which projects `velodex prefetch` selects before artifact filters apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum MirrorPrefetchMode {
+pub enum PrefetchMode {
     All,
     Selected,
     MetadataOnly,
@@ -117,8 +117,8 @@ pub enum MirrorPrefetchMode {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct RawMirrorPrefetch {
-    pub mode: Option<MirrorPrefetchMode>,
+pub struct RawPrefetchConfig {
+    pub mode: Option<PrefetchMode>,
     pub packages: Option<Vec<String>>,
     pub requirements: Option<Vec<PathBuf>>,
     pub include_wheels: Option<bool>,
@@ -130,11 +130,11 @@ pub struct RawMirrorPrefetch {
     pub metadata_only: Option<bool>,
 }
 
-impl RawMirrorPrefetch {
+impl RawPrefetchConfig {
     #[must_use]
-    pub fn resolve(self) -> MirrorPrefetchConfig {
-        let mode = self.mode.unwrap_or(MirrorPrefetchMode::Selected);
-        MirrorPrefetchConfig {
+    pub fn resolve(self) -> PrefetchConfig {
+        let mode = self.mode.unwrap_or(PrefetchMode::Selected);
+        PrefetchConfig {
             mode,
             packages: self.packages.unwrap_or_default(),
             requirements: self.requirements.unwrap_or_default(),
@@ -144,9 +144,7 @@ impl RawMirrorPrefetch {
             abi_tags: self.abi_tags.unwrap_or_default(),
             platform_tags: self.platform_tags.unwrap_or_default(),
             max_file_size_bytes: self.max_file_size_bytes,
-            metadata_only: self
-                .metadata_only
-                .unwrap_or(matches!(mode, MirrorPrefetchMode::MetadataOnly)),
+            metadata_only: self.metadata_only.unwrap_or(matches!(mode, PrefetchMode::MetadataOnly)),
         }
     }
 }
@@ -431,7 +429,7 @@ pub struct RawIndex {
     pub token: Option<String>,
     pub upstream_concurrency: Option<usize>,
     pub offline: Option<bool>,
-    pub prefetch: Option<RawMirrorPrefetch>,
+    pub prefetch: Option<RawPrefetchConfig>,
     pub hosted: Option<bool>,
     pub upload_token: Option<String>,
     pub volatile: Option<bool>,
