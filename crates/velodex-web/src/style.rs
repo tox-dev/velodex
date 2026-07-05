@@ -79,9 +79,17 @@ main { max-width: 70rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .ops-title a code { color: inherit; }
 .table-scroll { overflow-x: auto; }
 .ops-table { margin-top: 0.8rem; }
-.table-scroll .ops-table { min-width: 72rem; }
+/* The admin status page is data-dense (wide topology and usage tables), so it breaks out of the
+   70rem reading column to a wider, viewport-centered width — the tables fit without scrolling on a
+   desktop, and still scroll gracefully within `.table-scroll` on narrow screens. */
+.ops-page { width: min(94rem, calc(100vw - 3rem)); margin-left: 50%; transform: translateX(-50%); }
+.table-scroll .ops-table { min-width: 48rem; }
+.ops-table th, .ops-table td { padding: 0.4rem 0.55rem; font-size: 0.85rem; }
 .ops-table th { white-space: nowrap; }
 .ops-table td { vertical-align: top; }
+.ops-table .badge { font-size: 0.78rem; padding: 0.05rem 0.4rem; }
+.ops-type { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
+.ops-simple { white-space: nowrap; }
 .ops-stack { list-style: none; margin: 0; padding: 0; }
 .ops-stack li { display: flex; align-items: center; gap: 0.4rem; min-height: 1.6rem; }
 .ops-stack li + li { margin-top: 0.2rem; }

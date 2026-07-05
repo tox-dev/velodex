@@ -50,6 +50,30 @@ test("admin status is read-only and tolerates failed stats fetches", async ({ pa
   await expect(page.locator(".admin-table")).toHaveCount(0);
 });
 
+test("every page sets the differentiated app favicon", async ({ page }) => {
+  await goto(page, "/admin/status");
+  await expect(page.locator("head link[rel='icon']")).toHaveAttribute("href", "/favicon.svg");
+  const response = await page.request.get("/favicon.svg");
+  expect(response.headers()["content-type"]).toContain("image/svg+xml");
+  const svg = await response.text();
+  // The velodex mark (no wordmark) with a green node: distinct from the docs site's blue node.
+  expect(svg).toContain("512 512");
+  expect(svg).toContain("#22C55E");
+  expect(svg).not.toContain("#4F9BE0");
+});
+
+test("admin topology table fits the page and uses current vocabulary", async ({ page }) => {
+  await goto(page, "/admin/status");
+  // Renamed heading and the merged role x ecosystem "Type" column.
+  await expect(page.locator(".ops-page h2", { hasText: "Indexes" })).toBeVisible();
+  await expect(page.locator(".ops-page h2", { hasText: "Repositories" })).toHaveCount(0);
+  await expect(page.locator(".ops-table th", { hasText: "Type" }).first()).toBeVisible();
+  await expect(page.locator(".ops-table .ops-type").first().locator(".badge")).toHaveCount(2);
+  // The wide data tables scroll inside their own container — the page body never scrolls sideways.
+  const bodyScrollsSideways = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  expect(bodyScrollsSideways).toBe(false);
+});
+
 test("theme toggle switches and survives a reload", async ({ page }) => {
   await goto(page, "/");
   await page.locator(".theme-toggle").click();
