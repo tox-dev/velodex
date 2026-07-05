@@ -83,7 +83,7 @@ pub struct AppState {
     pub inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// One live download per blob digest: concurrent cold requests for the same file all tail the
     /// one upstream transfer as it lands instead of waiting for it to finish.
-    pub downloads: Mutex<HashMap<String, crate::cache::DownloadHandle>>,
+    pub downloads: Mutex<HashMap<String, crate::download::DownloadHandle>>,
     /// Transformed page bytes ready to serve, paired with their unix expiry: warm requests are a
     /// lookup, an expiry check, and a memcpy. Entries carry the mutation epoch in their key, so
     /// uploads and overrides invalidate by key miss; the expiry honors each page's upstream

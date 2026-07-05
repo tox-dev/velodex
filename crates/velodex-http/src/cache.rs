@@ -16,6 +16,7 @@ use velodex_storage::blob::Digest;
 use velodex_storage::meta::CachedIndex;
 use velodex_upstream::{RangeError, SimpleResponse, UpstreamClient};
 
+use crate::download::{DownloadHandle, DownloadProgress};
 use crate::metrics::Event;
 use crate::path_safety::local_file_url;
 use crate::rate_limit::UpstreamPermit;
@@ -2116,33 +2117,6 @@ pub enum FileOutcome {
     Live(futures_util::stream::BoxStream<'static, Result<Bytes, std::io::Error>>),
 }
 
-/// Where one in-flight blob download stands; every client tailing it watches this value.
-#[derive(Clone, Debug, Default)]
-pub struct DownloadProgress {
-    /// Bytes readable from the temp file so far.
-    pub flushed: u64,
-    /// Set once: `Ok` after the blob committed, `Err` when the transfer or verification failed.
-    pub done: Option<Result<(), String>>,
-}
-
-/// A live download other requests for the same digest can attach to.
-#[derive(Clone, Debug)]
-pub struct DownloadHandle {
-    /// The temp file the transfer lands in until commit renames it.
-    path: std::path::PathBuf,
-    progress: tokio::sync::watch::Receiver<DownloadProgress>,
-}
-
-#[cfg(test)]
-impl DownloadHandle {
-    pub(crate) const fn new(
-        path: std::path::PathBuf,
-        progress: tokio::sync::watch::Receiver<DownloadProgress>,
-    ) -> Self {
-        Self { path, progress }
-    }
-}
-
 /// Serve a file with maximum overlap: a cached blob streams from disk, a miss tails one shared
 /// upstream transfer as its bytes land.
 ///
@@ -2211,10 +2185,7 @@ async fn start_download(
     let body = client.stream_bytes(&source.url).await?;
     let pending = state.blobs.begin()?;
     let (sender, receiver) = tokio::sync::watch::channel(DownloadProgress::default());
-    let handle = DownloadHandle {
-        path: pending.path().to_owned(),
-        progress: receiver,
-    };
+    let handle = DownloadHandle::new(pending.path().to_owned(), receiver);
     let pump_state = state.clone();
     let pump_digest = digest.clone();
     tokio::spawn(async move {
@@ -2244,12 +2215,12 @@ fn existing_download(state: &AppState, digest: &Digest) -> Option<DownloadHandle
 
 async fn wait_for_download(handle: &mut DownloadHandle) -> Result<(), CacheError> {
     loop {
-        let done = handle.progress.borrow_and_update().done.clone();
+        let done = handle.progress().borrow_and_update().done.clone();
         match done {
             Some(Ok(())) => return Ok(()),
             Some(Err(message)) => return Err(CacheError::Stream(message)),
             None => {
-                if handle.progress.changed().await.is_err() {
+                if handle.progress().changed().await.is_err() {
                     return Err(CacheError::Stream("blob transfer abandoned".to_owned()));
                 }
             }
@@ -2378,7 +2349,7 @@ pub(crate) fn tail_download(
             return None;
         }
         loop {
-            let progress = tail.handle.progress.borrow_and_update().clone();
+            let progress = tail.handle.progress().borrow_and_update().clone();
             if tail.sent < progress.flushed {
                 if tail.file.is_none() {
                     match tail_file(&tail.state, &mut tail.handle, &tail.digest).await {
@@ -2418,7 +2389,7 @@ pub(crate) fn tail_download(
                     return Some((Err(std::io::Error::other(message)), tail));
                 }
                 None => {
-                    if tail.handle.progress.changed().await.is_err() {
+                    if tail.handle.progress().changed().await.is_err() {
                         tail.alive = false;
                         return Some((Err(std::io::Error::other("blob transfer abandoned")), tail));
                     }
@@ -2441,16 +2412,16 @@ async fn tail_file(
     digest: &Digest,
 ) -> Result<tokio::fs::File, std::io::Error> {
     loop {
-        let missing = match tokio::fs::File::open(&handle.path).await {
+        let missing = match tokio::fs::File::open(handle.path()).await {
             Ok(file) => return Ok(file),
             Err(err) => err,
         };
-        let verdict = handle.progress.borrow_and_update().done.clone();
+        let verdict = handle.progress().borrow_and_update().done.clone();
         match verdict {
             Some(Ok(())) => return tokio::fs::File::open(state.blobs.path_for(digest)).await,
             Some(Err(message)) => return Err(std::io::Error::other(message)),
             None => {
-                if handle.progress.changed().await.is_err() {
+                if handle.progress().changed().await.is_err() {
                     return Err(missing);
                 }
             }

@@ -375,11 +375,11 @@ async fn test_file_path_returns_blob_cached_while_waiting_for_gate() {
 async fn test_file_path_abandoned_download_errors() {
     let h = harness().await;
     let digest = Digest::of(b"wheel");
-    let (sender, receiver) = tokio::sync::watch::channel(cache::DownloadProgress::default());
+    let (sender, receiver) = tokio::sync::watch::channel(crate::download::DownloadProgress::default());
     drop(sender);
     h.state.downloads.lock().expect("downloads lock").insert(
         digest.as_str().to_owned(),
-        cache::DownloadHandle::new(h.state.blobs.path_for(&digest), receiver),
+        crate::download::DownloadHandle::new(h.state.blobs.path_for(&digest), receiver),
     );
     let err = cache::file_path(
         h.state.clone(),

@@ -9,7 +9,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::http_tests::{detail_json, get, harness};
-use crate::cache::{self, DownloadHandle, DownloadProgress};
+use crate::cache;
+use crate::download::{DownloadHandle, DownloadProgress};
 use crate::state::AppState;
 
 /// A stalling upstream: sends the header and the first half of the body, waits for the release

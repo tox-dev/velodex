@@ -5,6 +5,7 @@ pub mod api;
 pub mod archive;
 pub mod cache;
 pub mod discovery;
+pub mod download;
 pub mod handlers;
 pub mod metrics;
 pub mod path_safety;
