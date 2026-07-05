@@ -32,6 +32,12 @@ pub trait EcosystemServing: Send + Sync {
 
     /// Serve `GET /+api` — API discovery and copyable client configuration for configured indexes.
     async fn discover(&self, state: Arc<AppState>, uri: Uri, headers: HeaderMap) -> Response;
+
+    /// The rate-limit class of a GET inside an index's namespace — a project listing, a metadata
+    /// sibling, or an artifact — which depends on this ecosystem's URL scheme. Writes and velodex's
+    /// own service endpoints are classified before this by
+    /// [`service_route_class`](crate::rate_limit::service_route_class).
+    fn classify_route(&self, path: &str) -> crate::rate_limit::RouteClass;
 }
 
 /// The driver installed when no ecosystem is wired into [`AppState`]: every request gets a `503`.
@@ -67,5 +73,9 @@ impl EcosystemServing for UnconfiguredServing {
 
     async fn discover(&self, _state: Arc<AppState>, _uri: Uri, _headers: HeaderMap) -> Response {
         Self::unavailable()
+    }
+
+    fn classify_route(&self, _path: &str) -> crate::rate_limit::RouteClass {
+        crate::rate_limit::RouteClass::Listing
     }
 }

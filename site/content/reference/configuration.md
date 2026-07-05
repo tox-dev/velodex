@@ -185,7 +185,7 @@ Each route class is a sub-table with `requests` and `window_secs`:
 
 | Table                   | Route class                                     | Default        |
 | ----------------------- | ----------------------------------------------- | -------------- |
-| `[rate_limit.simple]`   | Simple project list and project detail pages    | `600` / `60s`  |
+| `[rate_limit.listing]`  | Project listing and detail pages                | `600` / `60s`  |
 | `[rate_limit.metadata]` | PEP 658/714 `.metadata` siblings                | `1200` / `60s` |
 | `[rate_limit.artifact]` | Artifact downloads and archive inspection       | `300` / `60s`  |
 | `[rate_limit.upload]`   | Upload, yank, restore, and delete requests      | `60` / `60s`   |
@@ -198,7 +198,7 @@ Example:
 enabled = true
 max_clients = 4096
 
-[rate_limit.simple]
+[rate_limit.listing]
 requests = 300
 window_secs = 60
 

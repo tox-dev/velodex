@@ -24,6 +24,7 @@ use velodex_format::Ecosystem;
 use velodex_http::handlers::{Format, negotiate, not_found, search_error_response, search_response};
 use velodex_http::metrics::Event;
 use velodex_http::path_safety::{self, PathSafetyError};
+use velodex_http::rate_limit::RouteClass;
 use velodex_http::search::SearchParams;
 use velodex_http::serving::EcosystemServing;
 use velodex_http::state::{AppState, Index, IndexKind, describe_index};
@@ -73,6 +74,19 @@ impl EcosystemServing for PypiServing {
     async fn discover(&self, state: Arc<AppState>, uri: Uri, headers: HeaderMap) -> Response {
         let base = BaseUrl::from_request(&headers, &uri);
         axum::Json(discovery::root_document(&state, base.as_ref())).into_response()
+    }
+
+    /// `PyPI`'s Simple-API URL scheme: `.../files/*.metadata` is a PEP 658 metadata sibling, any other
+    /// `files/` or `inspect/` path is an artifact, and everything else is a project listing.
+    fn classify_route(&self, path: &str) -> RouteClass {
+        let path = path.trim_start_matches('/');
+        if path.contains("/files/") && path.ends_with(".metadata") {
+            RouteClass::Metadata
+        } else if path.contains("/files/") || path.contains("/inspect/") {
+            RouteClass::Artifact
+        } else {
+            RouteClass::Listing
+        }
     }
 }
 

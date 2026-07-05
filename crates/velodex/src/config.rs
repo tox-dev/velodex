@@ -466,7 +466,7 @@ pub struct PartialLogConfig {
 pub struct PartialRateLimitConfig {
     pub enabled: Option<bool>,
     pub max_clients: Option<u64>,
-    pub simple: PartialRouteLimit,
+    pub listing: PartialRouteLimit,
     pub metadata: PartialRouteLimit,
     pub artifact: PartialRouteLimit,
     pub upload: PartialRouteLimit,
@@ -487,7 +487,7 @@ const fn apply_rate_limit(mut base: RateLimitConfig, partial: PartialRateLimitCo
     if let Some(max_clients) = partial.max_clients {
         base.max_clients = max_clients;
     }
-    base.simple = apply_route_limit(base.simple, partial.simple);
+    base.listing = apply_route_limit(base.listing, partial.listing);
     base.metadata = apply_route_limit(base.metadata, partial.metadata);
     base.artifact = apply_route_limit(base.artifact, partial.artifact);
     base.upload = apply_route_limit(base.upload, partial.upload);

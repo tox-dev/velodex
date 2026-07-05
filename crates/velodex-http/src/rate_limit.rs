@@ -22,7 +22,7 @@ pub type UpstreamPermit = Option<OwnedSemaphorePermit>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RouteClass {
-    Simple,
+    Listing,
     Metadata,
     Artifact,
     Upload,
@@ -30,7 +30,7 @@ pub enum RouteClass {
 }
 
 impl RouteClass {
-    const ALL: [Self; 5] = [Self::Simple, Self::Metadata, Self::Artifact, Self::Upload, Self::Admin];
+    const ALL: [Self; 5] = [Self::Listing, Self::Metadata, Self::Artifact, Self::Upload, Self::Admin];
     const COUNT: u64 = 5;
 
     #[must_use]
@@ -41,7 +41,7 @@ impl RouteClass {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Simple => "simple",
+            Self::Listing => "listing",
             Self::Metadata => "metadata",
             Self::Artifact => "artifact",
             Self::Upload => "upload",
@@ -67,7 +67,7 @@ impl RouteLimit {
 pub struct RateLimitConfig {
     pub enabled: bool,
     pub max_clients: u64,
-    pub simple: RouteLimit,
+    pub listing: RouteLimit,
     pub metadata: RouteLimit,
     pub artifact: RouteLimit,
     pub upload: RouteLimit,
@@ -79,7 +79,7 @@ impl Default for RateLimitConfig {
         Self {
             enabled: false,
             max_clients: 8192,
-            simple: RouteLimit::new(600, 60),
+            listing: RouteLimit::new(600, 60),
             metadata: RouteLimit::new(1200, 60),
             artifact: RouteLimit::new(300, 60),
             upload: RouteLimit::new(60, 60),
@@ -94,7 +94,7 @@ impl RateLimitConfig {
         Self {
             enabled: true,
             max_clients: 8192,
-            simple: RouteLimit::new(600, 60),
+            listing: RouteLimit::new(600, 60),
             metadata: RouteLimit::new(1200, 60),
             artifact: RouteLimit::new(300, 60),
             upload: RouteLimit::new(60, 60),
@@ -105,7 +105,7 @@ impl RateLimitConfig {
     #[must_use]
     pub const fn limit(&self, class: RouteClass) -> RouteLimit {
         match class {
-            RouteClass::Simple => self.simple,
+            RouteClass::Listing => self.listing,
             RouteClass::Metadata => self.metadata,
             RouteClass::Artifact => self.artifact,
             RouteClass::Upload => self.upload,
@@ -198,7 +198,7 @@ pub struct RouteLimitSnapshot {
 
 #[derive(Default)]
 struct RouteCounters {
-    simple: AtomicU64,
+    listing: AtomicU64,
     metadata: AtomicU64,
     artifact: AtomicU64,
     upload: AtomicU64,
@@ -216,7 +216,7 @@ impl RouteCounters {
 
     const fn counter(&self, class: RouteClass) -> &AtomicU64 {
         match class {
-            RouteClass::Simple => &self.simple,
+            RouteClass::Listing => &self.listing,
             RouteClass::Metadata => &self.metadata,
             RouteClass::Artifact => &self.artifact,
             RouteClass::Upload => &self.upload,
@@ -353,7 +353,8 @@ pub(crate) async fn enforce(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let class = route_class(request.method(), request.uri().path());
+    let class = service_route_class(request.method(), request.uri().path())
+        .unwrap_or_else(|| state.serving.classify_route(request.uri().path()));
     let actor = actor_key(&request);
     match state.rate_limits.check(class, actor) {
         Ok(()) => next.run(request).await,
@@ -376,9 +377,15 @@ pub(crate) async fn enforce(
     }
 }
 
-pub(crate) fn route_class(method: &Method, path: &str) -> RouteClass {
+/// Classify the ecosystem-neutral part of a request: writes and velodex's own service endpoints.
+///
+/// Returns `None` for a GET inside an index's namespace (a project listing, metadata sibling, or
+/// artifact), whose class depends on the ecosystem's URL scheme and so is decided by the index's
+/// driver through [`EcosystemServing::classify_route`](crate::serving::EcosystemServing::classify_route).
+#[must_use]
+pub fn service_route_class(method: &Method, path: &str) -> Option<RouteClass> {
     if method != Method::GET {
-        return RouteClass::Upload;
+        return Some(RouteClass::Upload);
     }
     let path = path.trim_start_matches('/');
     if matches!(
@@ -388,15 +395,9 @@ pub(crate) fn route_class(method: &Method, path: &str) -> RouteClass {
         || path.ends_with("/+api")
         || path.contains("/+api/")
     {
-        return RouteClass::Admin;
+        return Some(RouteClass::Admin);
     }
-    if path.contains("/files/") && path.ends_with(".metadata") {
-        return RouteClass::Metadata;
-    }
-    if path.contains("/files/") || path.contains("/inspect/") {
-        return RouteClass::Artifact;
-    }
-    RouteClass::Simple
+    None
 }
 
 fn actor_key(request: &axum::extract::Request) -> ActorKey {
@@ -446,14 +447,22 @@ fn limited_response(retry_after: u64) -> Response {
 mod tests {
     use axum::http::Method;
 
-    use super::{RouteClass, route_class};
+    use super::{RouteClass, service_route_class};
 
     #[test]
-    fn test_route_class_detects_writes_and_metadata() {
-        assert_eq!(route_class(&Method::POST, "/pypi/simple/"), RouteClass::Upload);
+    fn test_service_route_class_handles_writes_and_service_routes() {
         assert_eq!(
-            route_class(&Method::GET, "/pypi/files/abc/flask-1.0.whl.metadata"),
-            RouteClass::Metadata
+            service_route_class(&Method::POST, "/pypi/simple/"),
+            Some(RouteClass::Upload)
+        );
+        assert_eq!(service_route_class(&Method::GET, "/+status"), Some(RouteClass::Admin));
+        assert_eq!(
+            service_route_class(&Method::GET, "/pypi/hosted/+api"),
+            Some(RouteClass::Admin)
+        );
+        assert_eq!(
+            service_route_class(&Method::GET, "/pypi/files/abc/x.whl.metadata"),
+            None
         );
     }
 }

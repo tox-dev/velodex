@@ -162,13 +162,13 @@ fn test_rate_limits_from_toml_overlay_defaults() {
     let c = toml_config(
         "\
 [rate_limit]\nenabled = true\nmax_clients = 32\n\
-[rate_limit.simple]\nrequests = 10\nwindow_secs = 5\n\
+[rate_limit.listing]\nrequests = 10\nwindow_secs = 5\n\
 [rate_limit.upload]\nrequests = 2\n",
     );
 
     assert!(c.rate_limit.enabled);
     assert_eq!(c.rate_limit.max_clients, 32);
-    assert_eq!(c.rate_limit.simple, RouteLimit::new(10, 5));
+    assert_eq!(c.rate_limit.listing, RouteLimit::new(10, 5));
     assert_eq!(c.rate_limit.upload.requests, 2);
     assert_eq!(
         c.rate_limit.upload.window_secs,

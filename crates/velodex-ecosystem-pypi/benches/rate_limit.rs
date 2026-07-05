@@ -74,7 +74,7 @@ fn cached(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
 
 const fn enabled_limits() -> RateLimitConfig {
     RateLimitConfig {
-        simple: RouteLimit::new(u64::MAX, 60),
+        listing: RouteLimit::new(u64::MAX, 60),
         ..RateLimitConfig::enabled_defaults()
     }
 }

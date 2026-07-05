@@ -88,7 +88,7 @@ async fn send(state: &Arc<AppState>, request: Request<Body>) -> (StatusCode, Hea
 
 fn limit_simple(requests: u64) -> RateLimitConfig {
     RateLimitConfig {
-        simple: RouteLimit::new(requests, 60),
+        listing: RouteLimit::new(requests, 60),
         ..RateLimitConfig::enabled_defaults()
     }
 }
@@ -110,7 +110,7 @@ async fn test_default_rate_limiter_bypasses_requests() {
     let (_, _, metrics) = request(&h.state, "/metrics", &[("x-forwarded-for", "192.0.2.1")]).await;
 
     assert_eq!((first, second), (StatusCode::OK, StatusCode::OK));
-    assert!(metrics.contains("velodex_rate_limit_allowed_total{class=\"simple\"} 0"));
+    assert!(metrics.contains("velodex_rate_limit_allowed_total{class=\"listing\"} 0"));
 }
 
 #[tokio::test]
@@ -180,14 +180,14 @@ async fn test_disabled_limit_allows_requests_and_counts_them() {
     let (_, _, metrics) = request(&h.state, "/metrics", &[("x-forwarded-for", "192.0.2.1")]).await;
 
     assert_eq!((first, second), (StatusCode::OK, StatusCode::OK));
-    assert!(metrics.contains("velodex_rate_limit_allowed_total{class=\"simple\"} 2"));
+    assert!(metrics.contains("velodex_rate_limit_allowed_total{class=\"listing\"} 2"));
 }
 
 #[tokio::test]
 async fn test_window_reset_allows_requests_after_retry_after() {
     let h = harness(
         RateLimitConfig {
-            simple: RouteLimit::new(1, 1),
+            listing: RouteLimit::new(1, 1),
             ..RateLimitConfig::enabled_defaults()
         },
         DEFAULT_UPSTREAM_CONCURRENCY,
@@ -206,10 +206,10 @@ async fn test_window_reset_allows_requests_after_retry_after() {
 }
 
 #[tokio::test]
-async fn test_route_class_limit_does_not_block_simple_pages() {
+async fn test_rate_limit_does_not_block_listing_pages() {
     let rate_limit = RateLimitConfig {
         artifact: RouteLimit::new(1, 60),
-        simple: RouteLimit::new(10, 60),
+        listing: RouteLimit::new(10, 60),
         ..RateLimitConfig::enabled_defaults()
     };
     let h = harness(rate_limit, DEFAULT_UPSTREAM_CONCURRENCY).await;
@@ -236,7 +236,7 @@ async fn test_denials_are_logged_and_counted() {
     let _ = request(&h.state, "/pypi/simple/", &[("x-forwarded-for", "192.0.2.1")]).await;
     let (_, _, metrics) = request(&h.state, "/metrics", &[("x-forwarded-for", "192.0.2.1")]).await;
 
-    assert!(metrics.contains("velodex_rate_limit_denied_total{class=\"simple\"} 1"));
+    assert!(metrics.contains("velodex_rate_limit_denied_total{class=\"listing\"} 1"));
     let events = capture.security_events();
     let event = events
         .iter()
@@ -244,7 +244,7 @@ async fn test_denials_are_logged_and_counted() {
         .unwrap_or_else(|| panic!("{}", capture.text()));
     assert_eq!(field(event, "action"), Some("http_request"));
     assert_eq!(field(event, "result"), Some("denied"));
-    assert_eq!(field(event, "class"), Some("simple"));
+    assert_eq!(field(event, "class"), Some("listing"));
     assert_eq!(field(event, "client"), Some("ip"));
     assert!((1..=60).contains(&event["fields"]["retry_after"].as_u64().unwrap()));
 }
@@ -377,4 +377,25 @@ fn test_upstream_limits_allow_unknown_and_uncapped_mirrors() {
     assert_eq!(snapshots[1].index, "z");
     assert_eq!(snapshots[1].max_concurrent, 0);
     assert_eq!(snapshots[1].in_flight, 0);
+}
+
+#[test]
+fn test_pypi_classify_route_distinguishes_metadata_artifact_listing() {
+    use velodex_http::rate_limit::RouteClass;
+    use velodex_http::serving::EcosystemServing as _;
+
+    let driver = crate::PypiServing;
+    assert_eq!(driver.classify_route("/pypi/simple/flask/"), RouteClass::Listing);
+    assert_eq!(
+        driver.classify_route("/pypi/files/abc/flask-1.0.whl"),
+        RouteClass::Artifact
+    );
+    assert_eq!(
+        driver.classify_route("/pypi/files/abc/flask-1.0.whl.metadata"),
+        RouteClass::Metadata
+    );
+    assert_eq!(
+        driver.classify_route("/pypi/inspect/abc/flask-1.0.whl"),
+        RouteClass::Artifact
+    );
 }
