@@ -6,9 +6,9 @@ use velodex_http::IndexKind as RuntimeKind;
 use velodex_upstream::Auth;
 
 use crate::config::{Config, IndexConfig, IndexKind, WebhookConfig, WebhookSecret};
-use crate::server::{build_indexes, build_router, build_state, mirror_auth};
+use crate::server::{build_indexes, build_router, build_state, upstream_auth};
 
-fn mirror(name: &str, upstream: &str) -> IndexConfig {
+fn cached(name: &str, upstream: &str) -> IndexConfig {
     IndexConfig {
         name: name.to_owned(),
         route: name.to_owned(),
@@ -41,7 +41,7 @@ fn hosted(name: &str) -> IndexConfig {
     }
 }
 
-fn overlay(layers: &[&str], upload: Option<&str>) -> IndexConfig {
+fn virtual_index(layers: &[&str], upload: Option<&str>) -> IndexConfig {
     IndexConfig {
         name: "team".to_owned(),
         route: "team/dev".to_owned(),
@@ -89,12 +89,12 @@ fn test_build_state_opens_configured_data_dir() {
 #[test]
 fn test_build_state_applies_upstream_concurrency() {
     let dir = tempfile::tempdir().unwrap();
-    let mut pypi = mirror("pypi", "https://pypi.org/simple/");
+    let mut pypi = cached("pypi", "https://pypi.org/simple/");
     let IndexKind::Cached {
         upstream_concurrency, ..
     } = &mut pypi.kind
     else {
-        panic!("expected mirror");
+        panic!("expected cached index");
     };
     *upstream_concurrency = 2;
     let config = Config {
@@ -131,7 +131,7 @@ fn test_build_state_reports_index_errors() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
         data_dir: dir.path().to_path_buf(),
-        indexes: vec![mirror("pypi", "not a url")],
+        indexes: vec![cached("pypi", "not a url")],
         ..Config::default()
     };
 
@@ -139,7 +139,7 @@ fn test_build_state_reports_index_errors() {
         panic!("expected index error");
     };
 
-    assert!(err.to_string().contains("build mirror index pypi"));
+    assert!(err.to_string().contains("build cached index pypi"));
 }
 
 #[test]
@@ -213,17 +213,17 @@ async fn test_build_state_starts_webhook_runtime() {
 }
 
 #[test]
-fn test_mirror_auth_bearer_takes_precedence() {
+fn test_upstream_auth_bearer_takes_precedence() {
     assert_eq!(
-        mirror_auth(Some("tok"), Some("u"), Some("p")),
+        upstream_auth(Some("tok"), Some("u"), Some("p")),
         Auth::Bearer("tok".to_owned())
     );
 }
 
 #[test]
-fn test_mirror_auth_basic() {
+fn test_upstream_auth_basic() {
     assert_eq!(
-        mirror_auth(None, Some("u"), Some("p")),
+        upstream_auth(None, Some("u"), Some("p")),
         Auth::Basic {
             username: "u".to_owned(),
             password: "p".to_owned()
@@ -232,8 +232,8 @@ fn test_mirror_auth_basic() {
 }
 
 #[test]
-fn test_mirror_auth_none() {
-    assert_eq!(mirror_auth(None, None, None), Auth::None);
+fn test_upstream_auth_none() {
+    assert_eq!(upstream_auth(None, None, None), Auth::None);
 }
 
 #[test]
@@ -251,14 +251,14 @@ fn test_build_router_data_dir_error() {
 
 #[test]
 fn test_build_indexes_rejects_bad_upstream() {
-    let err = build_indexes(&[mirror("pypi", "not a url")], false).unwrap_err();
-    assert!(err.to_string().contains("build mirror index pypi"));
+    let err = build_indexes(&[cached("pypi", "not a url")], false).unwrap_err();
+    assert!(err.to_string().contains("build cached index pypi"));
     assert!(err.to_string().contains("<invalid upstream URL>"));
 }
 
 #[test]
 fn test_build_indexes_rejects_invalid_policy() {
-    let mut index = mirror("pypi", "https://pypi.org/simple/");
+    let mut index = cached("pypi", "https://pypi.org/simple/");
     index.policy.allow_versions = Some("not a specifier".to_owned());
     let err = build_indexes(&[index], false).unwrap_err();
     assert!(err.to_string().contains("compile policy for pypi"));
@@ -296,15 +296,15 @@ fn test_build_indexes_rejects_reserved_route() {
 
 #[test]
 fn test_build_indexes_rejects_unknown_layer() {
-    let err = build_indexes(&[hosted("x"), overlay(&["ghost"], None)], false).unwrap_err();
+    let err = build_indexes(&[hosted("x"), virtual_index(&["ghost"], None)], false).unwrap_err();
     assert!(err.to_string().contains("unknown index ghost"));
 }
 
 #[test]
 fn test_build_indexes_rejects_non_local_upload_target() {
     let configs = [
-        mirror("pypi", "https://pypi.org/simple/"),
-        overlay(&["pypi"], Some("pypi")),
+        cached("pypi", "https://pypi.org/simple/"),
+        virtual_index(&["pypi"], Some("pypi")),
     ];
     let err = build_indexes(&configs, false).unwrap_err();
     assert!(err.to_string().contains("not a hosted index"));
@@ -313,24 +313,27 @@ fn test_build_indexes_rejects_non_local_upload_target() {
 #[test]
 fn test_build_indexes_defaults_upload_to_first_local_layer() {
     let configs = [
-        mirror("pypi", "https://pypi.org/simple/"),
+        cached("pypi", "https://pypi.org/simple/"),
         hosted("store"),
-        overlay(&["pypi", "store"], None),
+        virtual_index(&["pypi", "store"], None),
     ];
     let indexes = build_indexes(&configs, false).unwrap();
     let RuntimeKind::Virtual { upload, layers } = &indexes[2].kind else {
-        panic!("expected overlay");
+        panic!("expected virtual index");
     };
-    assert_eq!(*upload, Some(1)); // "store" is the first local layer
+    assert_eq!(*upload, Some(1)); // "store" is the first hosted layer
     assert_eq!(layers, &[0, 1]);
 }
 
 #[test]
 fn test_build_indexes_overlay_without_local_layer_has_no_upload() {
-    let configs = [mirror("pypi", "https://pypi.org/simple/"), overlay(&["pypi"], None)];
+    let configs = [
+        cached("pypi", "https://pypi.org/simple/"),
+        virtual_index(&["pypi"], None),
+    ];
     let indexes = build_indexes(&configs, false).unwrap();
     let RuntimeKind::Virtual { upload, .. } = &indexes[1].kind else {
-        panic!("expected overlay");
+        panic!("expected virtual index");
     };
     assert_eq!(*upload, None);
 }

@@ -494,7 +494,7 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
             continue;
         }
         if let Err(denial) = index.policy.check_project(PolicyAction::Cached, &project) {
-            log_mirror_sync(&index.route, &project, "denied", false, Some(&denial.reason));
+            log_cache_sync(&index.route, &project, "denied", false, Some(&denial.reason));
             continue;
         }
         summary.checked += 1;
@@ -506,9 +506,9 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
                 if changed {
                     summary.changed += 1;
                 }
-                log_mirror_sync(&index.route, &project, "success", changed, None);
+                log_cache_sync(&index.route, &project, "success", changed, None);
             }
-            Ok(None) => log_mirror_sync(
+            Ok(None) => log_cache_sync(
                 &index.route,
                 &project,
                 "noop",
@@ -517,7 +517,7 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
             ),
             Err(err) => {
                 let reason = err.user_message();
-                log_mirror_sync(&index.route, &project, "failure", false, Some(&reason));
+                log_cache_sync(&index.route, &project, "failure", false, Some(&reason));
             }
         }
         result?;
@@ -525,9 +525,9 @@ pub async fn refresh_stale_pages(state: &Arc<AppState>) -> Result<RefreshSummary
     Ok(summary)
 }
 
-fn log_mirror_sync(repository: &str, project: &str, result: &'static str, changed: bool, reason: Option<&str>) {
+fn log_cache_sync(index: &str, project: &str, result: &'static str, changed: bool, reason: Option<&str>) {
     velodex_http::security::Event::new("mirror_sync", result)
-        .index(repository)
+        .index(index)
         .project(Some(project))
         .changed(changed)
         .count(1)

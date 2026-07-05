@@ -22,7 +22,7 @@ fn runtime(cli: Cli) -> RuntimeArgs {
         Command::Restore(_) => panic!("restore takes explicit data-dir args"),
         Command::ImportDir(_) => panic!("import-dir carries nested runtime args"),
         Command::Policy(_) => panic!("policy commands carry nested runtime args"),
-        Command::Prefetch(_) => panic!("mirror commands carry nested runtime args"),
+        Command::Prefetch(_) => panic!("prefetch commands carry nested runtime args"),
         other @ Command::Openapi => panic!("no runtime args on {other:?}"),
     }
 }
@@ -356,7 +356,7 @@ fn test_parse_mirror_plan_options() {
         "1024",
     ]);
     let Command::Prefetch(PrefetchCommand::Plan(args)) = cli.command else {
-        panic!("expected mirror plan");
+        panic!("expected prefetch plan");
     };
     assert_eq!(args.options.runtime.data_dir, Some(PathBuf::from("/d")));
     assert!(args.options.runtime.offline);
@@ -381,7 +381,7 @@ fn test_mirror_commands_expose_runtime_args() {
         parse(&["velodex", "prefetch", "verify", "--data-dir", "/verify", "pypi"]),
     ] {
         let Command::Prefetch(command) = cli.command else {
-            panic!("expected mirror command");
+            panic!("expected prefetch command");
         };
         assert!(command.runtime_args().data_dir.is_some());
     }

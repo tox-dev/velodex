@@ -17,7 +17,7 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub data_dir: PathBuf,
-    /// Disable upstream network access and serve only cached mirror data.
+    /// Disable upstream network access and serve only cached data.
     pub offline: bool,
     /// Fallback freshness for cached simple pages, in seconds. Upstream `Cache-Control` lifetimes
     /// take precedence; this applies only when the server granted none.
@@ -178,8 +178,8 @@ impl Default for Config {
     }
 }
 
-/// The out-of-the-box topology: a pypi.org mirror with a local store overlaid in front of it, served
-/// together at `root/pypi`. Uploads to `root/pypi` land in the local layer once a token is set.
+/// The out-of-the-box topology: a pypi.org cache and a hosted store, combined by a virtual index
+/// served at `root/pypi`. Uploads to `root/pypi` land in the hosted layer once a token is set.
 fn default_indexes() -> Vec<IndexConfig> {
     vec![
         IndexConfig {
@@ -228,7 +228,7 @@ impl Config {
     ///
     /// # Errors
     /// Returns [`ConfigError::Index`] if the partial defines indexes but one is not classifiable as a
-    /// mirror, local, or overlay.
+    /// cached, hosted, or virtual.
     pub fn apply(mut self, partial: PartialConfig) -> Result<Self, ConfigError> {
         if let Some(host) = partial.host {
             self.host = host;
@@ -254,8 +254,8 @@ impl Config {
     }
 }
 
-/// Turn a raw `[[index]]` table into a classified [`IndexConfig`]: `layers` makes an overlay, else
-/// `mirror` makes a mirror, else `local`/`upload_token` makes a local store.
+/// Turn a raw `[[index]]` table into a classified [`IndexConfig`]: `layers` makes a virtual index, else
+/// `cached` makes a cached index, else `hosted`/`upload_token` makes a hosted store.
 fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
     let route = raw.route.clone().unwrap_or_else(|| raw.name.clone());
     let ecosystem = match &raw.ecosystem {

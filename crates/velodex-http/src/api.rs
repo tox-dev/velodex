@@ -656,7 +656,7 @@ fn file_download() -> OperationBuilder {
         )
         .response(
             "403",
-            policy_denial_response("Project status or repository policy does not allow downloads", "serve"),
+            policy_denial_response("Project status or index policy does not allow downloads", "serve"),
         )
         .response(
             "502",
@@ -691,7 +691,7 @@ fn metadata_download() -> OperationBuilder {
         )
         .response(
             "403",
-            policy_denial_response("Project status or repository policy does not allow downloads", "serve"),
+            policy_denial_response("Project status or index policy does not allow downloads", "serve"),
         )
 }
 
@@ -766,7 +766,7 @@ fn upload() -> OperationBuilder {
         .response(
             "403",
             policy_denial_response(
-                "Uploads disabled, project status rejects uploads, or repository policy denied the upload",
+                "Uploads disabled, project status rejects uploads, or index policy denied the upload",
                 "upload",
             ),
         )

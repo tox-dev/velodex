@@ -1,4 +1,4 @@
-//! Signed webhook delivery for repository mutations.
+//! Signed webhook delivery for index mutations.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

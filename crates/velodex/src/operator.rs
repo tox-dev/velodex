@@ -173,16 +173,16 @@ pub fn restore(backup: &Path, data_dir: &Path, force: bool, out: &mut dyn Write)
     Ok(())
 }
 
-/// Import local wheel and sdist files into a hosted repository.
+/// Import local wheel and sdist files into a hosted index.
 ///
 /// # Errors
-/// Returns an error if the data directory cannot be opened, the repository cannot accept imported
+/// Returns an error if the data directory cannot be opened, the index cannot accept imported
 /// files, or output fails.
-pub fn import_dir(config: &Config, repo: &str, dir: &Path, out: &mut dyn Write) -> anyhow::Result<()> {
+pub fn import_dir(config: &Config, selector: &str, dir: &Path, out: &mut dyn Write) -> anyhow::Result<()> {
     if !dir.is_dir() {
         bail!("import directory {} does not exist", dir.display());
     }
-    let target = import_target(config, repo)?;
+    let target = import_target(config, selector)?;
     std::fs::create_dir_all(&config.data_dir)
         .context(format!("create data directory {}", config.data_dir.display()))?;
     let open_context = format!("open metadata store {}", config.data_dir.join("velodex.redb").display());
@@ -548,13 +548,13 @@ fn prepare_restore_dir(data_dir: &Path, force: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(data_dir).context(format!("create restore target {}", data_dir.display()))
 }
 
-fn import_target(config: &Config, repo: &str) -> anyhow::Result<ImportTarget> {
+fn import_target(config: &Config, selector: &str) -> anyhow::Result<ImportTarget> {
     let indexes = crate::server::build_indexes(&config.indexes, config.offline)?;
     let position = indexes
         .iter()
-        .position(|index| index.name == repo)
-        .or_else(|| indexes.iter().position(|index| index.route == repo))
-        .context(format!("unknown index {repo:?}"))?;
+        .position(|index| index.name == selector)
+        .or_else(|| indexes.iter().position(|index| index.route == selector))
+        .context(format!("unknown index {selector:?}"))?;
     let index = &indexes[position];
     match &index.kind {
         velodex_http::IndexKind::Hosted { .. } => Ok(ImportTarget {
@@ -571,9 +571,9 @@ fn import_target(config: &Config, repo: &str) -> anyhow::Result<ImportTarget> {
             })
         }
         velodex_http::IndexKind::Virtual { upload: None, .. } => {
-            bail!("index {repo:?} has no hosted upload target")
+            bail!("index {selector:?} has no hosted upload target")
         }
-        velodex_http::IndexKind::Cached { .. } => bail!("index {repo:?} is read-only"),
+        velodex_http::IndexKind::Cached { .. } => bail!("index {selector:?} is read-only"),
     }
 }
 

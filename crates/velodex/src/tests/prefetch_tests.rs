@@ -238,7 +238,7 @@ async fn test_mirror_plan_expands_nested_requirements_and_trims_options() {
     options.requirements.push(dir.path().join("constraints.txt"));
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -265,7 +265,7 @@ async fn test_mirror_plan_rejects_unsupported_selectors() {
 
     for raw in errors {
         let mut out = Vec::new();
-        let err = crate::mirror::run(
+        let err = crate::prefetch::run(
             &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
             &PrefetchCommand::Plan(PrefetchPlanArgs {
                 options: command_options(dir.path(), vec![raw.to_owned()]),
@@ -304,7 +304,7 @@ async fn test_mirror_plan_reports_wheel_tag_filter() {
     options.python_tags.push("cp312".to_owned());
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -343,7 +343,7 @@ async fn test_mirror_plan_accepts_matching_wheel_tags() {
     options.platform_tags.push("macosx_14_0_arm64".to_owned());
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -375,7 +375,7 @@ async fn test_mirror_plan_reports_selected_files_without_cache_writes() {
         .await;
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["Flask==1.0".to_owned()]),
@@ -409,7 +409,7 @@ async fn test_mirror_plan_reports_missing_and_upstream_failures() {
         .await;
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["missing".to_owned(), "broken".to_owned()]),
@@ -420,7 +420,7 @@ async fn test_mirror_plan_reports_missing_and_upstream_failures() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror plan found"));
+    assert!(err.to_string().contains("prefetch plan found"));
     assert!(text.contains("page\tpypi\tmissing\t\t\t\t\tskipped\tproject not found"));
     assert!(text.contains("page\tpypi\tbroken\t\t\t\t\tfailure\tupstream returned 500"));
 }
@@ -430,7 +430,7 @@ async fn test_mirror_plan_offline_reads_cached_pages() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = mirror_config(dir.path(), "https://example.invalid/simple/");
     let IndexKind::Cached { offline, .. } = &mut config.indexes[0].kind else {
-        panic!("expected mirror");
+        panic!("expected cached index");
     };
     *offline = true;
     put_cached_page(
@@ -441,7 +441,7 @@ async fn test_mirror_plan_offline_reads_cached_pages() {
     );
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &config,
         &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
@@ -460,7 +460,7 @@ async fn test_mirror_plan_offline_reads_cached_pages() {
     let mut options = command_options(dir.path(), Vec::new());
     options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
-    crate::mirror::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
+    crate::prefetch::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
         .await
         .unwrap();
     assert!(String::from_utf8(out).unwrap().contains("page\tpypi\tflask"));
@@ -480,12 +480,12 @@ async fn test_mirror_sync_downloads_then_reuses_cached_blobs() {
         options: command_options(dir.path(), vec!["flask".to_owned()]),
     });
     let mut first = Vec::new();
-    crate::mirror::run(&config, &command, &mut first).await.unwrap();
+    crate::prefetch::run(&config, &command, &mut first).await.unwrap();
     let first = String::from_utf8(first).unwrap();
     assert!(first.contains("\tdownloaded\t"));
 
     let mut second = Vec::new();
-    crate::mirror::run(&config, &command, &mut second).await.unwrap();
+    crate::prefetch::run(&config, &command, &mut second).await.unwrap();
     let second = String::from_utf8(second).unwrap();
     assert!(second.contains("file\tpypi\tflask\tflask-1.0-py3-none-any.whl"));
     assert!(second.contains("\tcached\t"));
@@ -523,7 +523,7 @@ async fn test_mirror_sync_downloads_file_without_metadata() {
         .await;
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
@@ -567,7 +567,7 @@ async fn test_mirror_sync_overlay_target_and_metadata_only_skips_artifact() {
     options.metadata_only = true;
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &overlay_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
@@ -615,7 +615,7 @@ async fn test_mirror_sync_reports_missing_project_and_metadata_failure() {
         .await;
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned(), "missing".to_owned()]),
@@ -626,7 +626,7 @@ async fn test_mirror_sync_reports_missing_project_and_metadata_failure() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror sync found"));
+    assert!(err.to_string().contains("prefetch sync found"));
     assert!(text.contains("page\tpypi\tmissing\t\t\t\t\tskipped\tproject not found"));
     assert!(text.contains("metadata\tpypi\tflask\tflask-1.0-py3-none-any.whl.metadata"));
     assert!(text.contains("\tfailure\t"));
@@ -656,7 +656,7 @@ async fn test_mirror_sync_reports_page_failure_and_skipped_file() {
     options.no_sdists = true;
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
@@ -665,7 +665,7 @@ async fn test_mirror_sync_reports_page_failure_and_skipped_file() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror sync found"));
+    assert!(err.to_string().contains("prefetch sync found"));
     assert!(text.contains("page\tpypi\tbroken\t\t\t\t\tfailure\tupstream is unavailable"));
     assert!(text.contains("file\tpypi\tflask\tflask-1.0.tar.gz"));
     assert!(text.contains("\tskipped\tsdists disabled"));
@@ -707,7 +707,7 @@ async fn test_mirror_sync_mode_and_size_options_override_prefetch() {
     options.max_file_size_bytes = Some(10);
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
@@ -747,7 +747,7 @@ async fn test_mirror_sync_all_reads_project_list() {
     options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs { options }),
         &mut out,
@@ -801,7 +801,7 @@ async fn test_mirror_sync_all_reads_html_project_list_and_filters_files() {
     options.no_wheels = true;
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -839,7 +839,7 @@ async fn test_mirror_plan_reads_html_detail_and_reports_version_filter() {
         .await;
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), vec!["flask[async]==1.0; python_version>'3.10'".to_owned()]),
@@ -864,7 +864,7 @@ async fn test_mirror_requirements_parse_errors_include_context() {
     options.requirements.push(requirements);
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -888,7 +888,7 @@ async fn test_mirror_all_mode_errors_on_upstream_project_list_status() {
     options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
         &mut out,
@@ -905,7 +905,7 @@ async fn test_mirror_selected_mode_requires_packages() {
     let server = MockServer::start().await;
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Plan(PrefetchPlanArgs {
             options: command_options(dir.path(), Vec::new()),
@@ -924,8 +924,8 @@ async fn test_mirror_rejects_non_mirror_targets() {
     let server = MockServer::start().await;
     let mut config = overlay_config(dir.path(), &format!("{}/simple/", server.uri()));
     config.indexes.push(IndexConfig {
-        name: "mirror-two".to_owned(),
-        route: "mirror-two".to_owned(),
+        name: "cached-two".to_owned(),
+        route: "cached-two".to_owned(),
         policy: PolicyConfig::default(),
         webhooks: Vec::new(),
         ecosystem: velodex_format::Ecosystem::Pypi,
@@ -946,13 +946,13 @@ async fn test_mirror_rejects_non_mirror_targets() {
         webhooks: Vec::new(),
         ecosystem: velodex_format::Ecosystem::Pypi,
         kind: IndexKind::Virtual {
-            layers: vec!["pypi".to_owned(), "mirror-two".to_owned()],
+            layers: vec!["pypi".to_owned(), "cached-two".to_owned()],
             upload: None,
         },
     });
     config.indexes.push(IndexConfig {
-        name: "local-overlay".to_owned(),
-        route: "local-overlay".to_owned(),
+        name: "root-virtual".to_owned(),
+        route: "root-virtual".to_owned(),
         policy: PolicyConfig::default(),
         webhooks: Vec::new(),
         ecosystem: velodex_format::Ecosystem::Pypi,
@@ -965,17 +965,17 @@ async fn test_mirror_rejects_non_mirror_targets() {
         ("unknown", "unknown cached index"),
         ("hosted", "is hosted and has no upstream"),
         ("double", "has more than one cached member"),
-        ("local-overlay", "has no cached member"),
+        ("root-virtual", "has no cached member"),
     ];
 
-    for (repo, expected) in commands {
+    for (selector, expected) in commands {
         let mut options = command_options(dir.path(), vec!["flask".to_owned()]);
-        options.index = repo.to_owned();
+        options.index = selector.to_owned();
         let mut out = Vec::new();
-        let err = crate::mirror::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
+        let err = crate::prefetch::run(&config, &PrefetchCommand::Plan(PrefetchPlanArgs { options }), &mut out)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains(expected), "{repo}: {err}");
+        assert!(err.to_string().contains(expected), "{selector}: {err}");
     }
 }
 
@@ -1005,7 +1005,7 @@ async fn test_mirror_sync_reports_digest_failure() {
         .await;
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Sync(PrefetchSyncArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
@@ -1015,7 +1015,7 @@ async fn test_mirror_sync_reports_digest_failure() {
     .await
     .unwrap_err();
 
-    assert!(err.to_string().contains("mirror sync found"));
+    assert!(err.to_string().contains("prefetch sync found"));
     assert!(String::from_utf8(out).unwrap().contains("\tfailure\t"));
 }
 
@@ -1060,7 +1060,7 @@ async fn test_mirror_verify_reports_missing_blob() {
     drop(meta);
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
@@ -1071,7 +1071,7 @@ async fn test_mirror_verify_reports_missing_blob() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror verify found"));
+    assert!(err.to_string().contains("prefetch verify found"));
     assert!(text.contains("file\tpypi\tflask\tflask-1.0-py3-none-any.whl"));
     assert!(text.contains("\tmissing\tblob is not cached"));
 }
@@ -1102,7 +1102,7 @@ async fn test_mirror_verify_reports_missing_project_and_metadata_blob() {
         .unwrap();
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned(), "ghost".to_owned()]),
@@ -1113,7 +1113,7 @@ async fn test_mirror_verify_reports_missing_project_and_metadata_blob() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror verify found"));
+    assert!(err.to_string().contains("prefetch verify found"));
     assert!(text.contains("page\tpypi\tghost\t\t\t\t\tmissing\tproject page is not cached"));
     assert!(text.contains("metadata\tpypi\tflask\tflask-1.0-py3-none-any.whl.metadata"));
     assert!(text.contains("\tmissing\tblob is not cached"));
@@ -1162,7 +1162,7 @@ async fn test_mirror_verify_reports_corrupt_page_invalid_digest_and_mismatch() {
     std::fs::write(blobs.path_for(&expected), b"wrong").unwrap();
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["broken".to_owned(), "flask".to_owned()]),
@@ -1173,7 +1173,7 @@ async fn test_mirror_verify_reports_corrupt_page_invalid_digest_and_mismatch() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror verify found"));
+    assert!(err.to_string().contains("prefetch verify found"));
     assert!(text.contains("page\tpypi\tbroken"));
     assert!(text.contains("parse cached project broken"));
     assert!(text.contains("file\tpypi\tflask\tflask-1.0.tar.gz\tbad"));
@@ -1202,7 +1202,7 @@ async fn test_mirror_verify_reports_blob_read_error() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let mut out = Vec::new();
 
-    let err = crate::mirror::run(
+    let err = crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Verify(PrefetchVerifyArgs {
             options: command_options(dir.path(), vec!["flask".to_owned()]),
@@ -1213,7 +1213,7 @@ async fn test_mirror_verify_reports_blob_read_error() {
     .unwrap_err();
 
     let text = String::from_utf8(out).unwrap();
-    assert!(err.to_string().contains("mirror verify found"));
+    assert!(err.to_string().contains("prefetch verify found"));
     assert!(text.contains("file\tpypi\tflask\tflask-1.0.tar.gz"));
     assert!(text.contains("\tfailure\t"));
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -1236,7 +1236,7 @@ async fn test_mirror_verify_all_uses_cached_project_list() {
     options.mode = Some(PrefetchMode::All);
     let mut out = Vec::new();
 
-    crate::mirror::run(
+    crate::prefetch::run(
         &mirror_config(dir.path(), &format!("{}/simple/", server.uri())),
         &PrefetchCommand::Verify(PrefetchVerifyArgs { options }),
         &mut out,

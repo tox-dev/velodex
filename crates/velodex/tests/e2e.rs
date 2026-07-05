@@ -42,7 +42,7 @@ use zip::write::SimpleFileOptions;
 const SIMPLE_JSON_CT: &str = "application/vnd.pypi.simple.v1+json";
 
 /// The upload token every spawned velodex is configured with, so twine and `uv publish` can push to
-/// the local layer of the `root/pypi` overlay.
+/// the hosted layer of the `root/pypi` virtual index.
 const UPLOAD_TOKEN: &str = "e2e-upload-secret";
 
 /// A minimal but genuinely pip/uv-installable distribution built in memory. `metadata` is both the
@@ -304,7 +304,7 @@ impl Velodex {
         std::fs::read_to_string(self.data.path().join("velodex.log")).unwrap_or_default()
     }
 
-    /// The client-facing simple index URL for the built-in `root/pypi` mirror.
+    /// The client-facing simple index URL for the built-in `root/pypi` virtual index.
     fn index_url(&self) -> String {
         format!("http://127.0.0.1:{}/root/pypi/simple/", self.port)
     }

@@ -16,13 +16,13 @@ use crate::config::{Config, IndexConfig, IndexKind as ConfigKind, WebhookSecret}
 
 /// Build the velodex router from configuration.
 ///
-/// Opens the stores under the data directory and resolves the configured indexes (mirrors, local
-/// stores, and overlays) into their runtime form. Does not bind a socket, so it is testable in
+/// Opens the stores under the data directory and resolves the configured indexes (cached indexes, hosted
+/// stores, and virtual indexes) into their runtime form. Does not bind a socket, so it is testable in
 /// isolation.
 ///
 /// # Errors
 /// Returns an error if the data directory or stores cannot be opened, an upstream URL is invalid, or
-/// an overlay references an unknown or non-local index.
+/// a virtual index references an unknown or non-hosted index.
 pub fn build_router(config: &Config) -> anyhow::Result<Router> {
     Ok(router_for(build_state(config)?))
 }
@@ -32,7 +32,7 @@ pub fn build_router(config: &Config) -> anyhow::Result<Router> {
 ///
 /// # Errors
 /// Returns an error if the data directory or stores cannot be opened, an upstream URL is invalid,
-/// or an overlay references an unknown or non-local index.
+/// or a virtual index references an unknown or non-hosted index.
 pub fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
@@ -70,8 +70,8 @@ pub fn router_for(state: Arc<AppState>) -> Router {
     velodex_web::ssr::ui_router(state.clone()).merge(router(state))
 }
 
-/// Resolve configured indexes into their runtime form, mapping overlay layer names to positions and
-/// building each mirror's authenticated upstream client.
+/// Resolve configured indexes into their runtime form, mapping virtual-index member names to positions and
+/// building each cached index's authenticated upstream client.
 pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::Result<Vec<Index>> {
     let mut positions = HashMap::with_capacity(configs.len());
     let mut routes = HashMap::with_capacity(configs.len());
@@ -138,11 +138,11 @@ fn build_kind(
             offline,
             ..
         } => {
-            let auth = mirror_auth(token.as_deref(), username.as_deref(), password.as_deref());
+            let auth = upstream_auth(token.as_deref(), username.as_deref(), password.as_deref());
             Ok(IndexKind::Cached {
                 client: UpstreamClient::with_auth(upstream, auth).with_context(|| {
                     format!(
-                        "build mirror index {} with upstream {}",
+                        "build cached index {} with upstream {}",
                         index.name,
                         redact_url(upstream)
                     )
@@ -180,14 +180,14 @@ fn upstream_concurrency(configs: &[IndexConfig]) -> Vec<(String, usize)> {
         .collect()
 }
 
-fn resolve_name(overlay: &str, name: &str, positions: &HashMap<&str, usize>) -> anyhow::Result<usize> {
+fn resolve_name(virtual_route: &str, name: &str, positions: &HashMap<&str, usize>) -> anyhow::Result<usize> {
     positions
         .get(name)
         .copied()
-        .with_context(|| format!("overlay {overlay} references unknown index {name}"))
+        .with_context(|| format!("virtual index {virtual_route} references unknown index {name}"))
 }
 
-/// The overlay's upload target: the named local index, or (when unset) the first local layer.
+/// The virtual index's upload target: the named hosted index, or (when unset) the first hosted layer.
 fn resolve_upload(
     index: &IndexConfig,
     upload: Option<&str>,
@@ -214,8 +214,8 @@ fn resolve_upload(
 }
 
 /// Derive upstream authentication: a bearer token takes precedence over a username/password pair;
-/// otherwise the mirror is anonymous.
-pub(crate) fn mirror_auth(token: Option<&str>, username: Option<&str>, password: Option<&str>) -> Auth {
+/// otherwise the upstream is anonymous.
+pub(crate) fn upstream_auth(token: Option<&str>, username: Option<&str>, password: Option<&str>) -> Auth {
     match (token, username, password) {
         (Some(token), _, _) => Auth::Bearer(token.to_owned()),
         (None, Some(username), Some(password)) => Auth::Basic {

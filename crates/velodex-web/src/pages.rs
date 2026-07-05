@@ -474,7 +474,7 @@ fn OverlayCard(index: UiIndex, all: Vec<UiIndex>, counters: Option<UiCounters>) 
         <div class="card overlay-card">
             <div class="card-head">
                 <a href=browse class="card-title">{index.name.clone()}</a>
-                <span class="badge kind-overlay">"overlay"</span>
+                <span class="badge kind-virtual">"virtual"</span>
                 {index.uploads.then(|| view! { <span class="badge uploads">"uploads"</span> })}
             </div>
             <p class="dim"><code>{simple}</code></p>

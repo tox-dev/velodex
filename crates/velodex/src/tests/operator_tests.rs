@@ -550,8 +550,8 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
     let root = tempfile::tempdir().unwrap();
     let import = root.path().join("import");
     std::fs::create_dir(&import).unwrap();
-    let mirror_config = Config {
-        data_dir: root.path().join("mirror-data"),
+    let cached_config = Config {
+        data_dir: root.path().join("cached-data"),
         indexes: vec![IndexConfig {
             name: "pypi".to_owned(),
             route: "pypi".to_owned(),
@@ -570,11 +570,11 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
         }],
         ..Config::default()
     };
-    let overlay_config = Config {
-        data_dir: root.path().join("overlay-data"),
+    let virtual_config = Config {
+        data_dir: root.path().join("virtual-data"),
         indexes: vec![IndexConfig {
-            name: "overlay".to_owned(),
-            route: "overlay".to_owned(),
+            name: "aggregate".to_owned(),
+            route: "aggregate".to_owned(),
             policy: velodex_policy::PolicyConfig::default(),
             webhooks: Vec::new(),
             ecosystem: velodex_format::Ecosystem::Pypi,
@@ -596,19 +596,19 @@ fn test_import_dir_rejects_unusable_repositories_and_paths() {
         .is_err()
     );
     assert!(
-        operator::import_dir(&mirror_config, "pypi", &import, &mut Vec::new())
+        operator::import_dir(&cached_config, "pypi", &import, &mut Vec::new())
             .unwrap_err()
             .to_string()
             .contains("read-only")
     );
     assert!(
-        operator::import_dir(&overlay_config, "overlay", &import, &mut Vec::new())
+        operator::import_dir(&virtual_config, "aggregate", &import, &mut Vec::new())
             .unwrap_err()
             .to_string()
             .contains("no hosted upload target")
     );
     assert!(
-        operator::import_dir(&overlay_config, "missing", &import, &mut Vec::new())
+        operator::import_dir(&virtual_config, "missing", &import, &mut Vec::new())
             .unwrap_err()
             .to_string()
             .contains("unknown index")

@@ -195,7 +195,7 @@ fn main() -> anyhow::Result<()> {
         velodex::cli::Command::Prefetch(command) => {
             let config = resolve_config(command.runtime_args())?;
             let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            runtime.block_on(velodex::mirror::run(&config, &command, &mut std::io::stdout()))
+            runtime.block_on(velodex::prefetch::run(&config, &command, &mut std::io::stdout()))
         }
         velodex::cli::Command::Openapi => {
             print!("{}", velodex_http::api::openapi_json());

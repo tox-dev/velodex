@@ -361,7 +361,7 @@
             "description": "Missing or wrong token"
           },
           "403": {
-            "description": "Uploads disabled, project status rejects uploads, or repository policy denied the upload",
+            "description": "Uploads disabled, project status rejects uploads, or index policy denied the upload",
             "content": {
               "application/json": {
                 "example": {
@@ -580,7 +580,7 @@
             "description": "The digest is not 64 lowercase hex, or the filename is not a safe path segment"
           },
           "403": {
-            "description": "Project status or repository policy does not allow downloads",
+            "description": "Project status or index policy does not allow downloads",
             "content": {
               "application/json": {
                 "example": {
@@ -644,7 +644,7 @@
             }
           },
           "403": {
-            "description": "Project status or repository policy does not allow downloads",
+            "description": "Project status or index policy does not allow downloads",
             "content": {
               "application/json": {
                 "example": {

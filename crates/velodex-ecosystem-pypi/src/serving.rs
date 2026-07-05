@@ -750,7 +750,7 @@ fn emit_upload_status_event(audit: &UploadAudit<'_>, block: &UploadStatusBlock) 
 struct PromotionAudit<'a> {
     headers: &'a HeaderMap,
     actor: Option<&'a str>,
-    repository: &'a str,
+    route: &'a str,
     source_index: &'a str,
     hosted_index: &'a str,
     project: &'a str,
@@ -760,7 +760,7 @@ struct PromotionAudit<'a> {
 fn emit_promotion_status_event(audit: &PromotionAudit<'_>, block: &UploadStatusBlock) {
     velodex_http::security::Event::new("promote", block.result)
         .actor(audit.actor)
-        .index(audit.repository)
+        .index(audit.route)
         .source_index(audit.source_index)
         .hosted_index(audit.hosted_index)
         .project(Some(audit.project))
@@ -881,7 +881,7 @@ async fn promote_request(
     let audit = PromotionAudit {
         headers,
         actor,
-        repository: &index.route,
+        route: &index.route,
         source_index: &source.route,
         hosted_index: &hosted.name,
         project: &project,
@@ -934,7 +934,7 @@ async fn yank_request(
         action: "yank",
         actor,
         index: &index.name,
-        repository: &index.route,
+        route: &index.route,
         hosted_index: &hosted.name,
         project: &project,
         version: version.as_deref(),
@@ -963,7 +963,7 @@ fn restore_request(
         action: "restore",
         actor,
         index: &index.name,
-        repository: &index.route,
+        route: &index.route,
         hosted_index: &hosted.name,
         project: &project,
         version: version.as_deref(),
@@ -998,7 +998,7 @@ pub(crate) async fn pypi_dispatch_delete(state: Arc<AppState>, uri: axum::http::
                     action: "unyank",
                     actor: actor.as_deref(),
                     index: &index.name,
-                    repository: &index.route,
+                    route: &index.route,
                     hosted_index: &hosted.name,
                     project: &project,
                     version: version.as_deref(),
@@ -1019,7 +1019,7 @@ pub(crate) async fn pypi_dispatch_delete(state: Arc<AppState>, uri: axum::http::
                 action: "delete",
                 actor: actor.as_deref(),
                 index: &index.name,
-                repository: &index.route,
+                route: &index.route,
                 hosted_index: &hosted.name,
                 project: &project,
                 version: version.as_deref(),
@@ -1106,13 +1106,13 @@ fn request_id(headers: &HeaderMap) -> Option<String> {
 fn security_upload_event<'a>(
     headers: &'a HeaderMap,
     actor: Option<&'a str>,
-    repository: &'a str,
+    route: &'a str,
     hosted_index: Option<&'a str>,
     result: &'static str,
 ) -> velodex_http::security::Event<'a> {
     let event = velodex_http::security::Event::new("upload", result)
         .actor(actor)
-        .index(repository)
+        .index(route)
         .request(headers);
     if let Some(hosted_index) = hosted_index {
         event.hosted_index(hosted_index)
@@ -1121,16 +1121,10 @@ fn security_upload_event<'a>(
     }
 }
 
-fn security_token_event(
-    headers: &HeaderMap,
-    actor: Option<&str>,
-    repository: &str,
-    result: &'static str,
-    reason: &str,
-) {
+fn security_token_event(headers: &HeaderMap, actor: Option<&str>, route: &str, result: &'static str, reason: &str) {
     let event = velodex_http::security::Event::new("token_use", result)
         .actor(actor)
-        .index(repository)
+        .index(route)
         .request(headers);
     if reason.is_empty() {
         event.emit();
@@ -1144,7 +1138,7 @@ struct MutationAudit<'a> {
     action: &'static str,
     actor: Option<&'a str>,
     index: &'a str,
-    repository: &'a str,
+    route: &'a str,
     hosted_index: &'a str,
     project: &'a str,
     version: Option<&'a str>,
@@ -1160,7 +1154,7 @@ fn security_mutation_event(audit: &MutationAudit<'_>, result: &Result<usize, Cac
     };
     velodex_http::security::Event::new(audit.action, security_result)
         .actor(audit.actor)
-        .index(audit.repository)
+        .index(audit.route)
         .hosted_index(audit.hosted_index)
         .project(Some(audit.project))
         .version(audit.version)
@@ -1181,7 +1175,7 @@ fn security_promotion_event(audit: PromotionAudit<'_>, result: &Result<usize, Ca
     };
     velodex_http::security::Event::new("promote", security_result)
         .actor(audit.actor)
-        .index(audit.repository)
+        .index(audit.route)
         .source_index(audit.source_index)
         .hosted_index(audit.hosted_index)
         .project(Some(audit.project))
@@ -1211,7 +1205,7 @@ fn emit_mutation_webhook(
             kind,
             created_at_unix,
             index: audit.index.to_owned(),
-            route: audit.repository.to_owned(),
+            route: audit.route.to_owned(),
             hosted_index: audit.hosted_index.to_owned(),
             project: audit.project.to_owned(),
             version: audit.version.map(str::to_owned),

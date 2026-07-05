@@ -14,7 +14,7 @@ const STYLES: Styles = Styles::styled()
     .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
     .placeholder(AnsiColor::Cyan.on_default());
 
-/// velodex: a PyPI-compatible read-through cache and private-index overlay.
+/// velodex: a PyPI-compatible read-through cache and private index.
 #[derive(Debug, Parser)]
 #[command(
     name = "velodex",
@@ -56,7 +56,7 @@ pub enum Command {
     /// Preview index policy decisions against cached records.
     #[command(subcommand)]
     Policy(PolicyCommand),
-    /// Plan, sync, and verify a configured mirror set.
+    /// Plan, sync, and verify a configured prefetch set.
     #[command(subcommand)]
     Prefetch(PrefetchCommand),
     /// Print the `OpenAPI` description of the HTTP API as JSON.
@@ -67,14 +67,14 @@ pub enum Command {
     SelfManage(SelfCommand),
 }
 
-/// Mirror synchronization commands.
+/// Prefetch synchronization commands.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum PrefetchCommand {
     /// Print the selected projects and files without writing cache entries.
     Plan(PrefetchPlanArgs),
     /// Fetch selected project pages, metadata siblings, and artifacts.
     Sync(PrefetchSyncArgs),
-    /// Check cached pages, metadata siblings, and artifacts for a mirror set.
+    /// Check cached pages, metadata siblings, and artifacts for a prefetch set.
     Verify(PrefetchVerifyArgs),
 }
 
@@ -89,7 +89,7 @@ impl PrefetchCommand {
     }
 }
 
-/// Options shared by mirror commands.
+/// Options shared by prefetch commands.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct PrefetchOptions {
     #[command(flatten)]
@@ -435,7 +435,7 @@ pub struct RuntimeArgs {
     #[arg(long)]
     pub data_dir: Option<PathBuf>,
 
-    /// Serve configured mirrors from cache only.
+    /// Serve configured cached indexes from cache only.
     #[arg(long)]
     pub offline: bool,
 

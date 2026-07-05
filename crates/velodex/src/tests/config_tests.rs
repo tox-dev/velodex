@@ -23,7 +23,7 @@ fn test_default_config() {
     assert_eq!(c.cache_ttl_secs, 300);
     assert_eq!(c.log, LogConfig::default());
     assert_eq!(c.rate_limit, RateLimitConfig::default());
-    // A pypi mirror with a local store overlaid in front, served at root/pypi.
+    // A pypi cache and a hosted store behind a virtual index, served at root/pypi.
     let routes: Vec<&str> = c.indexes.iter().map(|index| index.route.as_str()).collect();
     assert_eq!(routes, ["pypi", "hosted", "root/pypi"]);
     assert!(matches!(&c.indexes[0].kind, IndexKind::Cached { .. }));
@@ -101,7 +101,7 @@ max_file_size_bytes = 1048576
     );
     assert!(c.offline);
     let IndexKind::Cached { offline, prefetch, .. } = &c.indexes[0].kind else {
-        panic!("expected mirror");
+        panic!("expected cached index");
     };
     assert!(*offline);
     assert_eq!(prefetch.mode, PrefetchMode::MetadataOnly);
@@ -121,10 +121,10 @@ fn test_indexes_from_toml_classify_all_kinds() {
     let text = "\
 [[index]]\nname = \"pypi\"\ncached = \"https://pypi.org/simple/\"\ntoken = \"bear\"\nupstream_concurrency = 3\n\
 [[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\nusername = \"u\"\npassword = \"p\"\n\
-[[index]]\nname = \"team-local\"\nhosted = true\nupload_token = \"s\"\nvolatile = false\n\
+[[index]]\nname = \"team-hosted\"\nhosted = true\nupload_token = \"s\"\nvolatile = false\n\
 [[index.webhook]]\nname = \"ci\"\nurl = \"https://ci.example/hook\"\nsecret_env = \"VELODEX_WEBHOOK_SECRET\"\nevents = [\"upload\", \"delete\"]\n\
 [[index]]\nname = \"secret\"\nupload_token = \"z\"\n\
-[[index]]\nname = \"team\"\nroute = \"team/dev\"\nlayers = [\"team-local\", \"pypi\"]\nupload = \"team-local\"\n";
+[[index]]\nname = \"team\"\nroute = \"team/dev\"\nlayers = [\"team-hosted\", \"pypi\"]\nupload = \"team-hosted\"\n";
     let c = toml_config(text);
     assert_eq!(c.indexes.len(), 5);
     assert_eq!(c.indexes[0].route, "pypi"); // route defaults to name
@@ -140,7 +140,7 @@ fn test_indexes_from_toml_classify_all_kinds() {
             ..
         }
     ));
-    assert!(matches!(&c.indexes[2].kind, IndexKind::Hosted { volatile: false, .. })); // explicit local, non-volatile
+    assert!(matches!(&c.indexes[2].kind, IndexKind::Hosted { volatile: false, .. })); // explicit hosted, non-volatile
     assert_eq!(c.indexes[2].webhooks.len(), 1);
     assert_eq!(c.indexes[2].webhooks[0].name, "ci");
     assert_eq!(c.indexes[2].webhooks[0].url, "https://ci.example/hook");
@@ -149,11 +149,11 @@ fn test_indexes_from_toml_classify_all_kinds() {
         WebhookSecret::Env("VELODEX_WEBHOOK_SECRET".to_owned())
     );
     assert_eq!(c.indexes[2].webhooks[0].events, ["upload", "delete"]);
-    assert!(matches!(&c.indexes[3].kind, IndexKind::Hosted { volatile: true, .. })); // upload_token implies local, default volatile
+    assert!(matches!(&c.indexes[3].kind, IndexKind::Hosted { volatile: true, .. })); // upload_token implies hosted, default volatile
     assert_eq!(c.indexes[4].route, "team/dev");
     assert!(
         matches!(&c.indexes[4].kind, IndexKind::Virtual { layers, upload: Some(upload) }
-            if layers == &["team-local".to_owned(), "pypi".to_owned()] && upload == "team-local")
+            if layers == &["team-hosted".to_owned(), "pypi".to_owned()] && upload == "team-hosted")
     );
 }
 

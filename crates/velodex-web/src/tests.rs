@@ -83,8 +83,7 @@ fn test_search_page_from_json() {
             "display_name": "Flask",
             "normalized_name": "flask",
             "route": "root/pypi",
-            "repository": "root/pypi",
-            "type": "override",
+                        "type": "override",
             "summary": "web framework",
         }],
     });

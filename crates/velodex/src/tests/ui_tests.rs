@@ -181,9 +181,9 @@ async fn test_ui_dashboard_renders_indexes_and_counters() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("change serial"));
     assert!(body.contains("root/pypi"));
-    assert!(body.contains("badge kind-overlay"));
+    assert!(body.contains("badge kind-virtual"));
     assert!(body.contains("badge uploads"));
-    // The overlay renders its layers as an ordered stack with the upload target marked.
+    // The virtual index renders its layers as an ordered stack with the upload target marked.
     assert!(body.contains("layer-stack"));
     assert!(body.contains("uploads land here"));
     assert!(body.contains("resolves top to bottom"));

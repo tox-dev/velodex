@@ -1,4 +1,4 @@
-//! Mirror planning, synchronization, and verification.
+//! Prefetch planning, synchronization, and verification.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -51,16 +51,16 @@ async fn plan(config: &Config, options: &PrefetchOptions, out: &mut Output) -> a
         projects += 1;
         match plan_detail(&state, &target, project).await {
             Ok(Some(detail)) => {
-                write_row(out, Row::page(&target.repo, project, "selected", ""))?;
+                write_row(out, Row::page(&target.index, project, "selected", ""))?;
                 for candidate in candidates(&detail, selection.rules.get(project), &selection.filters) {
                     match candidate {
                         FileCandidate::Include(file) => {
                             files += 1;
-                            write_file_row(out, &target.repo, project, &file, "selected", "")?;
+                            write_file_row(out, &target.index, project, &file, "selected", "")?;
                             if let Some(metadata) = &file.metadata {
                                 let metadata_filename = format!("{}.metadata", file.filename);
                                 let row = Row::metadata(
-                                    &target.repo,
+                                    &target.index,
                                     project,
                                     &metadata_filename,
                                     metadata,
@@ -73,27 +73,27 @@ async fn plan(config: &Config, options: &PrefetchOptions, out: &mut Output) -> a
                         }
                         FileCandidate::Skip(file, reason) => {
                             skipped += 1;
-                            write_file_row(out, &target.repo, project, &file, "skipped", reason)?;
+                            write_file_row(out, &target.index, project, &file, "skipped", reason)?;
                         }
                     }
                 }
             }
             Ok(None) => {
                 skipped += 1;
-                write_row(out, Row::page(&target.repo, project, "skipped", "project not found"))?;
+                write_row(out, Row::page(&target.index, project, "skipped", "project not found"))?;
             }
             Err(err) => {
                 failures += 1;
-                write_row(out, Row::page(&target.repo, project, "failure", &err.to_string()))?;
+                write_row(out, Row::page(&target.index, project, "failure", &err.to_string()))?;
             }
         }
     }
-    write_count(out, &target.repo, "projects", projects)?;
-    write_count(out, &target.repo, "files", files)?;
-    write_count(out, &target.repo, "skipped", skipped)?;
-    write_count(out, &target.repo, "failures", failures)?;
+    write_count(out, &target.index, "projects", projects)?;
+    write_count(out, &target.index, "files", files)?;
+    write_count(out, &target.index, "skipped", skipped)?;
+    write_count(out, &target.index, "failures", failures)?;
     if failures > 0 {
-        bail!("mirror plan found {failures} failure(s)");
+        bail!("prefetch plan found {failures} failure(s)");
     }
     Ok(())
 }
@@ -105,33 +105,33 @@ async fn sync(config: &Config, options: &PrefetchOptions, out: &mut Output) -> a
     let selection = selection(&state, &target, options, SelectionSource::Upstream).await?;
     out.write_all(HEADER.as_bytes())?;
     let mut summary = SyncSummary::default();
-    write_count(out, &target.repo, "started_at", started_at)?;
+    write_count(out, &target.index, "started_at", started_at)?;
     for project in &selection.projects {
         summary.projects += 1;
         match velodex_ecosystem_pypi::cache::materialize_detail(state.clone(), target.position, project.clone()).await {
             Ok(Some(_)) => {
                 let detail = cached_detail(&state, &target, project)?;
-                write_row(out, Row::page(&target.repo, project, "synced", ""))?;
+                write_row(out, Row::page(&target.index, project, "synced", ""))?;
                 sync_files(out, &state, &target, project, &detail, &selection, &mut summary).await?;
             }
             Ok(None) => {
                 summary.skipped += 1;
-                write_row(out, Row::page(&target.repo, project, "skipped", "project not found"))?;
+                write_row(out, Row::page(&target.index, project, "skipped", "project not found"))?;
             }
             Err(err) => {
                 summary.failures += 1;
-                write_row(out, Row::page(&target.repo, project, "failure", &err.user_message()))?;
+                write_row(out, Row::page(&target.index, project, "failure", &err.user_message()))?;
             }
         }
     }
-    write_count(out, &target.repo, "finished_at", unix_now())?;
-    write_count(out, &target.repo, "packages_seen", summary.projects)?;
-    write_count(out, &target.repo, "files_downloaded", summary.downloaded)?;
-    write_count(out, &target.repo, "bytes_downloaded", summary.bytes)?;
-    write_count(out, &target.repo, "skipped_files", summary.skipped)?;
-    write_count(out, &target.repo, "failures", summary.failures)?;
+    write_count(out, &target.index, "finished_at", unix_now())?;
+    write_count(out, &target.index, "packages_seen", summary.projects)?;
+    write_count(out, &target.index, "files_downloaded", summary.downloaded)?;
+    write_count(out, &target.index, "bytes_downloaded", summary.bytes)?;
+    write_count(out, &target.index, "skipped_files", summary.skipped)?;
+    write_count(out, &target.index, "failures", summary.failures)?;
     if summary.failures > 0 {
-        bail!("mirror sync found {} failure(s)", summary.failures);
+        bail!("prefetch sync found {} failure(s)", summary.failures);
     }
     Ok(())
 }
@@ -143,21 +143,21 @@ async fn verify(config: &Config, options: &PrefetchOptions, out: &mut Output) ->
     out.write_all(HEADER.as_bytes())?;
     let mut problems = 0_u64;
     for project in &selection.projects {
-        let key = format!("{}/{}", target.mirror, project);
+        let key = format!("{}/{}", target.cached, project);
         let Some(record) = state
             .meta
             .get_index(&key)
             .context(format!("read cached project {key}"))?
         else {
             problems += 1;
-            write_page_row(out, &target.repo, project, "missing", "project page is not cached")?;
+            write_page_row(out, &target.index, project, "missing", "project page is not cached")?;
             continue;
         };
         let detail = match raw_detail(project, &record) {
             Ok(detail) => detail,
             Err(err) => {
                 problems += 1;
-                write_page_row(out, &target.repo, project, "failure", &err.to_string())?;
+                write_page_row(out, &target.index, project, "failure", &err.to_string())?;
                 continue;
             }
         };
@@ -184,9 +184,9 @@ async fn verify(config: &Config, options: &PrefetchOptions, out: &mut Output) ->
             }
         }
     }
-    write_count(out, &target.repo, "problems", problems)?;
+    write_count(out, &target.index, "problems", problems)?;
     if problems > 0 {
-        bail!("mirror verify found {problems} problem(s)");
+        bail!("prefetch verify found {problems} problem(s)");
     }
     Ok(())
 }
@@ -205,7 +205,7 @@ async fn sync_files(
             FileCandidate::Include(file) => file,
             FileCandidate::Skip(file, reason) => {
                 summary.skipped += 1;
-                write_file_row(out, &target.repo, project, &file, "skipped", reason)?;
+                write_file_row(out, &target.index, project, &file, "skipped", reason)?;
                 continue;
             }
         };
@@ -214,7 +214,7 @@ async fn sync_files(
             match sync_metadata(state, &target.route, &metadata_filename, &file.digest, &metadata.digest).await {
                 Ok(SyncOutcome::Cached(bytes)) => {
                     let row = Row::metadata(
-                        &target.repo,
+                        &target.index,
                         project,
                         &metadata_filename,
                         metadata,
@@ -228,7 +228,7 @@ async fn sync_files(
                     summary.downloaded += 1;
                     summary.bytes += bytes;
                     let row = Row::metadata(
-                        &target.repo,
+                        &target.index,
                         project,
                         &metadata_filename,
                         metadata,
@@ -242,7 +242,7 @@ async fn sync_files(
                     summary.failures += 1;
                     let reason = err.user_message();
                     let row = Row::metadata(
-                        &target.repo,
+                        &target.index,
                         project,
                         &metadata_filename,
                         metadata,
@@ -256,21 +256,21 @@ async fn sync_files(
         }
         if selection.filters.metadata_only {
             summary.skipped += 1;
-            write_file_row(out, &target.repo, project, &file, "skipped", "metadata-only")?;
+            write_file_row(out, &target.index, project, &file, "skipped", "metadata-only")?;
             continue;
         }
         match sync_file(state.clone(), target, &file).await {
             Ok(SyncOutcome::Cached(bytes)) => {
-                write_file_row_bytes(out, &target.repo, project, &file, Some(bytes), "cached", "")?;
+                write_file_row_bytes(out, &target.index, project, &file, Some(bytes), "cached", "")?;
             }
             Ok(SyncOutcome::Downloaded(bytes)) => {
                 summary.downloaded += 1;
                 summary.bytes += bytes;
-                write_file_row_bytes(out, &target.repo, project, &file, Some(bytes), "downloaded", "")?;
+                write_file_row_bytes(out, &target.index, project, &file, Some(bytes), "downloaded", "")?;
             }
             Err(err) => {
                 summary.failures += 1;
-                write_file_row(out, &target.repo, project, &file, "failure", &err.user_message())?;
+                write_file_row(out, &target.index, project, &file, "failure", &err.user_message())?;
             }
         }
     }
@@ -280,7 +280,7 @@ async fn sync_files(
 async fn sync_file(
     state: Arc<AppState>,
     target: &Target,
-    file: &MirrorFile,
+    file: &PrefetchFile,
 ) -> Result<SyncOutcome, velodex_ecosystem_pypi::cache::CacheError> {
     let digest = Digest::from_hex(&file.digest).ok_or(velodex_ecosystem_pypi::cache::CacheError::FileNotFound)?;
     if state.blobs.exists(&digest) {
@@ -326,7 +326,7 @@ fn verify_blob(
 ) -> anyhow::Result<u64> {
     let Some(digest) = Digest::from_hex(check.digest_hex) else {
         let row = Row::check(
-            &target.repo,
+            &target.index,
             project,
             check,
             check.digest_hex,
@@ -338,7 +338,7 @@ fn verify_blob(
     };
     if !state.blobs.exists(&digest) {
         let row = Row::check(
-            &target.repo,
+            &target.index,
             project,
             check,
             digest.as_str(),
@@ -352,7 +352,7 @@ fn verify_blob(
         Ok(true) => Ok(0),
         Ok(false) => {
             let row = Row::check(
-                &target.repo,
+                &target.index,
                 project,
                 check,
                 digest.as_str(),
@@ -364,7 +364,7 @@ fn verify_blob(
         }
         Err(err) => {
             let reason = err.to_string();
-            let row = Row::check(&target.repo, project, check, digest.as_str(), "failure", &reason);
+            let row = Row::check(&target.index, project, check, digest.as_str(), "failure", &reason);
             write_row(out, row)?;
             Ok(1)
         }
@@ -373,7 +373,7 @@ fn verify_blob(
 
 async fn plan_detail(state: &Arc<AppState>, target: &Target, project: &str) -> anyhow::Result<Option<ProjectDetail>> {
     if target.offline {
-        let key = format!("{}/{}", target.mirror, project);
+        let key = format!("{}/{}", target.cached, project);
         return state
             .meta
             .get_index(&key)?
@@ -413,7 +413,7 @@ fn raw_detail(project: &str, record: &CachedIndex) -> anyhow::Result<ProjectDeta
 }
 
 fn cached_detail(state: &Arc<AppState>, target: &Target, project: &str) -> anyhow::Result<ProjectDetail> {
-    let key = format!("{}/{}", target.mirror, project);
+    let key = format!("{}/{}", target.cached, project);
     let record = state
         .meta
         .get_index(&key)
@@ -463,8 +463,8 @@ async fn selection(
         PrefetchMode::Selected | PrefetchMode::MetadataOnly => {
             if rules.is_empty() {
                 bail!(
-                    "mirror {} has no selected packages; add [index.prefetch].packages or --package",
-                    target.repo
+                    "cached index {} has no selected packages; add [index.prefetch].packages or --package",
+                    target.index
                 );
             }
             rules.keys().cloned().collect()
@@ -481,7 +481,7 @@ async fn all_projects(state: &Arc<AppState>, target: &Target, source: SelectionS
     if matches!(source, SelectionSource::Cache) || target.offline {
         return Ok(state
             .meta
-            .list_projects(&target.mirror)?
+            .list_projects(&target.cached)?
             .into_iter()
             .map(|name| normalize_name(&name))
             .collect::<BTreeSet<_>>()
@@ -598,7 +598,7 @@ fn candidates<'a>(
     filters: &'a ArtifactFilters,
 ) -> impl Iterator<Item = FileCandidate> + 'a {
     detail.files.iter().map(move |file| {
-        let file = mirror_file(file);
+        let file = prefetch_file(file);
         if file.digest.is_empty() {
             return FileCandidate::Skip(file, "missing sha256");
         }
@@ -609,11 +609,11 @@ fn candidates<'a>(
     })
 }
 
-fn mirror_file(file: &File) -> MirrorFile {
+fn prefetch_file(file: &File) -> PrefetchFile {
     let digest = file.hashes.get("sha256").cloned();
     let metadata = metadata_sibling(file);
     let source = parse_distribution_filename(&file.filename).ok();
-    MirrorFile {
+    PrefetchFile {
         filename: file.filename.clone(),
         digest: digest.unwrap_or_default(),
         url: file.url.clone(),
@@ -633,7 +633,7 @@ fn metadata_sibling(file: &File) -> Option<MirrorMetadata> {
     })
 }
 
-fn decision(file: &MirrorFile, rule: Option<&ProjectRule>, filters: &ArtifactFilters) -> Result<(), &'static str> {
+fn decision(file: &PrefetchFile, rule: Option<&ProjectRule>, filters: &ArtifactFilters) -> Result<(), &'static str> {
     let Some(source) = file.source.as_ref() else {
         return Err("unsupported filename");
     };
@@ -683,80 +683,80 @@ fn tags_allowed(value: &str, filters: &BTreeSet<String>) -> bool {
     filters.is_empty() || value.split('.').any(|tag| filters.contains(tag))
 }
 
-fn target(config: &Config, state: &Arc<AppState>, repo: &str) -> anyhow::Result<Target> {
+fn target(config: &Config, state: &Arc<AppState>, selector: &str) -> anyhow::Result<Target> {
     let position = state
         .indexes
         .iter()
-        .position(|index| index.name == repo || index.route == repo)
-        .context(format!("unknown cached index {repo:?}"))?;
+        .position(|index| index.name == selector || index.route == selector)
+        .context(format!("unknown cached index {selector:?}"))?;
     let index = state.index_at(position);
-    let (mirror, client, offline) = target_mirror(state, index)?;
-    let prefetch = mirror_prefetch(config, &mirror)?.clone();
+    let (cached, client, offline) = target_upstream(state, index)?;
+    let prefetch = cached_prefetch(config, &cached)?.clone();
     Ok(Target {
-        repo: repo.to_owned(),
+        index: selector.to_owned(),
         route: index.route.clone(),
         position,
-        mirror,
+        cached,
         client,
         offline,
         prefetch,
     })
 }
 
-fn target_mirror(state: &AppState, index: &Index) -> anyhow::Result<(String, UpstreamClient, bool)> {
+fn target_upstream(state: &AppState, index: &Index) -> anyhow::Result<(String, UpstreamClient, bool)> {
     match &index.kind {
         IndexKind::Cached { client, offline } => Ok((index.name.clone(), client.clone(), *offline)),
         IndexKind::Hosted { .. } => bail!("index {:?} is hosted and has no upstream", index.name),
         IndexKind::Virtual { layers, .. } => {
-            let mut mirror = None;
+            let mut cached = None;
             for &pos in layers {
                 let layer = state.index_at(pos);
                 if let IndexKind::Cached { client, offline } = &layer.kind
-                    && mirror.replace((layer.name.clone(), client.clone(), *offline)).is_some()
+                    && cached.replace((layer.name.clone(), client.clone(), *offline)).is_some()
                 {
                     bail!("index {:?} has more than one cached member", index.name);
                 }
             }
-            mirror.context(format!("index {:?} has no cached member", index.name))
+            cached.context(format!("index {:?} has no cached member", index.name))
         }
     }
 }
 
-fn mirror_prefetch<'a>(config: &'a Config, mirror: &str) -> anyhow::Result<&'a PrefetchConfig> {
+fn cached_prefetch<'a>(config: &'a Config, cached: &str) -> anyhow::Result<&'a PrefetchConfig> {
     config
         .indexes
         .iter()
-        .find_map(|index| match (index.name == mirror, &index.kind) {
+        .find_map(|index| match (index.name == cached, &index.kind) {
             (true, ConfigIndexKind::Cached { prefetch, .. }) => Some(prefetch.as_ref()),
             _ => None,
         })
-        .context(format!("mirror config {mirror:?} not found"))
+        .context(format!("prefetch config {cached:?} not found"))
 }
 
 fn content_type_is_json(content_type: Option<&str>) -> bool {
     content_type.is_none_or(|content_type| content_type.contains("json"))
 }
 
-fn write_page_row(out: &mut Output, repo: &str, project: &str, status: &str, reason: &str) -> anyhow::Result<()> {
-    write_row(out, Row::page(repo, project, status, reason))
+fn write_page_row(out: &mut Output, index: &str, project: &str, status: &str, reason: &str) -> anyhow::Result<()> {
+    write_row(out, Row::page(index, project, status, reason))
 }
 
 fn write_file_row(
     out: &mut Output,
-    repo: &str,
+    index: &str,
     project: &str,
-    file: &MirrorFile,
+    file: &PrefetchFile,
     status: &str,
     reason: &str,
 ) -> anyhow::Result<()> {
-    write_file_row_bytes(out, repo, project, file, file.size, status, reason)
+    write_file_row_bytes(out, index, project, file, file.size, status, reason)
 }
 
 fn write_file_row_bytes(
     out: &mut Output,
-    repo: &str,
+    index: &str,
     project: &str,
-    file: &MirrorFile,
+    file: &PrefetchFile,
     bytes: Option<u64>,
     status: &str,
     reason: &str,
@@ -765,7 +765,7 @@ fn write_file_row_bytes(
         out,
         Row {
             kind: "file",
-            repo,
+            index,
             project,
             filename: &file.filename,
             digest: &file.digest,
@@ -781,7 +781,7 @@ fn write_row(out: &mut Output, row: Row<'_>) -> anyhow::Result<()> {
     let bytes = row.bytes.map_or_else(String::new, |bytes| bytes.to_string());
     let cells = [
         row.kind,
-        row.repo,
+        row.index,
         row.project,
         row.filename,
         row.digest,
@@ -800,12 +800,12 @@ fn write_row(out: &mut Output, row: Row<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn write_count(out: &mut Output, repo: &str, name: &str, value: u64) -> anyhow::Result<()> {
+fn write_count(out: &mut Output, index: &str, name: &str, value: u64) -> anyhow::Result<()> {
     write_row(
         out,
         Row {
             kind: "summary",
-            repo,
+            index,
             project: "",
             filename: name,
             digest: "",
@@ -879,7 +879,7 @@ struct BlobCheck<'a> {
 #[derive(Clone, Copy)]
 struct Row<'a> {
     kind: &'a str,
-    repo: &'a str,
+    index: &'a str,
     project: &'a str,
     filename: &'a str,
     digest: &'a str,
@@ -890,10 +890,10 @@ struct Row<'a> {
 }
 
 impl<'a> Row<'a> {
-    const fn page(repo: &'a str, project: &'a str, status: &'a str, reason: &'a str) -> Self {
+    const fn page(index: &'a str, project: &'a str, status: &'a str, reason: &'a str) -> Self {
         Self {
             kind: "page",
-            repo,
+            index,
             project,
             filename: "",
             digest: "",
@@ -905,7 +905,7 @@ impl<'a> Row<'a> {
     }
 
     fn metadata(
-        repo: &'a str,
+        index: &'a str,
         project: &'a str,
         filename: &'a str,
         metadata: &'a MirrorMetadata,
@@ -915,7 +915,7 @@ impl<'a> Row<'a> {
     ) -> Self {
         Self {
             kind: "metadata",
-            repo,
+            index,
             project,
             filename,
             digest: &metadata.digest,
@@ -927,7 +927,7 @@ impl<'a> Row<'a> {
     }
 
     const fn check(
-        repo: &'a str,
+        index: &'a str,
         project: &'a str,
         check: BlobCheck<'a>,
         digest: &'a str,
@@ -936,7 +936,7 @@ impl<'a> Row<'a> {
     ) -> Self {
         Self {
             kind: check.kind,
-            repo,
+            index,
             project,
             filename: check.filename,
             digest,
@@ -978,11 +978,11 @@ impl From<PrefetchConfig> for ArtifactFilters {
 }
 
 enum FileCandidate {
-    Include(MirrorFile),
-    Skip(MirrorFile, &'static str),
+    Include(PrefetchFile),
+    Skip(PrefetchFile, &'static str),
 }
 
-struct MirrorFile {
+struct PrefetchFile {
     filename: String,
     digest: String,
     url: String,
@@ -997,10 +997,10 @@ struct MirrorMetadata {
 }
 
 struct Target {
-    repo: String,
+    index: String,
     route: String,
     position: usize,
-    mirror: String,
+    cached: String,
     client: UpstreamClient,
     offline: bool,
     prefetch: PrefetchConfig,
