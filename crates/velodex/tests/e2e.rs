@@ -4,20 +4,18 @@
 //! Gated behind the `e2e` feature so they never run in the default `cargo test` or the coverage gate
 //! (they need the clients and are slower than unit tests). Two tiers:
 //!
-//! - **`e2e` (hermetic)**: velodex proxies a local fixture index that serves a couple of tiny, real,
-//!   installable wheels. No external network, so it is deterministic, flake-free, and fast — the
-//!   fixed cost is velodex spawn (~0.1s) plus in-process fetches, not a pypi.org round trip. Run with
-//!   `cargo test -p velodex --features e2e`.
-//! - **`e2e-live`**: the same client flows against the real pypi.org, to catch upstream drift. Run
-//!   with `cargo test -p velodex --features e2e-live` in a network-enabled job.
+//! - **`e2e` (hermetic)**: velodex proxies a local fixture index that serves a couple of tiny, real, installable
+//!   wheels. No external network, so it is deterministic, flake-free, and fast — the fixed cost is velodex spawn
+//!   (~0.1s) plus in-process fetches, not a pypi.org round trip. Run with `cargo test -p velodex --features e2e`.
+//! - **`e2e-live`**: the same client flows against the real pypi.org, to catch upstream drift. Run with `cargo test -p
+//!   velodex --features e2e-live` in a network-enabled job.
 //!
 //! Design goals, per the project's testing philosophy:
-//! - **Isolated**: every test owns its own velodex server (own temp data dir, own ephemeral port) and,
-//!   for hermetic tests, its own fixture upstream. No shared cache or counter state; any test runs
-//!   alone.
+//! - **Isolated**: every test owns its own velodex server (own temp data dir, own ephemeral port) and, for hermetic
+//!   tests, its own fixture upstream. No shared cache or counter state; any test runs alone.
 //! - **Parallel**: because state is per-test, the default multi-threaded runner just works.
-//! - **Proof, not assumption**: the PEP 658 fast path is asserted from velodex's own `/metrics`
-//!   counter — observed at the server, not inferred from the client exiting 0.
+//! - **Proof, not assumption**: the PEP 658 fast path is asserted from velodex's own `/metrics` counter — observed at
+//!   the server, not inferred from the client exiting 0.
 #![cfg(feature = "e2e")]
 
 use std::collections::HashMap;
