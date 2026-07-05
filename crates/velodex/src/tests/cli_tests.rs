@@ -328,7 +328,7 @@ fn test_policy_commands_expose_runtime_args() {
 }
 
 #[test]
-fn test_parse_mirror_plan_options() {
+fn test_parse_prefetch_plan_options() {
     let cli = parse(&[
         "velodex",
         "prefetch",
@@ -374,7 +374,7 @@ fn test_parse_mirror_plan_options() {
 }
 
 #[test]
-fn test_mirror_commands_expose_runtime_args() {
+fn test_prefetch_commands_expose_runtime_args() {
     for cli in [
         parse(&["velodex", "prefetch", "plan", "--data-dir", "/plan", "pypi"]),
         parse(&["velodex", "prefetch", "sync", "--data-dir", "/sync", "pypi"]),

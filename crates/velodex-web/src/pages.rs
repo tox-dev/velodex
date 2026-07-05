@@ -429,7 +429,7 @@ fn DashboardBody(data: UiSnapshot, usage: UiStats) -> impl IntoView {
     }
 }
 
-/// An overlay drawn as what it is: an ordered stack of layers under one route, resolved top to
+/// A virtual index drawn as what it is: an ordered stack of layers under one route, resolved top to
 /// bottom with the first file match winning.
 #[component]
 fn OverlayCard(index: UiIndex, all: Vec<UiIndex>, counters: Option<UiCounters>) -> impl IntoView {
@@ -471,7 +471,7 @@ fn OverlayCard(index: UiIndex, all: Vec<UiIndex>, counters: Option<UiCounters>) 
         }
     });
     view! {
-        <div class="card overlay-card">
+        <div class="card virtual-card">
             <div class="card-head">
                 <a href=browse class="card-title">{index.name.clone()}</a>
                 <span class="badge kind-virtual">"virtual"</span>

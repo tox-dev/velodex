@@ -22,13 +22,13 @@ pub struct UiIndex {
     pub route: String,
     /// The package ecosystem, for example `pypi`.
     pub ecosystem: String,
-    /// The role: `proxy`, `hosted`, or `virtual`.
+    /// The role: `cached`, `hosted`, or `virtual`.
     pub kind: String,
     /// Member names for a virtual index; empty otherwise.
     pub layers: Vec<String>,
     /// Whether uploads are enabled (a hosted layer with a token).
     pub uploads: bool,
-    /// For an overlay: the layer uploads land in.
+    /// For a virtual index: the layer uploads land in.
     pub upload_to: Option<String>,
     pub upstream: Option<UiUpstream>,
     pub hosted: Option<UiHosted>,

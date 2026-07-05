@@ -439,7 +439,7 @@ fn project_list() -> OperationBuilder {
         .summary(Some("List projects"))
         .description(Some(
             "The projects velodex has observed on this index: everything uploaded, plus every mirrored \
-             project a client has asked for. An overlay unions its layers. Repository policy filters \
+             project a client has asked for. A virtual index unions its layers. Index policy filters \
              denied projects before serialization. JSON or HTML by `Accept`.",
         ))
         .parameter(route_param())
@@ -462,7 +462,7 @@ fn project_detail() -> OperationBuilder {
         .tag("simple")
         .summary(Some("Project detail"))
         .description(Some(
-            "All files of one project, merged across overlay layers (first match per filename wins, \
+            "All files of one project, merged across virtual-index layers (first match per filename wins, \
              versions union). File URLs point back at velodex's own `files/` route; `core-metadata` \
              advertises the PEP 658 sibling. Repository policy filters denied files and their \
              versions before serialization.",
@@ -631,7 +631,7 @@ fn file_download() -> OperationBuilder {
         .tag("files")
         .summary(Some("Download an artifact"))
         .description(Some(
-            "Serves the blob if cached; otherwise fetches it from its source mirror, verifies the \
+            "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the \
              sha256, caches it, and serves it. The `{filename}` segment is display context and must \
              be percent-encoded as one path segment. Responses are immutable \
              (`Cache-Control: max-age=31536000`).",
@@ -660,7 +660,7 @@ fn file_download() -> OperationBuilder {
         )
         .response(
             "502",
-            ResponseBuilder::new().description("The source mirror failed or the bytes did not match the digest"),
+            ResponseBuilder::new().description("The upstream cache failed or the bytes did not match the digest"),
         )
 }
 
@@ -780,8 +780,8 @@ fn yank() -> OperationBuilder {
     removal_operation(
         "Yank files",
         "Marks the version's files yanked (PEP 592): resolvers skip them, exact-pin installs still \
-         succeed. Uploaded files get their record updated; files served from a read-only mirror get \
-         a reversible override on the overlay's local layer, so upstream releases can be yanked too. \
+         succeed. Uploaded files get their record updated; files served from a read-only cache get \
+         a reversible override on the virtual index's hosted layer, so upstream releases can be yanked too. \
          Omit `{version}/` (i.e. `PUT /{route}/{project}/yank`) to yank the whole project. Add \
          `?reason=...` to preserve a resolver-visible reason.",
         "affected 1 file(s)",
@@ -798,8 +798,8 @@ fn yank() -> OperationBuilder {
 fn restore() -> OperationBuilder {
     removal_operation(
         "Restore hidden files",
-        "Clears the hidden marker a DELETE leaves on files served from a read-only mirror, making \
-         them visible on the overlay again. Omit `{version}/` to restore the whole project.",
+        "Clears the hidden marker a DELETE leaves on files served from a read-only cache, making \
+         them visible on the virtual index again. Omit `{version}/` to restore the whole project.",
         "affected 1 file(s)",
     )
 }
@@ -1000,7 +1000,7 @@ fn delete_version() -> OperationBuilder {
     removal_operation(
         "Delete a version",
         "Removes the version's uploaded files outright. Requires the local layer to be `volatile`; \
-         for an overlay, the upstream files become visible again.",
+         for a virtual index, the upstream files become visible again.",
         "removed 1 file(s)",
     )
     .response(
@@ -1072,7 +1072,7 @@ fn status() -> OperationBuilder {
                         "requests": 128,
                         "metadata_requests": 37,
                         "indexes": [
-                            {"name": "pypi", "route": "pypi", "kind": "mirror", "layers": [],
+                            {"name": "pypi", "route": "pypi", "kind": "cached", "layers": [],
                              "uploads": false, "volatile_deletes": false, "upload_to": null,
                              "upstream": {"url": "https://pypi.org/simple/", "auth": {"kind": "none", "redacted": null}, "status": "configured", "offline": false},
                              "hosted": null, "project_count": 128, "upload_count": 0, "recent_uploads": []},
@@ -1082,7 +1082,7 @@ fn status() -> OperationBuilder {
                              "project_count": 2, "upload_count": 4,
                              "recent_uploads": [{"project": "velodexpkg", "filename": "velodexpkg-1.0-py3-none-any.whl",
                                                 "version": "1.0", "uploaded_at": "2026-01-01T00:00:00Z", "size": 1832}]},
-                            {"name": "root/pypi", "route": "root/pypi", "kind": "overlay",
+                            {"name": "root/pypi", "route": "root/pypi", "kind": "virtual",
                              "layers": ["hosted", "pypi"], "uploads": true, "volatile_deletes": true,
                              "upload_to": "hosted",
                              "upstream": null, "hosted": null, "project_count": 0, "upload_count": 0,

@@ -265,7 +265,7 @@ impl Velodex {
     fn start_against_with_overlay_policy(upstream_url: &str, policy_toml: &str) -> Self {
         let data = TempDir::new().expect("temp data dir");
         let config = data.path().join("velodex.toml");
-        // A mirror of the given upstream with a local store overlaid in front, served at root/pypi.
+        // A cache of the given upstream with a hosted store, combined by a virtual index at root/pypi.
         let config_toml = format!(
             "[[index]]\nname = \"upstream\"\nroute = \"upstream\"\ncached = \"{upstream_url}\"\n\
              [[index]]\nname = \"hosted\"\nhosted = true\nupload_token = \"{UPLOAD_TOKEN}\"\n\
@@ -309,7 +309,7 @@ impl Velodex {
         format!("http://127.0.0.1:{}/root/pypi/simple/", self.port)
     }
 
-    /// The upload endpoint (repository URL): uploads to the root/pypi overlay land in its local layer.
+    /// The upload URL: uploads to the root/pypi virtual index land in its hosted layer.
     fn upload_url(&self) -> String {
         format!("http://127.0.0.1:{}/root/pypi/", self.port)
     }
@@ -819,16 +819,16 @@ fn e2e_web_ui_dashboard_and_project_page() {
 #[test]
 fn e2e_upstream_yank_hide_restore_round_trip() {
     let (_upstream, velodex) = hermetic();
-    // Warm the overlay so the mirror file is known.
+    // Warm the virtual index so the cached file is known.
     let (_, detail) = http_get(velodex.port, "/root/pypi/simple/velodexa/").expect("detail");
     assert!(detail.contains("velodexa-1.0-py3-none-any.whl"));
 
-    // Yank the upstream release through the overlay, then clear it.
+    // Yank the upstream release through the virtual index, then clear it.
     assert_eq!(http_verb(velodex.port, "PUT", "/root/pypi/velodexa/1.0/yank"), 200);
     let (_, yanked) = http_get(velodex.port, "/root/pypi/simple/velodexa/").expect("detail");
     assert!(
         yanked.contains("\"yanked\":true"),
-        "upstream file not yanked via overlay"
+        "upstream file not yanked via virtual index"
     );
     assert_eq!(http_verb(velodex.port, "DELETE", "/root/pypi/velodexa/1.0/yank"), 200);
 

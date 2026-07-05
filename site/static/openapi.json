@@ -196,7 +196,7 @@
                   "indexes": [
                     {
                       "hosted": null,
-                      "kind": "mirror",
+                      "kind": "cached",
                       "layers": [],
                       "name": "pypi",
                       "project_count": 128,
@@ -246,7 +246,7 @@
                     },
                     {
                       "hosted": null,
-                      "kind": "overlay",
+                      "kind": "virtual",
                       "layers": [
                         "hosted",
                         "pypi"
@@ -545,7 +545,7 @@
           "files"
         ],
         "summary": "Download an artifact",
-        "description": "Serves the blob if cached; otherwise fetches it from its source mirror, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`).",
+        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`).",
         "parameters": [
           {
             "name": "route",
@@ -599,7 +599,7 @@
             "description": "No file with this digest is known"
           },
           "502": {
-            "description": "The source mirror failed or the bytes did not match the digest"
+            "description": "The upstream cache failed or the bytes did not match the digest"
           }
         }
       }
@@ -841,7 +841,7 @@
           "simple"
         ],
         "summary": "List projects",
-        "description": "The projects velodex has observed on this index: everything uploaded, plus every mirrored project a client has asked for. An overlay unions its layers. Repository policy filters denied projects before serialization. JSON or HTML by `Accept`.",
+        "description": "The projects velodex has observed on this index: everything uploaded, plus every mirrored project a client has asked for. A virtual index unions its layers. Index policy filters denied projects before serialization. JSON or HTML by `Accept`.",
         "parameters": [
           {
             "name": "route",
@@ -891,7 +891,7 @@
           "simple"
         ],
         "summary": "Project detail",
-        "description": "All files of one project, merged across overlay layers (first match per filename wins, versions union). File URLs point back at velodex's own `files/` route; `core-metadata` advertises the PEP 658 sibling. Repository policy filters denied files and their versions before serialization.",
+        "description": "All files of one project, merged across virtual-index layers (first match per filename wins, versions union). File URLs point back at velodex's own `files/` route; `core-metadata` advertises the PEP 658 sibling. Repository policy filters denied files and their versions before serialization.",
         "parameters": [
           {
             "name": "route",
@@ -1149,7 +1149,7 @@
           "publish"
         ],
         "summary": "Delete a version",
-        "description": "Removes the version's uploaded files outright. Requires the local layer to be `volatile`; for an overlay, the upstream files become visible again.",
+        "description": "Removes the version's uploaded files outright. Requires the local layer to be `volatile`; for a virtual index, the upstream files become visible again.",
         "parameters": [
           {
             "name": "route",
@@ -1369,7 +1369,7 @@
           "publish"
         ],
         "summary": "Restore hidden files",
-        "description": "Clears the hidden marker a DELETE leaves on files served from a read-only mirror, making them visible on the overlay again. Omit `{version}/` to restore the whole project.",
+        "description": "Clears the hidden marker a DELETE leaves on files served from a read-only cache, making them visible on the virtual index again. Omit `{version}/` to restore the whole project.",
         "parameters": [
           {
             "name": "route",
@@ -1425,7 +1425,7 @@
           "publish"
         ],
         "summary": "Yank files",
-        "description": "Marks the version's files yanked (PEP 592): resolvers skip them, exact-pin installs still succeed. Uploaded files get their record updated; files served from a read-only mirror get a reversible override on the overlay's local layer, so upstream releases can be yanked too. Omit `{version}/` (i.e. `PUT /{route}/{project}/yank`) to yank the whole project. Add `?reason=...` to preserve a resolver-visible reason.",
+        "description": "Marks the version's files yanked (PEP 592): resolvers skip them, exact-pin installs still succeed. Uploaded files get their record updated; files served from a read-only cache get a reversible override on the virtual index's hosted layer, so upstream releases can be yanked too. Omit `{version}/` (i.e. `PUT /{route}/{project}/yank`) to yank the whole project. Add `?reason=...` to preserve a resolver-visible reason.",
         "parameters": [
           {
             "name": "route",

@@ -1,4 +1,4 @@
-//! Hot-path rate-limit benchmarks for a single resolver reading a warm mirror page.
+//! Hot-path rate-limit benchmarks for a single resolver reading a warm cached page.
 #![allow(
     clippy::significant_drop_tightening,
     reason = "criterion_group! expands to a temporary the nursery lint flags"
@@ -27,7 +27,7 @@ fn runtime() -> Runtime {
         .unwrap()
 }
 
-fn mirror(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
+fn cached(rate_limit: RateLimitConfig) -> (tempfile::TempDir, Arc<AppState>) {
     let dir = tempfile::tempdir().unwrap();
     let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
     let body = to_json(&ProjectDetail {
@@ -94,7 +94,7 @@ fn bench_hot_simple_page(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("rate_limit_hot_simple_page");
     for (name, rate_limit) in [("disabled", RateLimitConfig::default()), ("enabled", enabled_limits())] {
-        let (_dir, state) = mirror(rate_limit);
+        let (_dir, state) = cached(rate_limit);
         rt.block_on(get(&state));
         group.bench_with_input(BenchmarkId::from_parameter(name), &state, |b, state| {
             b.to_async(&rt).iter(|| get(state));

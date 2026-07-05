@@ -379,7 +379,7 @@ impl MetaStore {
     ///
     /// The serial is allocated and the entry recorded in one write transaction, so under redb's single
     /// writer the journal is an append-only log whose serials are monotonic in commit order — the
-    /// changelog a replica or downstream mirror replays. (Warehouse needs a Postgres advisory lock for
+    /// changelog a replica or downstream replica replays. (Warehouse needs a Postgres advisory lock for
     /// this guarantee; redb gives it for free.) Timestamps join the entry when replication lands.
     ///
     /// # Errors
@@ -582,7 +582,7 @@ impl MetaStore {
         Ok(deliveries)
     }
 
-    /// Store everything a freshly fetched mirror page produces in one transaction: the cached page
+    /// Store everything a freshly fetched cached page produces in one transaction: the cached page
     /// record, the observed project name, every file's source URL, and every PEP 658 sibling.
     /// One commit means one fsync, where a write per file made large projects (numpy has thousands
     /// of files) take tens of seconds.
@@ -839,8 +839,8 @@ impl MetaStore {
         Ok(())
     }
 
-    /// Record the upstream URL a blob digest can be fetched from, and the name of the mirror it came
-    /// from (so a fetch on a cache miss reuses that mirror's authentication).
+    /// Record the upstream URL a blob digest can be fetched from, and the name of the cached index it came
+    /// from (so a fetch on a cache miss reuses that index's authentication).
     ///
     /// # Errors
     /// Returns a store error if the write or commit fails.
@@ -855,7 +855,7 @@ impl MetaStore {
         Ok(())
     }
 
-    /// Look up the `(upstream url, mirror name)` for a blob digest.
+    /// Look up the `(upstream url, index name)` for a blob digest.
     ///
     /// # Errors
     /// Returns a store error if the read fails.
@@ -887,7 +887,7 @@ impl MetaStore {
         Ok(())
     }
 
-    /// Look up an artifact's metadata sibling: `(upstream url, metadata sha256, mirror name)`.
+    /// Look up an artifact's metadata sibling: `(upstream url, metadata sha256, index name)`.
     ///
     /// # Errors
     /// Returns a store error if the read fails.

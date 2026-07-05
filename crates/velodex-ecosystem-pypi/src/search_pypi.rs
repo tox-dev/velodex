@@ -106,7 +106,7 @@ fn cached_detail(
     let detail = match &index.kind {
         IndexKind::Cached { .. } => mirror_detail(state, index, normalized, serve_route),
         IndexKind::Hosted { .. } => local_detail(state, &index.name, normalized, serve_route),
-        IndexKind::Virtual { layers, upload } => overlay_detail(state, layers, *upload, normalized, serve_route),
+        IndexKind::Virtual { layers, upload } => virtual_detail(state, layers, *upload, normalized, serve_route),
     }?;
     Ok(index
         .policy
@@ -183,7 +183,7 @@ fn local_detail(
     Ok(detail)
 }
 
-fn overlay_detail(
+fn virtual_detail(
     state: &AppState,
     layers: &[usize],
     upload: Option<usize>,

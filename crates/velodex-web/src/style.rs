@@ -119,7 +119,7 @@ main { max-width: 70rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .badge.yanked-badge { color: #e5484d; border-color: #e5484d; }
 .badge.meta-badge { color: #34c496; border-color: #34c496; }
 .layers code { margin-right: 0.3rem; }
-.overlay-card { grid-column: span 2; }
+.virtual-card { grid-column: span 2; }
 .layer-stack {
   list-style: none;
   margin: 0.6rem 0 0.2rem;

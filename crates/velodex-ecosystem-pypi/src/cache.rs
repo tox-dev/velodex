@@ -123,7 +123,7 @@ impl CacheError {
     }
 }
 
-/// Resolve a project's detail on `index`, composing overlay layers.
+/// Resolve a project's detail on `index`, composing virtual-index layers.
 ///
 /// Every file URL is rewritten to `serve_route` so clients fetch through the route they asked on;
 /// returns `None` when no layer has the project.
@@ -139,7 +139,7 @@ pub async fn resolve_detail(
     index.policy.check_project(PolicyAction::Serve, project)?;
     let detail = match &index.kind {
         IndexKind::Cached { client, offline } => {
-            let Some(mut detail) = mirror_detail(state, &index.name, &index.route, client, *offline, project).await?
+            let Some(mut detail) = cached_detail(state, &index.name, &index.route, client, *offline, project).await?
             else {
                 return Ok(None);
             };
@@ -153,7 +153,7 @@ pub async fn resolve_detail(
             rewrite_urls(&mut detail, serve_route);
             Some(detail)
         }
-        IndexKind::Virtual { layers, upload } => overlay_detail(state, layers, *upload, project, serve_route).await?,
+        IndexKind::Virtual { layers, upload } => virtual_detail(state, layers, *upload, project, serve_route).await?,
     };
     detail
         .map(|detail| {
@@ -165,11 +165,11 @@ pub async fn resolve_detail(
         .transpose()
 }
 
-/// Merge the layers of an overlay: first match per filename wins, versions are unioned. Overrides
-/// recorded on the overlay's upload layer then apply: `hidden` files drop out of the page and
+/// Merge the layers of a virtual index: first match per filename wins, versions are unioned. Overrides
+/// recorded on the virtual index's upload layer then apply: `hidden` files drop out of the page and
 /// `yanked` files carry the PEP 592 marker, which is how read-only upstream files are yanked or
-/// removed without touching the mirror.
-async fn overlay_detail(
+/// removed without touching the cache.
+async fn virtual_detail(
     state: &AppState,
     layers: &[usize],
     upload: Option<usize>,
@@ -189,7 +189,7 @@ async fn overlay_detail(
     let mut found = false;
     let mut offline_missing = None;
     for (&pos, outcome) in layers.iter().zip(resolved) {
-        // A layer being unavailable (a down mirror with a cold cache) must not break the others.
+        // A layer being unavailable (a down upstream with a cold cache) must not break the others.
         let detail = match outcome {
             Ok(detail) => detail,
             Err(err @ CacheError::OfflineMissing(_)) => {
@@ -198,7 +198,7 @@ async fn overlay_detail(
             }
             Err(err) => {
                 let layer = state.index_at(pos);
-                tracing::warn!(layer = %layer.name, error = ?err, "overlay layer unavailable, skipping");
+                tracing::warn!(layer = %layer.name, error = ?err, "virtual-index layer unavailable, skipping");
                 continue;
             }
         };
@@ -258,13 +258,13 @@ fn apply_overrides(state: &AppState, hosted: &str, project: &str, files: &mut Ve
     Ok(())
 }
 
-/// Fetch a mirror's project detail, serving from cache when fresh and revalidating or fetching
+/// Fetch a cached index's project detail, serving from cache when fresh and revalidating or fetching
 /// otherwise. Returns `None` when the project does not exist upstream.
 ///
 /// Concurrent misses for the same page are single-flighted: resolvers such as uv request one
 /// project several times in parallel, and each duplicate fetch would download and store a
 /// multi-megabyte page again.
-async fn mirror_detail(
+async fn cached_detail(
     state: &AppState,
     name: &str,
     route: &str,
@@ -434,11 +434,11 @@ fn mirror_policy<'a>(state: &'a AppState, name: &str) -> &'a velodex_policy::Pol
         .indexes
         .iter()
         .find(|index| index.name == name)
-        .expect("mirror policy belongs to a configured index")
+        .expect("index policy belongs to a configured index")
         .policy
 }
 
-/// The route a mirror's cached pages are attributed to in metrics.
+/// The route a cached index's pages are attributed to in metrics.
 fn mirror_route(state: &AppState, name: &str) -> String {
     state
         .indexes
@@ -470,7 +470,7 @@ pub struct RefreshSummary {
     pub changed: usize,
 }
 
-/// Revalidate every cached mirror page older than the TTL.
+/// Revalidate every cached page older than the TTL.
 ///
 /// Upstream changes are caught within one refresh period even for pages nobody is requesting.
 /// Pages run sequentially: a large cache trickles out as cheap conditional requests (`ETag` hits
@@ -535,8 +535,8 @@ fn log_cache_sync(index: &str, project: &str, result: &'static str, changed: boo
         .emit();
 }
 
-/// Map a cache key (`{mirror name}/{project}`) back to its mirror and client; the longest matching
-/// name wins when one mirror's name prefixes another's.
+/// Map a cache key (`{cached index name}/{project}`) back to its cached index and client; the longest matching
+/// name wins when one cached's name prefixes another's.
 fn mirror_for_key<'a>(state: &'a AppState, key: &str) -> Option<(&'a Index, &'a UpstreamClient, bool, String)> {
     state
         .indexes
@@ -766,7 +766,7 @@ fn rewrite_urls(detail: &mut ProjectDetail, route: &str) {
     }
 }
 
-/// The project names velodex has observed on `index`, unioned across an overlay's layers.
+/// The project names velodex has observed on `index`, unioned across a virtual index's layers.
 ///
 /// # Errors
 /// Returns [`CacheError`] if a store read fails.
@@ -793,7 +793,7 @@ fn collect_projects(state: &AppState, index: &Index, names: &mut BTreeSet<String
     Ok(())
 }
 
-/// Fetch a URL through the named mirror's client (reusing its authentication).
+/// Fetch a URL through the named cached's client (reusing its authentication).
 async fn fetch_from_source(state: &AppState, source: &str, url: &str) -> Result<Bytes, CacheError> {
     let (client, offline) = source_mirror(state, source)?;
     if offline {
@@ -1555,7 +1555,7 @@ pub enum PageOutcome {
     Streaming(futures_util::stream::BoxStream<'static, Result<Bytes, std::io::Error>>),
     /// The project does not exist upstream.
     NotFound,
-    /// Not streamable here (several mirror layers, or no mirror); the buffered path serves it.
+    /// Not streamable here (several cached layers, or no cached); the buffered path serves it.
     Fallback,
 }
 
@@ -1578,7 +1578,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
         return Ok(PageOutcome::Fallback);
     }
     let route = index.route.clone();
-    let Some((mirror_name, client, offline, context)) = streaming_parts(&state, index, &project)? else {
+    let Some((cached_name, client, offline, context)) = streaming_parts(&state, index, &project)? else {
         return Ok(PageOutcome::Fallback);
     };
 
@@ -1587,7 +1587,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
         return Ok(PageOutcome::Ready(bytes));
     }
 
-    let key = format!("{mirror_name}/{project}");
+    let key = format!("{cached_name}/{project}");
     if offline {
         return match state.meta.get_index(&key)? {
             Some(record) => Ok(PageOutcome::Ready(transform_whole(&state, &hot_key, &record, context)?)),
@@ -1617,7 +1617,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
     let now = (state.clock)();
     let cached = state.meta.get_index(&key)?;
     let etag = cached.as_ref().and_then(|record| record.etag.clone());
-    let permit = upstream_permit(&state, &mirror_name)?;
+    let permit = upstream_permit(&state, &cached_name)?;
     let Ok(head) = client.head_project(&project, etag.as_deref()).await else {
         release_flight(&state, &key, guard);
         return Ok(PageOutcome::Fallback);
@@ -1629,7 +1629,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
                 key,
                 hot_key,
                 route,
-                mirror_name,
+                cached_name,
                 project,
                 now,
                 context,
@@ -1647,7 +1647,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
             record.fresh_secs = head.max_age.or(record.fresh_secs);
             state.meta.put_index(&key, &record)?;
             state.metrics.record(Event::Refresh {
-                route: mirror_route(&state, &mirror_name),
+                route: mirror_route(&state, &cached_name),
                 project: project.clone(),
                 changed: false,
             });
@@ -1660,7 +1660,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
             Ok(missing_upstream_outcome(&context))
         }
         200 => {
-            let record = buffer_html_page(&state, &key, &mirror_name, &project, now, head).await?;
+            let record = buffer_html_page(&state, &key, &cached_name, &project, now, head).await?;
             release_flight(&state, &key, guard);
             Ok(PageOutcome::Ready(transform_whole(&state, &hot_key, &record, context)?))
         }
@@ -1673,7 +1673,7 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
 
 /// Fetch and persist the project page for `position`, then return the served detail model.
 ///
-/// `velodex mirror sync` uses this instead of a separate downloader so CLI prefetching and HTTP
+/// `velodex prefetch sync` uses this instead of a separate downloader so CLI prefetching and HTTP
 /// requests share cache registration, single-flight, and streaming behavior.
 ///
 /// # Errors
@@ -1710,7 +1710,7 @@ struct FreshJsonStream {
     key: String,
     hot_key: String,
     route: String,
-    mirror_name: String,
+    cached_name: String,
     project: String,
     now: i64,
     context: crate::stream::PageContext,
@@ -1730,7 +1730,7 @@ impl FreshJsonStream {
         if self.cached_present {
             tracing::info!(key = %self.key, "upstream page changed");
             self.state.metrics.record(Event::Refresh {
-                route: mirror_route(&self.state, &self.mirror_name),
+                route: mirror_route(&self.state, &self.cached_name),
                 project: self.project.clone(),
                 changed: true,
             });
@@ -1762,7 +1762,7 @@ impl FreshJsonStream {
                     key: self.key,
                     hot_key: self.hot_key,
                     route: self.route,
-                    mirror: self.mirror_name,
+                    cached: self.cached_name,
                     project: self.project,
                     etag,
                     last_serial,
@@ -1786,7 +1786,7 @@ impl FreshJsonStream {
                 };
                 let expires_at = record.fetched_at_unix + record.fresh_secs.unwrap_or(self.state.ttl_secs);
                 #[rustfmt::skip]
-                persist_streamed(&self.state, &self.key, &self.mirror_name, &self.project, &record, &summary)?;
+                persist_streamed(&self.state, &self.key, &self.cached_name, &self.project, &record, &summary)?;
                 spawn_metadata_backfill(self.state.clone(), self.route.clone(), &summary.registrations);
                 let bytes = Bytes::from(served);
                 self.state.hot.insert(self.hot_key, (expires_at, bytes.clone()));
@@ -1802,7 +1802,7 @@ impl FreshJsonStream {
 async fn buffer_html_page(
     state: &AppState,
     key: &str,
-    mirror_name: &str,
+    cached_name: &str,
     project: &str,
     now: i64,
     head: velodex_upstream::SimpleHead,
@@ -1829,12 +1829,12 @@ async fn buffer_html_page(
         fresh_secs: response.max_age,
         body: canonical_raw(project, &response)?,
     };
-    persist_page(state, key, mirror_name, project, &record)?;
+    persist_page(state, key, cached_name, project, &record)?;
     Ok(record)
 }
 
-/// The streaming ingredients for an index: its single mirror layer with its client, plus the hosted
-/// overlay context. `None` when the index has no mirror or more than one (the buffered path
+/// The streaming ingredients for an index: its single cached layer with its client, plus the hosted
+/// virtual-index context. `None` when the index has no cached or more than one (the buffered path
 /// handles those).
 fn streaming_parts(
     state: &AppState,
@@ -1858,7 +1858,7 @@ fn streaming_parts(
         ))),
         IndexKind::Hosted { .. } => Ok(None),
         IndexKind::Virtual { layers, upload } => {
-            let mut mirror = None;
+            let mut cached = None;
             let mut local_files = Vec::new();
             let mut local_versions = Vec::new();
             for &pos in layers {
@@ -1868,7 +1868,7 @@ fn streaming_parts(
                         if layer.policy.active() {
                             return Ok(None);
                         }
-                        if mirror.replace((layer.name.clone(), client.clone(), *offline)).is_some() {
+                        if cached.replace((layer.name.clone(), client.clone(), *offline)).is_some() {
                             return Ok(None);
                         }
                     }
@@ -1885,7 +1885,7 @@ fn streaming_parts(
                     IndexKind::Virtual { .. } => return Ok(None),
                 }
             }
-            let Some((mirror, client, offline)) = mirror else {
+            let Some((cached, client, offline)) = cached else {
                 return Ok(None);
             };
             let overrides: std::collections::HashMap<String, String> = match upload {
@@ -1897,7 +1897,7 @@ fn streaming_parts(
                 None => std::collections::HashMap::new(),
             };
             Ok(Some((
-                mirror,
+                cached,
                 client,
                 offline,
                 crate::stream::page_context(
@@ -2008,7 +2008,7 @@ struct LiveStream {
     key: String,
     hot_key: String,
     route: String,
-    mirror: String,
+    cached: String,
     project: String,
     etag: Option<String>,
     last_serial: Option<u64>,
@@ -2079,10 +2079,10 @@ fn live_stream(
                     let raw_len = record.body.len();
                     let registrations = summary.registrations.clone();
                     let persist_state = state.clone();
-                    let (key, mirror, project) = (live.key.clone(), live.mirror.clone(), live.project.clone());
+                    let (key, cached, project) = (live.key.clone(), live.cached.clone(), live.project.clone());
                     #[rustfmt::skip]
                     tokio::task::spawn_blocking(move || {
-                        if let Err(err) = persist_streamed(&persist_state, &key, &mirror, &project, &record, &summary) { tracing::error!(error = ?err, %key, "page persist failed"); }
+                        if let Err(err) = persist_streamed(&persist_state, &key, &cached, &project, &record, &summary) { tracing::error!(error = ?err, %key, "page persist failed"); }
                     })
                     .await
                     .expect("page persist task never panics");

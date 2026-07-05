@@ -42,7 +42,7 @@ pub struct IndexConfig {
     pub webhooks: Vec<WebhookConfig>,
 }
 
-/// The three composable index roles: a read-through proxy, a writable hosted store, or a virtual
+/// The three composable index roles: a read-through cache, a writable hosted store, or a virtual
 /// index that aggregates other indexes under one route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexKind {
@@ -74,7 +74,7 @@ pub enum IndexKind {
     },
 }
 
-/// Mirror prefetch behavior configured under `[index.prefetch]`.
+/// Prefetch behavior configured under `[index.prefetch]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefetchConfig {
     pub mode: PrefetchMode,

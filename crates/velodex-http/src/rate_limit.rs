@@ -288,10 +288,10 @@ impl UpstreamLimits {
         }
     }
 
-    /// Acquire one upstream slot for a mirror.
+    /// Acquire one upstream slot for a cached index.
     ///
     /// # Errors
-    /// Returns [`UpstreamLimited`] when the mirror has a concurrency cap and every slot is held.
+    /// Returns [`UpstreamLimited`] when the cached index has a concurrency cap and every slot is held.
     pub fn acquire(&self, name: &str) -> Result<UpstreamPermit, UpstreamLimited> {
         let Some(limit) = self.entries.get(name) else {
             return Ok(None);

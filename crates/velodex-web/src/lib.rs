@@ -173,7 +173,7 @@ fn Suggestion(result: UiSearchResult, href: String) -> impl IntoView {
     }
 }
 
-/// The overlay-stack logo mark, inline so it needs no asset pipeline.
+/// The layered-stack logo mark, inline so it needs no asset pipeline.
 #[component]
 fn BrandMark() -> impl IntoView {
     view! {

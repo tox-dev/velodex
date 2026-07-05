@@ -101,7 +101,7 @@ pub struct AppState {
     pub search: PackageSearch,
     /// Per-client HTTP request limits. The bucket cache has a fixed capacity.
     pub rate_limits: RateLimiter,
-    /// Per-mirror upstream fetch gates, keyed by configured index name.
+    /// Per-cached-index upstream fetch gates, keyed by configured index name.
     pub upstream_limits: UpstreamLimits,
     /// Signed webhook delivery runtime.
     pub webhooks: WebhookRuntime,
@@ -380,7 +380,7 @@ impl AppState {
         best
     }
 
-    /// The index at position `pos` (an overlay layer or upload target).
+    /// The index at position `pos` (a virtual-index layer or upload target).
     #[must_use]
     pub fn index_at(&self, pos: usize) -> &Index {
         &self.indexes[pos]
@@ -424,7 +424,7 @@ impl AppState {
         self.epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Describe every configured index for presentation: kind name, overlay layer names, upload
+    /// Describe every configured index for presentation: kind name, virtual-index layer names, upload
     /// access, and delete policy. Shared by `/+status` and the web UI.
     #[must_use]
     pub fn describe_indexes(&self) -> Vec<IndexDescription> {
@@ -518,7 +518,7 @@ pub struct IndexDescription {
     pub layers: Vec<String>,
     pub uploads: bool,
     pub volatile_deletes: bool,
-    /// For an overlay: the layer uploads land in, whether or not a token currently enables them.
+    /// For a virtual index: the layer uploads land in, whether or not a token currently enables them.
     pub upload_to: Option<String>,
     pub upstream: Option<UpstreamDescription>,
     pub hosted: Option<HostedDescription>,

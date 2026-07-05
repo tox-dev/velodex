@@ -540,7 +540,7 @@ fn supports_metadata_sibling(filename: &str) -> bool {
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".tar.gz"))
 }
 
-/// Build a [`PageContext`] from the overlay pieces: local files shadow upstream filenames, hidden
+/// Build a [`PageContext`] from the virtual-index pieces: hosted files shadow upstream filenames, hidden
 /// overrides drop files, yank overrides mark them.
 #[must_use]
 pub fn page_context<S: std::hash::BuildHasher>(

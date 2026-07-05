@@ -34,8 +34,8 @@ pub(super) struct Harness {
     pub(super) clock: Arc<AtomicI64>,
 }
 
-/// A mirror (`pypi`) proxying the mock, a local store (`local`), and an overlay (`root/pypi`) that
-/// layers the local store in front of the mirror. `token`/`volatile` tune the local store.
+/// A cache (`pypi`) of the mock, a hosted store (`hosted`), and a virtual index (`root/pypi`) that
+/// layers the hosted store in front of the cache. `token`/`volatile` tune the hosted store.
 async fn harness_with(token: bool, volatile: bool) -> Harness {
     harness_with_policies(token, volatile, Policy::default(), Policy::default(), Policy::default()).await
 }
@@ -942,8 +942,8 @@ async fn test_discovery_document_uses_request_origin_and_redacts_token() {
     .await;
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let indexes = json["indexes"].as_array().unwrap();
-    let overlay = indexes.iter().find(|index| index["route"] == "root/pypi").unwrap();
-    let mirror = indexes.iter().find(|index| index["route"] == "pypi").unwrap();
+    let virtual_index = indexes.iter().find(|index| index["route"] == "root/pypi").unwrap();
+    let cached = indexes.iter().find(|index| index["route"] == "pypi").unwrap();
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -957,7 +957,7 @@ async fn test_discovery_document_uses_request_origin_and_redacts_token() {
         })
     );
     assert_eq!(
-        overlay["urls"],
+        virtual_index["urls"],
         serde_json::json!({
             "api": "https://packages.example/root/pypi/+api",
             "simple": "https://packages.example/root/pypi/simple/",
@@ -969,7 +969,7 @@ async fn test_discovery_document_uses_request_origin_and_redacts_token() {
         })
     );
     assert_eq!(
-        overlay["capabilities"],
+        virtual_index["capabilities"],
         serde_json::json!({
             "simple_html": true,
             "simple_json": true,
@@ -983,11 +983,11 @@ async fn test_discovery_document_uses_request_origin_and_redacts_token() {
             "legacy_json": true
         })
     );
-    assert_eq!(mirror["urls"].get("upload"), None);
-    assert_eq!(mirror["client_configuration"].get(".pypirc"), None);
-    assert_eq!(mirror["capabilities"]["uploads"], false);
-    assert_eq!(mirror["capabilities"]["yanking"], false);
-    assert_eq!(mirror["capabilities"]["volatile_deletes"], false);
+    assert_eq!(cached["urls"].get("upload"), None);
+    assert_eq!(cached["client_configuration"].get(".pypirc"), None);
+    assert_eq!(cached["capabilities"]["uploads"], false);
+    assert_eq!(cached["capabilities"]["yanking"], false);
+    assert_eq!(cached["capabilities"]["volatile_deletes"], false);
     assert!(body.contains("\"uv.toml\""));
     assert!(body.contains("password = <upload-token>"));
     assert!(!body.contains("s3cret"));
@@ -2117,7 +2117,7 @@ async fn test_upload_via_overlay_then_serve_and_download() {
     let wheel = fixture_wheel();
     assert_eq!(upload_velodexpkg(&h.state, "/root/pypi/", &wheel).await, StatusCode::OK);
 
-    // Served through the overlay, with the URL on the overlay route.
+    // Served through the virtual index, with the URL on the virtual index route.
     let (ds, _, detail) = get(&h.state, "/root/pypi/simple/velodexpkg/", Some("application/json")).await;
     assert_eq!(ds, StatusCode::OK);
     assert!(detail.contains("velodexpkg-1.0-py3-none-any.whl"));
@@ -2130,7 +2130,7 @@ async fn test_upload_via_overlay_then_serve_and_download() {
     assert_eq!(fs, StatusCode::OK);
     assert_eq!(fbody, wheel);
 
-    // The overlay's project list includes the uploaded project.
+    // The virtual index's project list includes the uploaded project.
     let (ls, _, list) = get(&h.state, "/root/pypi/simple/", Some("application/json")).await;
     assert_eq!(ls, StatusCode::OK);
     assert!(list.contains("velodexpkg"));
@@ -2194,7 +2194,7 @@ async fn test_overlay_tolerates_unavailable_layer() {
     ];
     let state = super::wired(AppState::new(meta, blobs, 60, indexes));
     upload_velodexpkg(&state, "/root/pypi/", &fixture_wheel()).await;
-    // The mirror layer is unreachable, but the local layer still serves the upload.
+    // The cached layer is unreachable, but the local layer still serves the upload.
     let (status, _, detail) = get(&state, "/root/pypi/simple/velodexpkg/", Some("application/json")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(detail.contains("velodexpkg"));
@@ -3374,7 +3374,7 @@ async fn test_upload_target_resolving_to_non_local_is_not_found() {
     let meta = MetaStore::open(dir.path().join("velodex.redb")).unwrap();
     let blobs = BlobStore::new(dir.path().join("blobs"));
     let upstream = UpstreamClient::new("http://127.0.0.1:0/simple/").unwrap();
-    // A deliberately inconsistent overlay whose upload target points at the mirror.
+    // A deliberately inconsistent virtual index whose upload target points at the cached.
     let indexes = vec![
         Index {
             name: "pypi".to_owned(),
@@ -3450,11 +3450,11 @@ async fn test_yank_upstream_file_via_overlay() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // The overlay page carries the marker; the mirror's own route stays untouched.
+    // The virtual index page carries the marker; the cache's own route stays untouched.
     let (_, _, merged) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
     assert!(merged.contains("\"yanked\":\"bad build\""));
-    let (_, _, mirror) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
-    assert!(!mirror.contains("\"yanked\":\"bad build\""));
+    let (_, _, cached) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert!(!cached.contains("\"yanked\":\"bad build\""));
 
     // Un-yank clears the override.
     let status = request(&h.state, "DELETE", "/root/pypi/flask/1.0/yank", Some(&upload_auth())).await;
@@ -3477,11 +3477,11 @@ async fn test_delete_and_restore_upstream_file_via_overlay() {
     let status = request(&h.state, "DELETE", "/root/pypi/flask/", Some(&upload_auth())).await;
     assert_eq!(status, StatusCode::OK);
 
-    // Hidden from the overlay page, but still present on the mirror's own route.
+    // Hidden from the virtual index page, but still present on the cache's own route.
     let (_, _, merged) = get(&h.state, "/root/pypi/simple/flask/", Some("application/json")).await;
     assert!(!merged.contains("flask-1.0-py3-none-any.whl"));
-    let (_, _, mirror) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
-    assert!(mirror.contains("flask-1.0-py3-none-any.whl"));
+    let (_, _, cached) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert!(cached.contains("flask-1.0-py3-none-any.whl"));
 
     // Restore brings the file back.
     let status = request(&h.state, "PUT", "/root/pypi/flask/restore", Some(&upload_auth())).await;
@@ -4546,7 +4546,7 @@ async fn test_yank_overlay_with_uploaded_file_skips_override() {
         .mount(&h.server)
         .await;
     upload_wheel(&h.state, "velodexpkg-1.0-py3-none-any.whl", &fixture_wheel()).await;
-    // Yank through the overlay: the uploaded file is rewritten, no override is created.
+    // Yank through the virtual index: the uploaded file is rewritten, no override is created.
     assert_eq!(
         request(&h.state, "PUT", "/root/pypi/velodexpkg/1.0/yank", Some(&upload_auth())).await,
         StatusCode::OK

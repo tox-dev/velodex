@@ -623,11 +623,11 @@ fn prefetch_file(file: &File) -> PrefetchFile {
     }
 }
 
-fn metadata_sibling(file: &File) -> Option<MirrorMetadata> {
+fn metadata_sibling(file: &File) -> Option<PrefetchMetadata> {
     let CoreMetadata::Hashes(hashes) = file.metadata() else {
         return None;
     };
-    Some(MirrorMetadata {
+    Some(PrefetchMetadata {
         url: format!("{}.metadata", file.url),
         digest: hashes.get("sha256")?.clone(),
     })
@@ -908,7 +908,7 @@ impl<'a> Row<'a> {
         index: &'a str,
         project: &'a str,
         filename: &'a str,
-        metadata: &'a MirrorMetadata,
+        metadata: &'a PrefetchMetadata,
         bytes: Option<u64>,
         status: &'a str,
         reason: &'a str,
@@ -987,11 +987,11 @@ struct PrefetchFile {
     digest: String,
     url: String,
     size: Option<u64>,
-    metadata: Option<MirrorMetadata>,
+    metadata: Option<PrefetchMetadata>,
     source: Option<DistributionFilename>,
 }
 
-struct MirrorMetadata {
+struct PrefetchMetadata {
     url: String,
     digest: String,
 }

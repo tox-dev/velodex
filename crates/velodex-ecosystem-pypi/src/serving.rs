@@ -455,7 +455,7 @@ fn legacy_json_target(rest: &str) -> Result<Option<LegacyJsonTarget>, Response> 
     }))
 }
 
-/// Stream a blob to the client: from disk when cached, teed from the source mirror otherwise.
+/// Stream a blob to the client: from disk when cached, teed from the upstream cache otherwise.
 async fn serve_blob(state: &Arc<AppState>, route: String, filename: &str, digest: Digest) -> Response {
     let digest_hex = digest.as_str().to_owned();
     let blob_headers = [
@@ -1046,7 +1046,7 @@ fn removal_target<'a>(
     Ok((index, hosted, rest))
 }
 
-/// The writable hosted index behind `index`: itself if hosted, its upload layer if an overlay.
+/// The writable hosted index behind `index`: itself if hosted, its upload layer if a virtual index.
 fn upload_target<'a>(state: &'a AppState, index: &'a Index) -> Option<&'a Index> {
     match &index.kind {
         IndexKind::Hosted { .. } => Some(index),
