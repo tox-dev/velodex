@@ -99,8 +99,8 @@ hosted index; the username is ignored. Promotion authenticates against the targe
 - `404`: unknown route, project, or nothing matched.
 - `405`: the route's index does not accept writes.
 - `409`: promotion target already has the filename with different bytes.
-- `429`: a route-class limit rejected the request, or a configured upstream concurrency cap could not free a slot
-  within the wait window; retry after the `Retry-After` seconds.
+- `429`: a route-class limit rejected the request, or a configured upstream concurrency cap could not free a slot within
+  the wait window; retry after the `Retry-After` seconds.
 
 ## Webhooks
 
