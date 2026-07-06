@@ -71,6 +71,34 @@ async fn test_overlay_project_missing_everywhere_is_not_found() {
 }
 
 #[tokio::test]
+async fn test_overlay_transient_upstream_is_bad_gateway() {
+    let h = harness().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&h.server)
+        .await;
+    // A cold-cache upstream failure on the only member layer must surface as a retryable error, not
+    // as the project being absent: a burst install would otherwise treat a transient blip as a 404.
+    let (status, ..) = get(&h.state, "/root/pypi/simple/flask/", None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn test_overlay_skips_layer_with_unparseable_page() {
+    let h = harness().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(b"not json".to_vec(), "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&h.server)
+        .await;
+    // A non-transient layer error (a corrupt upstream page) is skipped rather than surfaced as
+    // retryable; with no other layer serving the project, that leaves it genuinely not found.
+    let (status, ..) = get(&h.state, "/root/pypi/simple/badproj/", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_concurrent_buffered_misses_share_one_fetch() {
     let h = harness().await;
     let digest = Digest::of(b"wheel");

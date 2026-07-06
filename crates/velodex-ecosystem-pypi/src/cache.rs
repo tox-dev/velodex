@@ -121,6 +121,17 @@ impl CacheError {
             Self::Policy(err) => err.reason.to_string(),
         }
     }
+
+    /// Whether this is a transient upstream or capacity failure the client should retry, as opposed to
+    /// the project being genuinely absent. Virtual-index resolution surfaces these as retryable errors
+    /// instead of reporting the project as missing when no member layer serves it.
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::OfflineMissing(_) | Self::RateLimited { .. } | Self::Upstream(_) | Self::Unavailable
+        )
+    }
 }
 
 /// Resolve a project's detail on `index`, composing virtual-index layers.
@@ -187,20 +198,16 @@ async fn virtual_detail(
     let mut versions = BTreeSet::new();
     let mut meta = Meta::default();
     let mut found = false;
-    let mut offline_missing = None;
-    let mut rate_limited = None;
+    let mut deferred = None;
     for (&pos, outcome) in layers.iter().zip(resolved) {
         // A layer being unavailable (a down upstream with a cold cache) must not break the others.
         let detail = match outcome {
             Ok(detail) => detail,
-            Err(err @ CacheError::OfflineMissing(_)) => {
-                offline_missing = Some(err);
-                continue;
-            }
-            // A saturated upstream cap is transient. If no other layer serves the project, propagate it
-            // as a retryable error rather than skipping the layer and reporting the project as missing.
-            Err(err @ CacheError::RateLimited { .. }) => {
-                rate_limited = Some(err);
+            // A transient failure (offline, rate-limited, or upstream unreachable) is not the project
+            // being absent. Remember the first one; if no layer serves the project, surface it as a
+            // retryable error rather than skipping the layer and reporting the project as missing.
+            Err(err) if err.is_transient() => {
+                deferred.get_or_insert(err);
                 continue;
             }
             Err(err) => {
@@ -224,10 +231,7 @@ async fn virtual_detail(
         }
     }
     if !found {
-        if let Some(err) = rate_limited {
-            return Err(err);
-        }
-        if let Some(err) = offline_missing {
+        if let Some(err) = deferred {
             return Err(err);
         }
         return Ok(None);
@@ -1440,7 +1444,13 @@ pub async fn project_status(state: &AppState, index: &Index, normalized: &str) -
     if matches!(index.kind, IndexKind::Hosted { .. }) {
         return Ok(ProjectStatus::Active);
     }
-    let Some(detail) = Box::pin(resolve_detail(state, index, normalized, &index.route)).await? else {
+    // This gates a write: a transiently unreachable read layer can neither confirm nor veto it, so treat
+    // it as absent and let the hosted layer decide rather than blocking uploads on a proxy blip.
+    let resolved = match Box::pin(resolve_detail(state, index, normalized, &index.route)).await {
+        Err(err) if err.is_transient() => return Ok(ProjectStatus::Active),
+        other => other?,
+    };
+    let Some(detail) = resolved else {
         return Ok(ProjectStatus::Active);
     };
     Ok(detail.meta.status())
