@@ -9,16 +9,17 @@ environment variables, which override the file. Precedence is `defaults < TOML f
 
 ## Top level
 
-| Setting                   | Flag              | Environment            | TOML key         | Default      |
-| ------------------------- | ----------------- | ---------------------- | ---------------- | ------------ |
-| Bind host                 | `--host`          | `PERYX_HOST`           | `host`           | `127.0.0.1`  |
-| Bind port                 | `--port`          | `PERYX_PORT`           | `port`           | `4433`       |
-| Data directory            | `--data-dir`      | `PERYX_DATA_DIR`       | `data_dir`       | `peryx-data` |
-| Offline mode              | `--offline`       | `PERYX_OFFLINE`        | `offline`        | `false`      |
-| Config file               | `--config` / `-c` | (n/a)                  | (n/a)            | (none)       |
-| Cache freshness (seconds) | (file/env only)   | `PERYX_CACHE_TTL_SECS` | `cache_ttl_secs` | `300`        |
-| Indexes                   | (file only)       | (n/a)                  | `[[index]]`      | (see below)  |
-| Rate limits               | (file only)       | (n/a)                  | `[rate_limit]`   | (see below)  |
+| Setting                   | Flag              | Environment             | TOML key          | Default      |
+| ------------------------- | ----------------- | ----------------------- | ----------------- | ------------ |
+| Bind host                 | `--host`          | `PERYX_HOST`            | `host`            | `127.0.0.1`  |
+| Bind port                 | `--port`          | `PERYX_PORT`            | `port`            | `4433`       |
+| Data directory            | `--data-dir`      | `PERYX_DATA_DIR`        | `data_dir`        | `peryx-data` |
+| Offline mode              | `--offline`       | `PERYX_OFFLINE`         | `offline`         | `false`      |
+| Config file               | `--config` / `-c` | (n/a)                   | (n/a)             | (none)       |
+| Cache freshness (seconds) | (file/env only)   | `PERYX_CACHE_TTL_SECS`  | `cache_ttl_secs`  | `300`        |
+| Page cache budget (bytes) | (file/env only)   | `PERYX_HOT_CACHE_BYTES` | `hot_cache_bytes` | `268435456`  |
+| Indexes                   | (file only)       | (n/a)                   | `[[index]]`       | (see below)  |
+| Rate limits               | (file only)       | (n/a)                   | `[rate_limit]`    | (see below)  |
 
 Environment variables sit between the file and flags: a `PERYX_*` value overrides the TOML file, and a flag overrides
 the variable. Only scalar settings are environment-configurable. The `[[index]]` topology and `[rate_limit]` block stay
@@ -29,6 +30,12 @@ variables (`PERYX_LOG_LEVEL`, `PERYX_LOG_FORMAT`, `PERYX_LOG_SINK`, `PERYX_LOG_F
 `max-age`), that lifetime governs the page instead. The fallback applies when the header is absent,
 `no-cache`/`no-store`, or zero. Artifacts never expire; they are content-addressed by sha256, so a changed upstream file
 is a new entry on the page rather than a mutation.
+
+`hot_cache_bytes` is the memory budget for the transformed-page cache, where a warm request is a lookup, an expiry
+check, and a memcpy. It trades memory against warm-serve speed and nothing else: every entry is re-derivable from the
+cached raw page, so a smaller budget only lowers the hit rate, and `0` turns the cache off so each warm page pays its
+transform again. Lower it on a memory-tight host; raise it when a few projects with very large index pages (`boto3` and
+`numpy` run to megabytes of JSON) carry the traffic. The PyPI driver is the only ecosystem that populates it today.
 
 `offline = true` disables upstream network access for configured cached indexes. Whatever an ecosystem has cached serves
 from disk: PyPI project pages, PEP 658 metadata siblings, and wheels; OCI manifests and blobs. A cold cached-index miss

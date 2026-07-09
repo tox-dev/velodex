@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use peryx_ecosystem_pypi::policy::PypiPolicyConfig;
 use peryx_format::Ecosystem;
+use peryx_http::DEFAULT_HOT_CACHE_BYTES;
 use peryx_http::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig};
 use peryx_policy::PolicyConfig;
 use serde::Deserialize;
@@ -19,6 +20,10 @@ pub struct Config {
     /// Fallback freshness for cached simple pages, in seconds. Upstream `Cache-Control` lifetimes
     /// take precedence; this applies only when the server granted none.
     pub cache_ttl_secs: i64,
+    /// Byte budget for the transformed-page cache: memory traded against warm-serve speed. Pages in
+    /// it are re-derivable from the cached raw page, so a smaller budget only lowers the warm-hit
+    /// rate; `0` turns the cache off and every warm page pays its transform again.
+    pub hot_cache_bytes: u64,
     /// The configured indexes: caches, hosted stores, and virtual indexes that compose them.
     pub indexes: Vec<IndexConfig>,
     /// How the server terminates TLS, or `None` for plain HTTP (the zero-config default, which
@@ -140,6 +145,7 @@ impl Default for Config {
             data_dir: PathBuf::from("peryx-data"),
             offline: false,
             cache_ttl_secs: 300,
+            hot_cache_bytes: DEFAULT_HOT_CACHE_BYTES,
             indexes: default_indexes(),
             tls: None,
             log: LogConfig::default(),

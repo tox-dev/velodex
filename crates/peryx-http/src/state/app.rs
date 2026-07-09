@@ -33,7 +33,19 @@ pub struct RuntimeOptions<I> {
     pub rate_limit: RateLimitConfig,
     pub upstream_concurrency: I,
     pub webhooks: WebhookRuntime,
+    /// Byte budget for the transformed-page cache: memory traded against warm-serve speed. Entries
+    /// are re-derivable from the cached raw page, so a smaller budget costs hit rate, never
+    /// correctness; `0` disables the cache and every warm page pays its transform again.
+    pub hot_cache_bytes: u64,
 }
+
+/// The transformed-page cache budget when an operator configures none.
+///
+/// Sized for the working set of a busy `PyPI` index, whose transformed pages are the large ones
+/// (`boto3` and `numpy` run to megabytes of JSON). Today the `PyPI` driver is the only ecosystem that
+/// populates this cache; when a second one does, this becomes a budget per ecosystem, keyed like the
+/// lexicon and serving registries already are.
+pub const DEFAULT_HOT_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Everything a request handler needs. Shared as `Arc<AppState>`.
 pub struct AppState {
@@ -175,6 +187,7 @@ impl AppState {
                 rate_limit,
                 upstream_concurrency,
                 webhooks: WebhookRuntime::disabled(),
+                hot_cache_bytes: DEFAULT_HOT_CACHE_BYTES,
             },
         )
     }
@@ -231,6 +244,7 @@ impl AppState {
                 rate_limit,
                 upstream_concurrency,
                 webhooks: WebhookRuntime::disabled(),
+                hot_cache_bytes: DEFAULT_HOT_CACHE_BYTES,
             },
         )
     }
@@ -258,6 +272,7 @@ impl AppState {
                 rate_limit: RateLimitConfig::default(),
                 upstream_concurrency: std::iter::empty(),
                 webhooks,
+                hot_cache_bytes: DEFAULT_HOT_CACHE_BYTES,
             },
         )
     }
@@ -277,6 +292,7 @@ impl AppState {
             rate_limit,
             upstream_concurrency,
             webhooks,
+            hot_cache_bytes,
         } = runtime;
         let configured: HashMap<_, _> = upstream_concurrency.into_iter().collect();
         let upstream_limits = indexes
@@ -302,7 +318,7 @@ impl AppState {
             inflight: Mutex::new(HashMap::new()),
             downloads: Mutex::new(HashMap::new()),
             hot: moka::sync::Cache::builder()
-                .max_capacity(256 * 1024 * 1024)
+                .max_capacity(hot_cache_bytes)
                 .weigher(|key: &String, (_, value): &(i64, Bytes)| {
                     u32::try_from(key.len() + value.len()).unwrap_or(u32::MAX)
                 })

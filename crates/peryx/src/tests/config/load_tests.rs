@@ -28,6 +28,7 @@ fn test_env_overlays_scalar_and_log_fields() {
         ("PERYX_DATA_DIR", "/srv/peryx"),
         ("PERYX_OFFLINE", "true"),
         ("PERYX_CACHE_TTL_SECS", "42"),
+        ("PERYX_HOT_CACHE_BYTES", "1048576"),
         ("PERYX_LOG_LEVEL", "debug"),
         ("PERYX_LOG_FORMAT", "json"),
         ("PERYX_LOG_SINK", "file"),
@@ -39,6 +40,7 @@ fn test_env_overlays_scalar_and_log_fields() {
     assert_eq!(partial.data_dir, Some(PathBuf::from("/srv/peryx")));
     assert_eq!(partial.offline, Some(true));
     assert_eq!(partial.cache_ttl_secs, Some(42));
+    assert_eq!(partial.hot_cache_bytes, Some(1_048_576));
     assert_eq!(partial.log.level.as_deref(), Some("debug"));
     assert_eq!(partial.log.format, Some(LogFormat::Json));
     assert_eq!(partial.log.sink, Some(LogSink::File));

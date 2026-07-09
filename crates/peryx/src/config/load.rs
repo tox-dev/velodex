@@ -34,6 +34,7 @@ pub fn from_env_source(get: impl Fn(&str) -> Option<String>) -> Result<PartialCo
         data_dir: get("PERYX_DATA_DIR").map(PathBuf::from),
         offline: parse_env(&get, "PERYX_OFFLINE")?,
         cache_ttl_secs: parse_env(&get, "PERYX_CACHE_TTL_SECS")?,
+        hot_cache_bytes: parse_env(&get, "PERYX_HOT_CACHE_BYTES")?,
         indexes: None,
         tls: None,
         acme: None,
