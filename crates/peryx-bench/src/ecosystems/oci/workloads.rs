@@ -1,18 +1,18 @@
 //! The three OCI workloads: image pulls, blob throughput, and a parallel pull fleet.
 //!
-//! Every workload drives `crane` for the transfers, so one client handles the bearer-token dance
-//! against Docker Hub and plain pulls against the local proxies alike, and no registry sees a
-//! client-side layer cache between measurements.
+//! Pulls drive `crane`, so one client handles the bearer-token dance against Docker Hub and plain
+//! pulls against the local proxies alike, and no registry sees a client-side layer cache between
+//! measurements. Blob throughput is read in process instead: a `crane` launch per stream costs more
+//! than the transfer it wraps, and it lands unevenly across the single and eight-way rows.
 
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::{Context as _, bail};
 use tokio::process::Command;
 
 use super::images::{FLEET_IMAGE, PULL_IMAGES, STRESS_IMAGE};
-use super::servers::{DOCKERHUB, client_reference, insecure, table_name, upstream_for};
+use super::servers::{DOCKERHUB, client_reference, hub_credentials, insecure, table_name, upstream_for};
 use crate::report::{Absent, Metric, baseline, network_row, publish, row, summarize, table};
 use crate::servers::{Active, Server};
 use crate::stats::Summary;
@@ -157,7 +157,7 @@ pub async fn throughput(servers: &[Server], rounds: usize, http: &reqwest::Clien
             let state = scratch.path().join("state");
             std::fs::create_dir(&state)?;
             let active = server.start(&state, http).await?;
-            match blob_round(&active.url, &digest, size).await {
+            match blob_round(http, &active.url, &digest, size).await {
                 Ok((single, eight)) => {
                     hot1[index].push(single);
                     hot8[index].push(eight);
@@ -202,7 +202,7 @@ pub async fn throughput(servers: &[Server], rounds: usize, http: &reqwest::Clien
 
 /// One round of the throughput workload: warm the layer with a full pull, then one single and one
 /// eight-way stream of the cached layer.
-async fn blob_round(base: &str, digest: &str, size: u64) -> anyhow::Result<(f64, f64)> {
+async fn blob_round(http: &reqwest::Client, base: &str, digest: &str, size: u64) -> anyhow::Result<(f64, f64)> {
     let repo = repository(STRESS_IMAGE);
     // Warm the layer by pulling the whole image first. A pull-through proxy fetches the layer on
     // demand and a sync-based registry mirrors it from the manifest, so this is the one request all
@@ -210,40 +210,113 @@ async fn blob_round(base: &str, digest: &str, size: u64) -> anyhow::Result<(f64,
     // a request it never serves. The hot rows below then compare cached-layer transfer like for like.
     let scratch = tempfile::tempdir()?;
     crane_pull(base, STRESS_IMAGE, &scratch.path().join("warm.tar")).await?;
-    let single = crane_blob(base, &repo, digest).await?;
-    let hot8 = parallel_blobs(base, &repo, digest, 8).await?;
+    // Read it once more so the page cache holds it for both rows, and neither prices a disk read.
+    stream_blob(http, base, &repo, digest, size).await?;
+    let single = stream_blob(http, base, &repo, digest, size).await?;
+    let hot8 = parallel_blobs(http, base, &repo, digest, size, 8).await?;
     #[expect(clippy::cast_precision_loss, reason = "layer sizes fit f64 to the byte")]
     let (size, clients) = (size as f64, 8.0);
     Ok((size / single / 1e6, clients * size / hot8 / 1e6))
 }
 
-/// One `crane blob` of `repo@digest` through `base`, streamed to nowhere; returns wall seconds.
-async fn crane_blob(base: &str, repo: &str, digest: &str) -> anyhow::Result<f64> {
-    let reference = format!("{}@{digest}", client_reference(base, repo));
-    let mut command = Command::new("crane");
-    command.arg("blob");
-    if insecure(base) {
-        command.arg("--insecure");
-    }
-    command.arg(&reference).stdout(Stdio::null()).stderr(Stdio::piped());
+/// The distribution-spec blob URL for `repo@digest` behind `base`, keeping whatever index prefix the
+/// base carries: peryx serves `/v2/<index>/<repo>/blobs/…`, a bare registry `/v2/<repo>/blobs/…`.
+fn blob_url(base: &str, repo: &str, digest: &str) -> anyhow::Result<String> {
+    let url = url::Url::parse(base).context("registry base is a valid URL")?;
+    let host = url.host_str().context("registry base names a host")?;
+    let authority = url
+        .port()
+        .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"));
+    let prefix = url.path().trim_matches('/');
+    let prefix = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}/")
+    };
+    Ok(format!(
+        "{}://{authority}/v2/{prefix}{repo}/blobs/{digest}",
+        url.scheme()
+    ))
+}
+
+/// Read `repo@digest` through `base` with this harness's own client, discarding the bytes; returns
+/// wall seconds.
+///
+/// This used to shell out to `crane blob` per stream. A process launch plus crane's client-side
+/// sha256 verify are a large fixed cost against a transfer that takes a fifth of a second, and the
+/// cost lands unevenly: it is paid once against a single stream and amortized across eight parallel
+/// ones, so the same distortion penalized the single-stream row and flattered the eight-way row.
+/// Worse, it decided the ranking. Served to a plain HTTP client, peryx streams this layer faster than
+/// zot; measured through `crane`, it appeared to lose by half. Reading the blob in process prices the
+/// registry, exactly as the `PyPI` throughput workload already does.
+/// Stream one blob and return the seconds it took, having checked every byte arrived.
+///
+/// Counting the body is not paranoia: a registry that answers `200` with a short body would divide
+/// the layer's full size by a fraction of the transfer time and report a throughput it never reached.
+async fn stream_blob(http: &reqwest::Client, base: &str, repo: &str, digest: &str, size: u64) -> anyhow::Result<f64> {
+    let url = blob_url(base, repo, digest)?;
     let start = Instant::now();
-    let output = command.output().await.context("crane did not start")?;
-    if !output.status.success() {
-        bail!(
-            "crane blob {reference} failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let mut response = http.get(&url).send().await.context("blob request did not send")?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let token = bearer_token(http, &response, repo).await?;
+        response = http.get(&url).bearer_auth(token).send().await?;
     }
-    Ok(start.elapsed().as_secs_f64())
+    if !response.status().is_success() {
+        bail!("blob {url} answered {}", response.status());
+    }
+    let mut served = 0u64;
+    while let Some(chunk) = response.chunk().await? {
+        served += chunk.len() as u64;
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    anyhow::ensure!(served == size, "blob {url} served {served} bytes, expected {size}");
+    Ok(elapsed)
+}
+
+/// Exchange a registry's `401` challenge for a pull token. Docker Hub is the only party that asks.
+async fn bearer_token(http: &reqwest::Client, challenge: &reqwest::Response, repo: &str) -> anyhow::Result<String> {
+    let header = challenge
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .context("a 401 carries a WWW-Authenticate challenge")?;
+    let field = |name: &str| {
+        header
+            .split([',', ' '])
+            .find_map(|part| part.trim().strip_prefix(&format!("{name}=")))
+            .map(|value| value.trim_matches('"').to_owned())
+    };
+    let realm = field("realm").context("the challenge names a bearer realm")?;
+    let service = field("service").unwrap_or_default();
+    let scope = format!("repository:{repo}:pull");
+    let endpoint = url::Url::parse_with_params(&realm, [("service", service.as_str()), ("scope", scope.as_str())])
+        .context("the bearer realm is a valid URL")?;
+    let mut request = http.get(endpoint);
+    if let Some((user, secret)) = hub_credentials() {
+        request = request.basic_auth(user, Some(secret));
+    }
+    let body: serde_json::Value =
+        serde_json::from_str(&request.send().await?.text().await?).context("the token endpoint returned JSON")?;
+    body.get("token")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .context("the token endpoint returned a token")
 }
 
 /// `clients` simultaneous streams of the same layer; returns wall seconds until all finish.
-async fn parallel_blobs(base: &str, repo: &str, digest: &str, clients: usize) -> anyhow::Result<f64> {
+async fn parallel_blobs(
+    http: &reqwest::Client,
+    base: &str,
+    repo: &str,
+    digest: &str,
+    size: u64,
+    clients: usize,
+) -> anyhow::Result<f64> {
     let start = Instant::now();
     let streams: Vec<_> = (0..clients)
         .map(|_| {
-            let (base, repo, digest) = (base.to_owned(), repo.to_owned(), digest.to_owned());
-            tokio::spawn(async move { crane_blob(&base, &repo, &digest).await })
+            let (http, base, repo, digest) = (http.clone(), base.to_owned(), repo.to_owned(), digest.to_owned());
+            tokio::spawn(async move { stream_blob(&http, &base, &repo, &digest, size).await })
         })
         .collect();
     for stream in streams {

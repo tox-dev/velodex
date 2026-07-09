@@ -57,7 +57,7 @@ fn mirrored() -> bool {
 
 /// Docker Hub credentials, but only when a party actually talks to Docker Hub; a local mirror serves
 /// the already-cached images over plain HTTP with no auth.
-fn hub_credentials() -> Option<(String, String)> {
+pub fn hub_credentials() -> Option<(String, String)> {
     (!mirrored()).then(credentials).flatten()
 }
 
