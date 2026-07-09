@@ -273,6 +273,54 @@ pub fn cost_rows(servers: &[Server], costs: &[Option<Vec<Cost>>]) -> Vec<Row> {
     ]
 }
 
+/// The cost rows for a closed-loop workload driven to a fixed clock, where the fastest server
+/// necessarily completes the most requests.
+///
+/// Absolute CPU ranks such a table backwards: a server answering forty-seven times the requests burns
+/// more of the processor doing it, and would score worst for being fastest. Divide by the work each
+/// party actually did. Peak memory needs no such correction; it is a high-water mark, not a total.
+#[must_use]
+pub fn cost_rows_per_request(
+    servers: &[Server],
+    costs: &[Option<Vec<Cost>>],
+    requests: &[Option<Vec<u64>>],
+) -> Vec<Row> {
+    let anchor = anchor(servers);
+    let cpu: Vec<Option<Summary>> = costs
+        .iter()
+        .zip(requests)
+        .map(|(party, served)| {
+            let (party, served) = (party.as_ref()?, served.as_ref()?);
+            #[expect(clippy::cast_precision_loss, reason = "request counts fit f64 exactly here")]
+            let per_thousand: Vec<f64> = party
+                .iter()
+                .zip(served)
+                .filter(|(_, count)| **count > 0)
+                .map(|(cost, &count)| cost.cpu_seconds / count as f64 * 1000.0)
+                .collect();
+            Summary::of(&per_thousand)
+        })
+        .collect();
+    #[expect(clippy::cast_precision_loss, reason = "resident sizes fit f64 to the byte")]
+    let rss = summaries(costs, |cost| cost.peak_rss_bytes as f64 / 1e6);
+    vec![
+        row(
+            "server CPU per 1k requests",
+            &cpu,
+            anchor,
+            Metric::Seconds,
+            Absent::NoServer,
+        ),
+        row(
+            "server peak memory",
+            &rss,
+            anchor,
+            Metric::Amount("MB"),
+            Absent::NoServer,
+        ),
+    ]
+}
+
 /// Summarize one field of each party's per-round costs.
 fn summaries(costs: &[Option<Vec<Cost>>], field: impl Fn(&Cost) -> f64) -> Vec<Option<Summary>> {
     costs

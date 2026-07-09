@@ -7,7 +7,7 @@ use tokio::time::{Duration, Instant as TokioInstant, sleep_until};
 
 use super::super::packages::TOP_PACKAGES;
 use super::Rounds;
-use crate::report::{Absent, Metric, baseline, cost_rows, publish, row, summarize, table};
+use crate::report::{Absent, Metric, baseline, cost_rows_per_request, publish, row, summarize, table};
 use crate::servers::Server;
 use crate::usage::{Cost, Usage};
 
@@ -26,8 +26,11 @@ pub async fn load(servers: &[Server], users: &[usize], rounds: usize, http: &req
         .map(|_| users.iter().map(|_| Vec::new()).collect())
         .collect();
     let mut costs: Vec<Option<Vec<Cost>>> = Vec::new();
+    // One request total per round, aligned with that round's cost, so CPU can be priced per request.
+    let mut served: Vec<Option<Vec<u64>>> = Vec::new();
     for (index, server) in servers.iter().enumerate() {
         let mut collected = Rounds::new();
+        let mut round_requests: Vec<u64> = Vec::new();
         for attempt in 1..=rounds {
             let scratch = tempfile::tempdir()?;
             let state = scratch.path().join("state");
@@ -37,16 +40,24 @@ pub async fn load(servers: &[Server], users: &[usize], rounds: usize, http: &req
             println!("[load] {} round {attempt}/{rounds}", server.name);
             match load_round(&active.url, users, http).await {
                 Ok(outcomes) => {
+                    let mut total = 0;
                     for (slot, outcome) in outcomes.into_iter().enumerate() {
                         rps[index][slot].push(outcome.requests_per_second);
                         p95[index][slot].push(outcome.p95_seconds);
+                        total += outcome.requests;
                     }
+                    round_requests.push(total);
                 }
-                Err(error) => println!("[load] {} round {attempt}: failed ({error:#})", server.name),
+                Err(error) => {
+                    println!("[load] {} round {attempt}: failed ({error:#})", server.name);
+                    round_requests.push(0);
+                }
             }
             collected.record_cost(usage);
         }
-        costs.push(collected.costs());
+        let ran = collected.costs();
+        served.push(ran.as_ref().map(|_| round_requests));
+        costs.push(ran);
     }
     let base = baseline(servers);
     let mut rows = Vec::new();
@@ -73,7 +84,7 @@ pub async fn load(servers: &[Server], users: &[usize], rounds: usize, http: &req
             Absent::Failed,
         ));
     }
-    rows.extend(cost_rows(servers, &costs));
+    rows.extend(cost_rows_per_request(servers, &costs, &served));
     publish(
         "load",
         table(
@@ -113,6 +124,8 @@ async fn warm_pages(index_url: &str, http: &reqwest::Client) -> anyhow::Result<(
 struct SwarmResult {
     requests_per_second: f64,
     p95_seconds: f64,
+    /// Every request the server answered in this swarm, so its CPU can be priced per unit of work.
+    requests: u64,
 }
 
 /// How long the closed-loop capacity probe and the open-loop latency window each run.
@@ -135,20 +148,21 @@ const LOAD_FRACTION: f64 = 0.7;
 /// understates p99 by orders of magnitude); driving open-loop at or above capacity would instead
 /// inflate every latency to the window length, which is why the schedule sits below the ceiling.
 async fn swarm(index_url: &str, users: usize) -> anyhow::Result<SwarmResult> {
-    let requests_per_second = measure_capacity(index_url, users).await?;
+    let (requests_per_second, burst) = measure_capacity(index_url, users).await?;
     if requests_per_second == 0.0 {
         bail!("the swarm completed no requests");
     }
-    let p95_seconds = measure_tail(index_url, users, requests_per_second * LOAD_FRACTION).await?;
+    let (p95_seconds, paced) = measure_tail(index_url, users, requests_per_second * LOAD_FRACTION).await?;
     Ok(SwarmResult {
         requests_per_second,
         p95_seconds,
+        requests: burst + paced,
     })
 }
 
 /// Closed-loop peak: `users` clients each refetch as fast as responses return for [`CAPACITY_WINDOW`];
 /// the completed count over the window is the sustained request rate.
-async fn measure_capacity(index_url: &str, users: usize) -> anyhow::Result<f64> {
+async fn measure_capacity(index_url: &str, users: usize) -> anyhow::Result<(f64, u64)> {
     let mut tasks = Vec::new();
     for user in 0..users {
         let index_url = index_url.to_owned();
@@ -174,13 +188,14 @@ async fn measure_capacity(index_url: &str, users: usize) -> anyhow::Result<f64> 
         completed += task.await.expect("capacity client never panics");
     }
     #[expect(clippy::cast_precision_loss, reason = "request counts fit f64 exactly here")]
-    Ok(completed as f64 / CAPACITY_WINDOW.as_secs_f64())
+    Ok((completed as f64 / CAPACITY_WINDOW.as_secs_f64(), completed))
 }
 
 /// Open-loop tail: `users` clients share `target_rate` requests per second, each firing on a fixed
 /// schedule regardless of when responses return, over [`LATENCY_WINDOW`]. Latency is timed from the
-/// intended send time so a stall is charged its full delay. Returns the p95 in seconds.
-async fn measure_tail(index_url: &str, users: usize, target_rate: f64) -> anyhow::Result<f64> {
+/// intended send time so a stall is charged its full delay. Returns the p95 in seconds and the
+/// number of requests it recorded.
+async fn measure_tail(index_url: &str, users: usize, target_rate: f64) -> anyhow::Result<(f64, u64)> {
     #[expect(clippy::cast_precision_loss, reason = "user counts fit f64 exactly here")]
     let interval = Duration::from_secs_f64(users as f64 / target_rate);
     let mut tasks = Vec::new();
@@ -200,7 +215,7 @@ async fn measure_tail(index_url: &str, users: usize, target_rate: f64) -> anyhow
         bail!("the latency probe recorded no requests");
     }
     #[expect(clippy::cast_precision_loss, reason = "microsecond latencies fit f64 exactly here")]
-    Ok(merged.value_at_quantile(0.95) as f64 / 1e6)
+    Ok((merged.value_at_quantile(0.95) as f64 / 1e6, merged.len()))
 }
 
 /// One open-loop client: fetch on the `interval` schedule for [`LATENCY_WINDOW`], recording each
