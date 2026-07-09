@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{Context as _, bail};
 
 use super::super::packages::FLEET_PACKAGE;
-use super::{Rounds, report_samples, run_checked};
+use super::{BENCH_PYTHON, Rounds, report_samples, run_checked};
 use crate::report::{Absent, Metric, baseline, cost_rows, network_row, publish, row, summarize, table};
 use crate::servers::Server;
 use crate::usage::{Cost, Usage};
@@ -86,7 +86,7 @@ fn fleet_install(index_url: &str, scratch: &Path, workers: usize) -> anyhow::Res
         .map(|index| rundir.path().join(format!("venv-{index}")))
         .collect();
     for venv in &venvs {
-        run_checked(Command::new("uv").arg("venv").arg(venv))?;
+        run_checked(Command::new("uv").args(["venv", "--python", BENCH_PYTHON]).arg(venv))?;
     }
     let start = Instant::now();
     let threads: Vec<_> = venvs
@@ -96,7 +96,8 @@ fn fleet_install(index_url: &str, scratch: &Path, workers: usize) -> anyhow::Res
             let index_url = index_url.to_owned();
             std::thread::spawn(move || {
                 let output = Command::new("uv")
-                    .args(["pip", "install", "--index-url", &index_url, FLEET_PACKAGE])
+                    .args(["pip", "install", "--index-url", &index_url])
+                    .args(["--only-binary", ":all:", FLEET_PACKAGE])
                     .env("VIRTUAL_ENV", &venv)
                     .env("UV_CACHE_DIR", format!("{}-cache", venv.display()))
                     .output()

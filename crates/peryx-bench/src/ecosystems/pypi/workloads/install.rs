@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{Context as _, bail};
 
 use super::super::packages::TOP_PACKAGES;
-use super::{Rounds, report_samples, run_checked};
+use super::{BENCH_PYTHON, Rounds, report_samples, run_checked};
 use crate::report::{Absent, Metric, baseline, cost_rows, network_row, publish, row, summarize, table};
 use crate::servers::Server;
 use crate::usage::{Cost, Usage};
@@ -90,12 +90,13 @@ fn prewarm_cdn() -> anyhow::Result<()> {
 fn install_once(client: &str, index_url: &str, scratch: &Path) -> anyhow::Result<f64> {
     let workdir = tempfile::tempdir_in(scratch)?;
     let venv = workdir.path().join("venv");
-    run_checked(Command::new("uv").args(["venv"]).arg(&venv))?;
+    run_checked(Command::new("uv").args(["venv", "--python", BENCH_PYTHON]).arg(&venv))?;
     let mut command;
     if client == "uv" {
         command = Command::new("uv");
         command
             .args(["pip", "install", "--index-url", index_url])
+            .args(["--only-binary", ":all:"])
             .args(TOP_PACKAGES)
             .env("VIRTUAL_ENV", &venv)
             .env("UV_CACHE_DIR", workdir.path().join("client-cache"));
@@ -109,6 +110,7 @@ fn install_once(client: &str, index_url: &str, scratch: &Path) -> anyhow::Result
         command = Command::new(venv.join("bin").join("pip"));
         command
             .args(["install", "--no-cache-dir", "--disable-pip-version-check"])
+            .args(["--only-binary", ":all:"])
             .args(["--index-url", index_url])
             .args(TOP_PACKAGES);
     }
