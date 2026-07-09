@@ -55,6 +55,8 @@ and a tag opens its manifest: the config and layer blobs of an image, or the per
 each by digest and size. Each tar layer carries a `contents` link that opens the same archive browser a wheel does,
 listing the layer's files and previewing text members in bounded chunks.
 
+{{ screen(alt="An OCI manifest: the pull command, the config digest, and the layer table with a contents link", name="oci-manifest") }}
+
 Inspectable wheels, zips, zipped eggs, `.tar`, `.tar.gz`, and `.tgz` archives get a `contents` link. It opens the
 archive browser: members with their sizes, and member text in bounded chunks for large generated files. Other legacy
 compressed tar formats such as `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.tlz`, `.tar.lz`, `.tar.lzma`, and `.tar.zst`
