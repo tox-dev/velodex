@@ -22,6 +22,7 @@ pub fn Dashboard() -> impl IntoView {
     start_refresh(snapshot);
     view! {
         <section class="page">
+            <StoopHero snapshot />
             <Suspense fallback=|| view! { <StoopLoader /> }>
                 {move || Suspend::new(async move {
                     let data = snapshot.await;
@@ -35,8 +36,12 @@ pub fn Dashboard() -> impl IntoView {
 
 /// The home identity: the falcon in a full stoop, diving once on load, beside the wordmark and the
 /// "artifact vault" descriptor. `prefers-reduced-motion` paints it settled.
+///
+/// The hero sits outside the body's `Suspense`, and only the version text awaits the snapshot. A
+/// refetch every few seconds would otherwise rebuild this `<svg>`, and a fresh node restarts the
+/// once-on-load dive, so the falcon would re-dive on every poll.
 #[component]
-fn StoopHero(version: String) -> impl IntoView {
+fn StoopHero(snapshot: Resource<UiSnapshot>) -> impl IntoView {
     view! {
         <div class="hero-brand">
             <span class="stoop-stage">
@@ -53,7 +58,12 @@ fn StoopHero(version: String) -> impl IntoView {
             </span>
             <span class="brand-text">
                 <span class="wordmark">"peryx"</span>
-                <span class="tagline">"the artifact vault · v"{version}</span>
+                <span class="tagline">
+                    "the artifact vault · v"
+                    <Suspense fallback=|| ()>
+                        {move || Suspend::new(async move { snapshot.await.version })}
+                    </Suspense>
+                </span>
             </span>
         </div>
     }
@@ -117,7 +127,6 @@ fn DashboardBody(data: UiSnapshot, usage: UiStats) -> impl IntoView {
         }
     });
     view! {
-        <StoopHero version=data.version.clone() />
         <div class="metrics-group">
             <div class="metrics-label">"Global"</div>
             <div class="stat-row">
