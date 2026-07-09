@@ -106,14 +106,17 @@ pub async fn stream_detail(state: Arc<AppState>, position: usize, project: Strin
         return Ok(PageOutcome::Fallback);
     }
     let route = index.route.clone();
-    let Some((cached_name, client, offline, context)) = streaming_parts(&state, index, &project)? else {
-        return Ok(PageOutcome::Fallback);
-    };
-
     let hot_key = state.hot_key(&route, &project);
+    // A hot hit is a lookup and a memcpy; take it before the per-request work in `streaming_parts`
+    // (upstream client build, upload/override scans, page context). Only a page that already streamed
+    // through the transform path can be hot, so this never shadows a Fallback the miss path would pick.
     if let Some(bytes) = state.hot_fresh(&hot_key) {
         return Ok(PageOutcome::Ready(bytes));
     }
+
+    let Some((cached_name, client, offline, context)) = streaming_parts(&state, index, &project)? else {
+        return Ok(PageOutcome::Fallback);
+    };
 
     let key = format!("{cached_name}/{project}");
     if offline {
