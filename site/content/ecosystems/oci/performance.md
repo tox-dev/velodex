@@ -42,17 +42,17 @@ Every party is a pull-through cache of Docker Hub, so the tables read against **
 
 The pull workload fetches six official images through each registry, cold (empty cache, every layer a miss) then warm
 (the cache full, the client reset). Against Docker Hub the warm row is where a cache earns its place: peryx serves a
-warm pull in **0.5 s** against 7.2 s to pull Docker Hub yourself, and ahead of distribution (2.4 s) and zot (6.4 s). The
-cold row carries the real upstream fetch and is network-bound, yet peryx fills its cache in **6.7 s**, level with
-direct's 7.3 s despite also verifying and storing every layer: content-addressing fetches each base layer the six images
-share exactly once. distribution pays 12.9 s and zot's on-demand sync far more, 51.3 s. You take the cold cost once per
-image, and every pull after is the warm row.
+warm pull in **0.7 s** against 7.4 s to pull Docker Hub yourself, and ahead of distribution (2.7 s) and zot (6.6 s). The
+cold row carries the real upstream fetch and is network-bound, yet peryx fills its cache in **6.7 s**, ahead of direct's
+7.4 s despite also verifying and storing every layer: content-addressing fetches each base layer the six images share
+exactly once. distribution pays 13.5 s and zot's on-demand sync far more, 51.2 s. You take the cold cost once per image,
+and every pull after is the warm row.
 
 {{ bench(file="pull") }}
 
-Behind the mirror the same warm serving stands on its own, free of the network: peryx answers in **2.2 s**, level with
-distribution (2.6 s) and clear of zot (6.4 s), and the cold fill settles to 3.0 s against direct's 2.7 s, the
-reproducible view of the numbers above.
+Behind the mirror the same warm serving stands on its own, free of the network: peryx answers in **0.6 s**, clear of
+distribution (2.7 s) and zot (6.7 s), and the cold fill settles to 3.2 s against direct's 2.8 s, the reproducible view
+of the numbers above.
 
 {{ bench(file="pull-mirror") }}
 
@@ -62,18 +62,20 @@ Once a layer is cached, how fast does it leave the registry? The throughput work
 layer (30 MB of `python:3.12-slim`), then streams it back, alone and under eight parallel readers. Warming first keeps
 the row fair across designs: a pull-through proxy caches the layer on a blob request while a sync-based registry mirrors
 it from the manifest, so pulling the image once gives every registry the layer to serve however its store holds it. All
-three registries stream from disk. Eight-way peryx and zot run level at the front, **803** and **795 MB/s**, both far
-over distribution's 148 and direct's 88. zot reaches it through the kernel's `sendfile` path, copying bytes straight
-from the page cache to the socket; peryx pipelines its own reads so the disk read runs ahead of the socket write,
-matching zot's throughput despite the userspace copy it still pays. Single-stream the order flips: zot's zero-copy leads
-at 181 against peryx's 68, where peryx's per-request setup shows through with only one reader to amortize it. These are
-the noisiest rows in the suite: each transfer is a short `crane` subprocess, so single-stream numbers are dominated by
-process overhead and the spreads run wide; read them as broad strokes, not to the digit.
+three registries stream from disk. Eight-way peryx and zot run level at the front, **495** and **497 MB/s**, both far
+over direct's 83 and distribution's 46. zot reaches it through the kernel's `sendfile` path, copying bytes straight from
+the page cache to the socket; peryx pipelines its own reads so the disk read runs ahead of the socket write, matching
+zot's throughput despite the userspace copy it still pays. Single-stream the order flips: zot's zero-copy leads at 135
+against peryx's 58, where peryx's per-request setup shows through with only one reader to amortize it. These are the
+noisiest rows in the suite: each transfer is a short `crane` subprocess, so single-stream numbers are dominated by
+process overhead and the spreads run wide; read them as broad strokes, not to the digit. Asked for the same bytes over
+plain HTTP, with no subprocess between, the identical code path streams a cached 111 MB artifact at roughly 6 GB/s, so
+the single-stream row prices the client far more than the store.
 
 {{ bench(file="image-throughput") }}
 
-Behind the mirror the ordering holds, zot's zero-copy path ahead and peryx next at **576 MB/s** eight-way, a stride
-behind zot's 593; the wide single-stream spreads hold with it, the honest read on a subprocess-bound micro-workload.
+Behind the mirror the ordering holds, zot's zero-copy path ahead and peryx next at **832 MB/s** eight-way, a stride
+behind zot's 859; the wide single-stream spreads hold with it, the honest read on a subprocess-bound micro-workload.
 
 {{ bench(file="image-throughput-mirror") }}
 
@@ -81,13 +83,13 @@ behind zot's 593; the wide single-stream spreads hold with it, the honest read o
 
 The fleet workload is ten clients pulling one image (`node:22-alpine`) at once, each with its own empty cache, exactly
 like ten CI jobs landing on a runner pool together. Against Docker Hub it is where single-flight pays off most: peryx's
-ten clients share the upstream fetches and finish cold in **2.2 s** and warm in **0.6 s**, against 6–9 s cold for the
-others. It is the rate-limit story in one row: those ten pulls cost the upstream a single fetch through peryx, where
-direct sends all ten to Docker Hub and stays at 6.0 s warm because it caches nothing.
+ten clients share the upstream fetches and finish cold in **2.2 s** and warm in **0.7 s**, against 6 to 12 s cold for
+the others. It is the rate-limit story in one row: those ten pulls cost the upstream a single fetch through peryx, where
+direct sends all ten to Docker Hub and stays at 6.4 s warm because it caches nothing.
 
 {{ bench(file="parallel-pull") }}
 
-Behind the mirror the shape survives without the network: peryx finishes cold in 1.5 s and warm in 0.9 s, still ahead of
+Behind the mirror the shape survives without the network: peryx finishes cold in 1.1 s and warm in 0.6 s, still ahead of
 the field, and the numbers stop moving with Docker Hub's weather.
 
 {{ bench(file="parallel-pull-mirror") }}
