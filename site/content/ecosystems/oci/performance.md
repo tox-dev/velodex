@@ -7,8 +7,11 @@ weight = 2
 peryx streams an image's blobs to the client while teeing them into a content-addressed store, and concurrent pulls of
 one uncached layer share a single upstream fetch. This page measures what that buys against the registries you would
 otherwise put in front of Docker Hub, from a
-[benchmark harness](https://github.com/tox-dev/peryx/tree/main/crates/peryx-bench) driving
-[crane](https://github.com/google/go-containerregistry) against each registry on one Apple Silicon laptop.
+[benchmark harness](https://github.com/tox-dev/peryx/tree/main/crates/peryx-bench) running every registry on
+[one Apple Silicon machine](@/core/performance.md#the-machine-these-numbers-come-from). Pulls go through
+[crane](https://github.com/google/go-containerregistry), so a real client handles the manifest walk and the bearer-token
+dance; layer transfers are read in process over plain HTTP, because a subprocess per stream prices the client rather
+than the registry.
 
 ## How this is measured, two ways
 
@@ -62,20 +65,27 @@ Once a layer is cached, how fast does it leave the registry? The throughput work
 layer (30 MB of `python:3.12-slim`), then streams it back, alone and under eight parallel readers. Warming first keeps
 the row fair across designs: a pull-through proxy caches the layer on a blob request while a sync-based registry mirrors
 it from the manifest, so pulling the image once gives every registry the layer to serve however its store holds it. All
-three registries stream from disk. Eight-way peryx and zot run level at the front, **495** and **497 MB/s**, both far
-over direct's 83 and distribution's 46. zot reaches it through the kernel's `sendfile` path, copying bytes straight from
-the page cache to the socket; peryx pipelines its own reads so the disk read runs ahead of the socket write, matching
-zot's throughput despite the userspace copy it still pays. Single-stream the order flips: zot's zero-copy leads at 135
-against peryx's 58, where peryx's per-request setup shows through with only one reader to amortize it. These are the
-noisiest rows in the suite: each transfer is a short `crane` subprocess, so single-stream numbers are dominated by
-process overhead and the spreads run wide; read them as broad strokes, not to the digit. Asked for the same bytes over
-plain HTTP, with no subprocess between, the identical code path streams a cached 111 MB artifact at roughly 6 GB/s, so
-the single-stream row prices the client far more than the store.
+three registries then stream from the page cache, and the interesting number is how many readers each one needs to
+saturate the machine.
+
+peryx serves a single stream at **6,838 MB/s** against zot's 2,772, and eight readers take it to 8,192. One reader is
+already most of the way there, because peryx pipelines its reads: the next chunk is in flight while the current one goes
+to the socket, so a lone client never waits on the disk. zot takes the kernel's zero-copy `sendfile` path, cheaper per
+byte but serialized behind one reader's syscalls, so it needs eight overlapping readers to climb from 2,772 to 7,002
+MB/s and reach the same neighbourhood.
+
+That neighbourhood is the socket, not the registry. On this box a
+[server that does nothing but write a buffer](@/core/performance.md#the-machine-these-numbers-come-from) hands a 30 MB
+body to one loopback client at 10.2 GB/s. peryx's single stream is the same order of magnitude as that; zot's 2.8 GB/s
+is not. Both registries leave the network-bound rows far behind, where Docker Hub itself manages 61 MB/s and
+distribution 99.
 
 {{ bench(file="image-throughput") }}
 
-Behind the mirror the ordering holds, zot's zero-copy path ahead and peryx next at **832 MB/s** eight-way, a stride
-behind zot's 859; the wide single-stream spreads hold with it, the honest read on a subprocess-bound micro-workload.
+Behind the mirror the shape repeats and the gap widens slightly: peryx streams **7,164 MB/s** to one reader against
+zot's 2,848, and at eight the two finish level, 8,747 to 8,694. The single-stream ratio, near 2.5x in both readings, is
+the number to carry away; the eight-way figures are pressed against the machine and say more about the loopback than
+about either registry.
 
 {{ bench(file="image-throughput-mirror") }}
 

@@ -24,10 +24,11 @@ env VIRTUAL_ENV=$PWD/fresh-venv UV_CACHE_DIR=$PWD/fresh-cache \
 `--only-binary :all:` keeps the run honest. Without it a package that ships no wheel for the interpreter is compiled
 from source, and that build lands inside the measured install, dwarfing anything the index server contributes.
 
-Setup: peryx release build and the client on the same Apple Silicon laptop, roughly 700 Mbit/s to PyPI's CDN. Each cell
-is the median over three independent rounds, each restarting the server on empty state; "cold" is that empty first pass,
-"warm" reruns against the now-full cache. Every server is torn down with its whole process group between rounds, so a
-forked worker cannot outlive its round and steal CPU from whoever is measured next. See
+Setup: peryx release build and the client on the same
+[Apple Silicon machine](@/core/performance.md#the-machine-these-numbers-come-from), roughly 700 Mbit/s to PyPI's CDN.
+Each cell is the median over three independent rounds, each restarting the server on empty state; "cold" is that empty
+first pass, "warm" reruns against the now-full cache. Every server is torn down with its whole process group between
+rounds, so a forked worker cannot outlive its round and steal CPU from whoever is measured next. See
 [performance and methodology](@/core/performance.md) for how the rounds, spread, and network-bound rows are handled.
 
 | Scenario                  | Wall time | What dominates                             |
@@ -39,7 +40,8 @@ forked worker cannot outlive its round and steal CPU from whoever is measured ne
 An install is a blunt instrument for measuring an index server. uv's own resolve, unzip, and install work dominates the
 wall clock, so every cache lands within a second or two of the others, and a faster index cannot rescue a slow client.
 The rows that actually isolate the server are the request swarm and the file throughput further down, where peryx
-answers 461 requests a second against direct's 233, at a 12 ms p95, and spends 1.8 s of CPU where devpi spends 17.2 s.
+answers 571 requests a second against direct's 215, holds a 9 ms p95, and serves a thousand of those requests on 2.6 s
+of CPU where devpi needs 13.4 s.
 
 A laptop next to its cache is the *least* favorable setup for the warm numbers: the farther your machines sit from PyPI
 (CI in a private subnet, an office behind one uplink), the more the warm path wins, because it replaces your worst
@@ -207,10 +209,16 @@ transfers, not header round-trips.
 
 {{ bench(file="load") }}
 
-Every table ends with two resource rows: the CPU seconds and peak resident memory of the server's whole process tree
-while its workload ran, compared against peryx (direct runs no server, so it cannot anchor them). Speed alone hides a
-trade: proxpi's hot-transfer lead comes from holding wheels in memory at three to five times peryx's footprint, and
-pypiserver's near-zero CPU reflects that it redirects file downloads to PyPI instead of serving them.
+Every table ends with two resource rows: the CPU the server's whole process tree burned while its workload ran, and its
+peak resident memory, compared against peryx (direct runs no server, so it cannot anchor them). The load table prices
+that CPU **per thousand requests served**, which is the only way to read it. A fixed-duration swarm hands the slowest
+server the smallest bill, and unnormalized it rewards failure: devpi answers 80 requests a second to peryx's 2,703, so
+its absolute CPU looks modest until you divide by the work done, at which point it costs **13.4 s per thousand requests
+against peryx's 2.6 s**.
+
+Speed alone hides a trade. proxpi's eight-way transfer lead comes from holding wheels in memory at nearly seven times
+peryx's 44 MB footprint, and pypiserver's near-zero CPU reflects that it redirects file downloads to PyPI instead of
+serving them.
 
 Every server is measured the same way, on the same machine, in the same run, and one command reproduces every table: see
 [run the benchmarks](@/contributing/benchmarking.md).
