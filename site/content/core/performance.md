@@ -60,14 +60,10 @@ issuing exactly the requests a stall delays and never see the tail, understating
 [coordinated-omission](https://www.scylladb.com/2021/04/22/on-coordinated-omission/) problem). Latencies land in an
 [HdrHistogram](https://github.com/HdrHistogram/HdrHistogram) so the reported percentile is exact.
 
-The suite runs two ways. The tables here are **peryx against the other tools** (`cargo run --release -p peryx-bench`).
-To check a change against an earlier build, **peryx against itself at a base commit** builds both revisions, measures
-each through this same harness so the method matches on both sides, and prints a per-metric verdict aggregated with the
-geometric mean, gating only the local metrics:
-
-```shell
-cargo run --release -p peryx-bench -- ab <base-commit>
-```
+The suite runs two ways. The tables here are **peryx against the other tools**. To check a change against an earlier
+build, **peryx against itself at a base commit** builds both revisions, measures each through this same harness so the
+method matches on both sides, and prints a per-metric verdict aggregated with the geometric mean, gating only the local
+metrics. Both forms are in [run the benchmarks](@/contributing/benchmarking.md).
 
 ## Per-operation cost, by ecosystem
 
@@ -86,10 +82,6 @@ PyPI, serving a cached project from the store:
 | project detail, legacy JSON         | 1.2 ms  |
 | parse an upstream JSON page (numpy) | 0.16 ms |
 
-```shell
-cargo bench -p peryx-ecosystem-pypi --bench operations
-```
-
 OCI (Docker), serving a hosted registry:
 
 | Operation                      | Cost    |
@@ -99,9 +91,8 @@ OCI (Docker), serving a hosted registry:
 | tag list                       | 1.8 µs  |
 | blob fetch (4 KB, streamed)    | 35 µs   |
 
-```shell
-cargo bench -p peryx-ecosystem-oci --bench operations
-```
+Each ecosystem's table comes from its own criterion suite; [run the benchmarks](@/contributing/benchmarking.md) has the
+commands.
 
 The two read paths differ in kind, which the numbers show. A container manifest and blob are content-addressed bytes
 peryx returns as stored, so a pull is a store lookup and a stream: single-digit microseconds for the manifest and tag

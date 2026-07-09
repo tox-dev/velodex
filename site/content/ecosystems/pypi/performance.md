@@ -207,11 +207,8 @@ while its workload ran, compared against peryx (direct runs no server, so it can
 trade: proxpi's hot-transfer lead comes from holding wheels in memory at three to five times peryx's footprint, and
 pypiserver's near-zero CPU reflects that it redirects file downloads to PyPI instead of serving them.
 
-Every server is measured the same way, on the same machine, in the same run, and one command reproduces every table:
-
-```shell
-cargo run --release -p peryx-bench
-```
+Every server is measured the same way, on the same machine, in the same run, and one command reproduces every table: see
+[run the benchmarks](@/contributing/benchmarking.md).
 
 ## Related
 

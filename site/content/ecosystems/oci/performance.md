@@ -24,8 +24,7 @@ The shielded run is also the answer to Docker Hub's pull limit. A registry with 
 pull straight through, so ten CI jobs pulling one image are ten pulls against your quota, and a rigorous benchmark that
 restarts four registries on an empty cache each round burns through the hourly ceiling before it finishes. Put a cache
 in front, which is what peryx is, and one upstream fetch serves everyone behind it, so the fleet's ten cold pulls
-collapse to the single fetch the [fleet numbers](#a-pull-fleet) show. Run both readings with
-`cargo run --release -p peryx-bench -- --ecosystem oci` and again with `--mirror`.
+collapse to the single fetch the [fleet numbers](#a-pull-fleet) show.
 
 ## The field
 
@@ -95,18 +94,9 @@ the field, and the numbers stop moving with Docker Hub's weather.
 
 ## Reproducing
 
-With the repository checked out and Docker running, regenerate both readings:
-
-```shell
-cargo run --release -p peryx-bench -- --ecosystem oci            # against Docker Hub
-cargo run --release -p peryx-bench -- --ecosystem oci --mirror   # shielded, reproducible
-```
-
-Set `DOCKERHUB_USERNAME` and a read-only [access token](https://docs.docker.com/security/for-developers/access-tokens/)
-in `DOCKERHUB_TOKEN` before the first form: the harness threads them into every registry and crane, and an authenticated
-account lifts the pull ceiling an anonymous run hits mid-comparison. The `--mirror` form stands a local pull-through
-cache in front of Docker Hub and points every registry at it, so it is rate-limit-free and repeatable; without it the
-cold rows carry the real upstream fetch and are marked network-bound, kept out of the regression gate.
+Both readings come from the same harness, one straight against Docker Hub and one behind a local pull-through cache that
+makes the run rate-limit-free and repeatable. See [run the benchmarks](@/contributing/benchmarking.md) for the commands
+and the Docker Hub credentials they need.
 
 ## Related
 
