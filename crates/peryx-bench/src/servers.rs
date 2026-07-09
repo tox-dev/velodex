@@ -3,6 +3,8 @@
 //! The concrete servers under test and their index-URL shapes are per-ecosystem definitions; this
 //! module only spawns, health-checks, and tears them down.
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -51,6 +53,10 @@ impl Active {
 impl Drop for Active {
     fn drop(&mut self) {
         if let Some(mut process) = self.process.take() {
+            // gunicorn forks workers, and a `uvx` shim execs its payload: killing the direct child
+            // orphans the rest, which then linger holding CPU and skewing every later measurement.
+            // The child leads its own process group (see `start`), so signal the whole group.
+            kill_process_group(process.id());
             let _ = process.kill();
             let _ = process.wait();
         }
@@ -58,6 +64,20 @@ impl Drop for Active {
             teardown(self.port);
         }
     }
+}
+
+/// Kill every process in the group `pid` leads. A no-op where process groups do not exist.
+fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
 }
 
 impl Server {
@@ -84,9 +104,12 @@ impl Server {
         }
         let log = state.join("server.log");
         let sink = std::fs::File::create(&log)?;
-        let process = command(port, state)
-            .stdout(Stdio::from(sink.try_clone()?))
-            .stderr(Stdio::from(sink))
+        let mut spawned = command(port, state);
+        spawned.stdout(Stdio::from(sink.try_clone()?)).stderr(Stdio::from(sink));
+        // Lead a fresh process group so teardown can reap forked workers along with the parent.
+        #[cfg(unix)]
+        spawned.process_group(0);
+        let process = spawned
             .spawn()
             .with_context(|| format!("{} did not start", self.name))?;
         let mut active = Active {
