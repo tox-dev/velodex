@@ -222,6 +222,33 @@ async fn test_out_of_order_chunk_on_patch_is_range_not_satisfiable() {
 }
 
 #[tokio::test]
+async fn test_unreadable_content_range_on_patch_is_range_not_satisfiable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let (_status, headers, _) = send_body(
+        &app,
+        Method::POST,
+        "/v2/store/app/blobs/uploads/",
+        &[("authorization", &auth(TOKEN))],
+        Vec::new(),
+    )
+    .await;
+    let location = headers[header::LOCATION].to_str().unwrap().to_owned();
+    // The client believes it is resuming somewhere, but says so in a way nothing can read. Appending
+    // the chunk anyway would tell it the resume worked while writing the bytes at the wrong offset.
+    let (status, headers, _) = send_body(
+        &app,
+        Method::PATCH,
+        &location,
+        &[("authorization", &auth(TOKEN)), ("content-range", "somewhere")],
+        b"world".to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert!(headers.contains_key(header::RANGE));
+}
+
+#[tokio::test]
 async fn test_out_of_order_chunk_on_put_is_range_not_satisfiable() {
     let dir = tempfile::tempdir().unwrap();
     let (_state, app) = hosted_writable(&dir, TOKEN);

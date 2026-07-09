@@ -84,7 +84,7 @@ impl OciRegistry {
                 .blob_head(client.base_url(), client.auth(), repo, digest)
                 .await
             {
-                Ok(size) => return Ok(blob_head_response(digest, size)),
+                Ok(size) => return Ok(blob_head_response(digest, size, range)),
                 Err(UpstreamError::Status(status)) if absent_upstream(status) => {}
                 Err(err) => return Ok(upstream_error_response(&err, "blob")),
             }
@@ -342,34 +342,29 @@ async fn serve_stored_blob(
         ),
     ];
     // A range in a unit we do not speak, or a multi-range we do not serve as multipart, is ignored and
-    // the whole blob served, per RFC 7233; only a malformed or unsatisfiable single `bytes` range
-    // earns a 416.
-    let Some(range) = range
-        .filter(|value| value.starts_with("bytes="))
+    // the whole blob served, as is any range we cannot parse.
+    let spec = range
         .filter(|value| !value.contains(','))
-    else {
-        let mut builder = Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_LENGTH, size);
-        for (name, value) in common {
-            builder = builder.header(name, value);
+        .map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let (start, end) = match spec {
+        RangeSpec::Ignore => {
+            let mut builder = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_LENGTH, size);
+            for (name, value) in common {
+                builder = builder.header(name, value);
+            }
+            let body = if head {
+                Body::empty()
+            } else {
+                peryx_http::body::pipelined_file(file.into_std().await, 0, size)
+            };
+            return Ok(builder
+                .body(body)
+                .expect("blob response builds from validated header parts"));
         }
-        let body = if head {
-            Body::empty()
-        } else {
-            peryx_http::body::pipelined_file(file.into_std().await, 0, size)
-        };
-        return Ok(builder
-            .body(body)
-            .expect("blob response builds from validated header parts"));
-    };
-    let Some((start, end)) = parse_range(range, size) else {
-        return Ok(Response::builder()
-            .status(StatusCode::RANGE_NOT_SATISFIABLE)
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::CONTENT_RANGE, format!("bytes */{size}"))
-            .body(Body::empty())
-            .expect("range response builds from validated header parts"));
+        RangeSpec::Unsatisfiable => return Ok(unsatisfiable_range(size)),
+        RangeSpec::Satisfiable(start, end) => (start, end),
     };
     let length = end - start + 1;
     let mut builder = Response::builder()
@@ -388,42 +383,103 @@ async fn serve_stored_blob(
 }
 
 /// Parse a single-range `Range: bytes=…` header against a known size, inclusive per HTTP semantics.
+/// The `416` a well-formed but unmeetable range earns, naming the size the client should retry against.
+fn unsatisfiable_range(size: u64) -> Response {
+    Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes */{size}"))
+        .body(Body::empty())
+        .expect("range response builds from validated header parts")
+}
+
 /// A blob `HEAD` response: the size and digest headers a client needs to decide whether to pull, with
 /// no body.
-fn blob_head_response(digest: &str, size: u64) -> Response {
-    Response::builder()
-        .status(StatusCode::OK)
+fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response {
+    // A `HEAD` answers a `Range` the way the matching `GET` would. Ignoring it here while honouring
+    // it for a cached blob made one request give two answers depending on what the store happened to
+    // hold, which is the one thing a client checking a layer must not see.
+    let spec = range
+        .filter(|value| !value.contains(','))
+        .map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let (status, length, content_range) = match spec {
+        RangeSpec::Ignore => (StatusCode::OK, size, None),
+        RangeSpec::Unsatisfiable => return unsatisfiable_range(size),
+        RangeSpec::Satisfiable(start, end) => (
+            StatusCode::PARTIAL_CONTENT,
+            end - start + 1,
+            Some(format!("bytes {start}-{end}/{size}")),
+        ),
+    };
+    let mut builder = Response::builder()
+        .status(status)
         .header(header::CONTENT_TYPE, OCTET_STREAM)
-        .header(header::CONTENT_LENGTH, size)
+        .header(header::CONTENT_LENGTH, length)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(
             DOCKER_CONTENT_DIGEST,
             HeaderValue::from_str(digest).unwrap_or(HeaderValue::from_static("")),
-        )
+        );
+    if let Some(content_range) = content_range {
+        builder = builder.header(header::CONTENT_RANGE, content_range);
+    }
+    builder
         .body(Body::empty())
         .expect("blob head response builds from validated parts")
 }
 
-fn parse_range(header: &str, size: u64) -> Option<(u64, u64)> {
-    let spec = header.strip_prefix("bytes=")?;
-    let (start, end) = spec.split_once('-')?;
-    let (start, end) = match (start.is_empty(), end.is_empty()) {
-        (true, false) => {
-            let suffix: u64 = end.parse().ok()?;
-            (size.checked_sub(suffix)?, size.checked_sub(1)?)
-        }
-        (false, true) => {
-            let start: u64 = start.parse().ok()?;
-            (start, size.checked_sub(1)?)
-        }
-        (false, false) => {
-            let start: u64 = start.parse().ok()?;
-            let end: u64 = end.parse().ok()?;
-            (start, end.min(size.checked_sub(1)?))
-        }
-        (true, true) => return None,
+/// What a `Range` header asks of a representation of a known size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RangeSpec {
+    /// Not a range this server understands. RFC 9110 s14.2: an unparseable `Range` is ignored and
+    /// the whole representation served, never refused.
+    Ignore,
+    /// A well-formed range that no part of the representation can satisfy: a `416`.
+    Unsatisfiable,
+    /// An inclusive byte range within the representation.
+    Satisfiable(u64, u64),
+}
+
+/// Parse a single-range `Range: bytes=...` header against a known size, inclusive per HTTP semantics.
+///
+/// The distinction that matters is between a range that is *wrong* and one that is *unmeetable*.
+/// `bytes=abc-` is not a range at all, so it is ignored; `bytes=9999-` against a 10-byte blob is a
+/// range this blob cannot satisfy, so it earns a `416`. Answering `416` to the former tells a client
+/// its perfectly good request was out of bounds.
+fn parse_range(header: &str, size: u64) -> RangeSpec {
+    let Some(spec) = header.strip_prefix("bytes=") else {
+        return RangeSpec::Ignore;
     };
-    (start <= end && end < size).then_some((start, end))
+    let Some((first, last)) = spec.split_once('-') else {
+        return RangeSpec::Ignore;
+    };
+    let Some(end_of_blob) = size.checked_sub(1) else {
+        // An empty representation satisfies no range, but a well-formed one still earns a `416`.
+        return RangeSpec::Unsatisfiable;
+    };
+    match (first.is_empty(), last.is_empty()) {
+        // `bytes=-N`: the last N bytes. RFC 9110 s14.1.2: when N exceeds the size, the whole
+        // representation is used rather than the range being refused.
+        (true, false) => match last.parse::<u64>() {
+            Ok(0) => RangeSpec::Unsatisfiable,
+            Ok(suffix) => RangeSpec::Satisfiable(size.saturating_sub(suffix), end_of_blob),
+            Err(_) => RangeSpec::Ignore,
+        },
+        // `bytes=N-`: from N to the end.
+        (false, true) => match first.parse::<u64>() {
+            Ok(start) if start > end_of_blob => RangeSpec::Unsatisfiable,
+            Ok(start) => RangeSpec::Satisfiable(start, end_of_blob),
+            Err(_) => RangeSpec::Ignore,
+        },
+        (false, false) => match (first.parse::<u64>(), last.parse::<u64>()) {
+            // `last < first` is not a range; nothing can be read backwards.
+            (Ok(start), Ok(end)) if start > end => RangeSpec::Ignore,
+            (Ok(start), Ok(_)) if start > end_of_blob => RangeSpec::Unsatisfiable,
+            (Ok(start), Ok(end)) => RangeSpec::Satisfiable(start, end.min(end_of_blob)),
+            _ => RangeSpec::Ignore,
+        },
+        (true, true) => RangeSpec::Ignore,
+    }
 }
 
 /// The `member` (and its `offset`) a layer-contents request selects, or `None` to list the layer.
@@ -543,11 +599,41 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_range_rejects_multi_range_and_empty_spec() {
-        assert_eq!(parse_range("bytes=0-1,2-3", 10), None);
-        assert_eq!(parse_range("bytes=-", 10), None);
-        assert_eq!(parse_range("bytes=5-2", 10), None);
-        assert_eq!(parse_range("bytes=0-3", 10), Some((0, 3)));
+    fn test_parse_range_reads_a_satisfiable_span() {
+        assert_eq!(parse_range("bytes=0-3", 10), RangeSpec::Satisfiable(0, 3));
+        assert_eq!(parse_range("bytes=5-", 10), RangeSpec::Satisfiable(5, 9));
+        assert_eq!(parse_range("bytes=-3", 10), RangeSpec::Satisfiable(7, 9));
+        // An end past the last byte is clamped, not refused.
+        assert_eq!(parse_range("bytes=8-99", 10), RangeSpec::Satisfiable(8, 9));
+    }
+
+    #[test]
+    fn test_parse_range_ignores_what_is_not_a_range() {
+        // RFC 9110 s14.2: an unparseable `Range` is ignored, and the whole representation served.
+        for header in [
+            "bytes=",
+            "bytes=-",
+            "bytes=abc-",
+            "bytes=-xyz",
+            "bytes=5-2",
+            "items=0-1",
+        ] {
+            assert_eq!(parse_range(header, 10), RangeSpec::Ignore, "{header}");
+        }
+    }
+
+    #[test]
+    fn test_parse_range_refuses_only_what_the_blob_cannot_meet() {
+        assert_eq!(parse_range("bytes=10-", 10), RangeSpec::Unsatisfiable);
+        assert_eq!(parse_range("bytes=99-100", 10), RangeSpec::Unsatisfiable);
+        assert_eq!(parse_range("bytes=-0", 10), RangeSpec::Unsatisfiable);
+        assert_eq!(parse_range("bytes=0-0", 0), RangeSpec::Unsatisfiable);
+    }
+
+    #[test]
+    fn test_parse_range_serves_the_whole_blob_for_an_oversized_suffix() {
+        // RFC 9110 s14.1.2: a suffix longer than the representation uses the entire representation.
+        assert_eq!(parse_range("bytes=-99", 10), RangeSpec::Satisfiable(0, 9));
     }
 
     #[tokio::test]

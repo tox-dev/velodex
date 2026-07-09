@@ -1070,6 +1070,52 @@ async fn test_catalog_lists_oci_repositories_with_pagination() {
 }
 
 #[tokio::test]
+async fn test_blob_range_that_is_not_a_range_serves_the_whole_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, app) = hosted(&dir);
+    let blob = b"0123456789";
+    let stored = state.blobs.write(blob).unwrap();
+    let uri = format!("/v2/store/app/blobs/sha256:{}", stored.as_str());
+
+    // RFC 9110 s14.2: an unparseable `Range` is ignored, never refused.
+    for header in ["bytes=abc-", "bytes=-", "bytes=5-2"] {
+        let (status, _, got) = send_with(&app, Method::GET, &uri, &[("range", header)]).await;
+        assert_eq!(status, StatusCode::OK, "{header}");
+        assert_eq!(got, &blob[..], "{header}");
+    }
+
+    // RFC 9110 s14.1.2: a suffix longer than the blob uses the whole blob.
+    let (status, headers, got) = send_with(&app, Method::GET, &uri, &[("range", "bytes=-99")]).await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 0-9/{}", blob.len()));
+    assert_eq!(got, &blob[..]);
+}
+
+#[tokio::test]
+async fn test_proxy_blob_head_answers_a_range_it_has_not_cached() {
+    let server = MockServer::start().await;
+    let blob = b"a-real-layer";
+    let digest = oci_digest(blob);
+    Mock::given(method("HEAD"))
+        .and(path(format!("/v2/library/nginx/blobs/{digest}")))
+        .respond_with(ResponseTemplate::new(200).insert_header("content-length", blob.len().to_string().as_str()))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = proxy(&dir, &format!("{}/", server.uri()), false);
+    let uri = format!("/v2/hub/library/nginx/blobs/{digest}");
+
+    // A cached blob answers this with 206. Whether the store happens to hold the layer must not change
+    // what a client checking a range is told.
+    let (status, headers, _) = send_with(&app, Method::HEAD, &uri, &[("range", "bytes=0-3")]).await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 0-3/{}", blob.len()));
+
+    let (status, _, _) = send_with(&app, Method::HEAD, &uri, &[("range", "bytes=99-100")]).await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+}
+
+#[tokio::test]
 async fn test_proxy_blob_head_uses_an_upstream_head_not_a_download() {
     let server = MockServer::start().await;
     let blob = b"a-real-layer";
