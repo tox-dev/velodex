@@ -1,3 +1,4 @@
+{% import "macros/logo.html" as logo %}
 {# Left docs navigation: the diátaxis sections in a fixed order, each with its pages, current page
    marked active. Rendered as a <details> so the same markup is a static column on desktop and a
    collapsible drawer on mobile. #}
@@ -40,7 +41,7 @@
 {% set in_section = current is starting_with(sec.permalink) %}
 <details class="docs-nav-group"{% if in_section %} open{% endif %}>
   <summary>
-    {% if sec.extra.logos %}<img class="docs-nav-icon docs-nav-logo" src="{{ get_url(path=sec.extra.logos.0) }}" alt="" width="18" height="18">{% else %}{{ self::icon(name=icon) }}{% endif %}
+    {% if sec.extra.logos %}{{ logo::imgs(item=sec, size=18, class="docs-nav-icon docs-nav-logo") }}{% else %}{{ self::icon(name=icon) }}{% endif %}
     <a class="docs-nav-title{% if current == sec.permalink %} active{% endif %}" href="{{ sec.permalink }}">{{ sec.title }}</a>
   </summary>
   {% for subpath in sec.subsections %}

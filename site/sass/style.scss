@@ -1453,6 +1453,14 @@ pre:hover .copy-snippet,
 [data-theme="dark"] .screen-dark { display: block !important; }
 [data-theme="dark"] .screen-light { display: none !important; }
 
+// A third-party mark that cannot follow `currentColor` ships a light and a dark file; show one.
+.logo-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-dark { display: inline-block; }
+  :root:not([data-theme="light"]) .logo-light { display: none; }
+}
+[data-theme="dark"] .logo-dark { display: inline-block !important; }
+[data-theme="dark"] .logo-light { display: none !important; }
 
 .title-logos {
   display: inline-flex;

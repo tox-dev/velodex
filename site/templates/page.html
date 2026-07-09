@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "macros/docs.html" as docs %}
+{% import "macros/logo.html" as logo %}
 
 {% block title %}{{ page.title }} — {{ config.title }}{% endblock title %}
 
@@ -24,11 +25,7 @@
     <article data-pagefind-body data-pagefind-weight="{{ search_weight }}">
       <h1>
         {%- if page.extra.logos %}
-        <span class="title-logos">
-          {%- for logo in page.extra.logos %}
-          <img src="{{ get_url(path=logo) }}" alt="" width="28" height="28">
-          {%- endfor %}
-        </span>
+        <span class="title-logos">{{ logo::imgs(item=page, size=28) }}</span>
         {%- endif %}
         {{ page.title }}
       </h1>

@@ -6,6 +6,7 @@ sort_by = "weight"
 template = "section.html"
 [extra]
 logos = [ "logos/oci.svg"]
+logos_dark = [ "logos/oci-white.svg"]
 +++
 
 OCI is the container-image ecosystem: the format of container images and the HTTP protocol clients such as Docker and
