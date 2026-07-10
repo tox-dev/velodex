@@ -107,7 +107,7 @@ fn link_base(dom: &tl::VDom<'_>, base: &Url) -> Url {
 
 fn anchor_to_project(tag: &HTMLTag, base: &Url, parser: &tl::Parser<'_>) -> Option<ProjectListEntry> {
     let href = attr_value(tag, "href").filter(|href| !href.is_empty())?;
-    let name = decode_entities(tag.inner_text(parser).trim());
+    let name = decode_entities(tag.inner_text(parser).trim()).into_owned();
     if !name.is_empty() {
         return Some(ProjectListEntry { name });
     }
@@ -186,7 +186,7 @@ fn is_tag(tag: &HTMLTag, name: &[u8]) -> bool {
 }
 
 fn attr_string(tag: &HTMLTag, name: &str) -> Option<String> {
-    attr_value(tag, name).map(|value| decode_entities(&value))
+    attr_value(tag, name).map(|value| decode_entities(&value).into_owned())
 }
 
 fn attr_value<'tag>(tag: &'tag HTMLTag, name: &'tag str) -> Option<Cow<'tag, str>> {
@@ -251,12 +251,21 @@ fn parse_gpg_sig(tag: &HTMLTag) -> Option<bool> {
     }
 }
 
-fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
+/// Decode the five entities a Simple page may carry, allocating only when one is present.
+///
+/// An entity begins with `&`, and almost no attribute or anchor text on a Simple page contains one.
+/// Five chained `replace` calls walked and reallocated the string five times to discover that.
+fn decode_entities(text: &str) -> Cow<'_, str> {
+    if !text.contains('&') {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&"),
+    )
 }
 
 fn percent_decode(text: &str) -> String {
