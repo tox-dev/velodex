@@ -1,4 +1,13 @@
-//! Blob serving: local and proxied reads, range/HEAD, layer-contents browsing, ingest and delete.
+//! Blob serving: local and proxied reads, HEAD, ingest and delete.
+//!
+//! Blobs are content-addressed and immutable, so a cache hit never asks upstream. Range parsing and
+//! the layer-contents browser each have a grammar of their own and sit beside this unit.
+
+mod contents;
+mod range;
+
+use contents::{layer_contents_response, layer_query_member};
+use range::{RangeSpec, parse_range, unsatisfiable_range};
 
 use super::uploads::created;
 use super::*;
@@ -6,17 +15,15 @@ use crate::error::{ErrorCode, error_response, gateway_error};
 use crate::store::{self};
 use crate::upstream::UpstreamError;
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::Response;
 use futures_util::{Stream, TryStreamExt as _};
 use peryx_events::metrics::Event;
 use peryx_events::webhook::WebhookEventKind;
 use peryx_http::AppState;
 use peryx_index::Index;
 use peryx_policy::PolicyAction;
-use peryx_storage::archive::{self, ArchiveError, MemberChunk};
 use peryx_storage::blob::{BlobError, BlobStore, Digest, PendingBlob};
-use std::path::Path;
 use std::sync::Arc;
 
 impl OciRegistry {
@@ -383,17 +390,6 @@ async fn serve_stored_blob(
         .expect("range response builds from validated header parts"))
 }
 
-/// Parse a single-range `Range: bytes=…` header against a known size, inclusive per HTTP semantics.
-/// The `416` a well-formed but unmeetable range earns, naming the size the client should retry against.
-fn unsatisfiable_range(size: u64) -> Response {
-    Response::builder()
-        .status(StatusCode::RANGE_NOT_SATISFIABLE)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_RANGE, format!("bytes */{size}"))
-        .body(Body::empty())
-        .expect("range response builds from validated header parts")
-}
-
 /// A blob `HEAD` response: the size and digest headers a client needs to decide whether to pull, with
 /// no body.
 fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response {
@@ -429,149 +425,6 @@ fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response 
         .expect("blob head response builds from validated parts")
 }
 
-/// What a `Range` header asks of a representation of a known size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RangeSpec {
-    /// Not a range this server understands. RFC 9110 s14.2: an unparseable `Range` is ignored and
-    /// the whole representation served, never refused.
-    Ignore,
-    /// A well-formed range that no part of the representation can satisfy: a `416`.
-    Unsatisfiable,
-    /// An inclusive byte range within the representation.
-    Satisfiable(u64, u64),
-}
-
-/// Parse a single-range `Range: bytes=...` header against a known size, inclusive per HTTP semantics.
-///
-/// The distinction that matters is between a range that is *wrong* and one that is *unmeetable*.
-/// `bytes=abc-` is not a range at all, so it is ignored; `bytes=9999-` against a 10-byte blob is a
-/// range this blob cannot satisfy, so it earns a `416`. Answering `416` to the former tells a client
-/// its perfectly good request was out of bounds.
-fn parse_range(header: &str, size: u64) -> RangeSpec {
-    let Some(spec) = header.strip_prefix("bytes=") else {
-        return RangeSpec::Ignore;
-    };
-    let Some((first, last)) = spec.split_once('-') else {
-        return RangeSpec::Ignore;
-    };
-    let Some(end_of_blob) = size.checked_sub(1) else {
-        // An empty representation satisfies no range, but a well-formed one still earns a `416`.
-        return RangeSpec::Unsatisfiable;
-    };
-    match (first.is_empty(), last.is_empty()) {
-        // `bytes=-N`: the last N bytes. RFC 9110 s14.1.2: when N exceeds the size, the whole
-        // representation is used rather than the range being refused.
-        (true, false) => match last.parse::<u64>() {
-            Ok(0) => RangeSpec::Unsatisfiable,
-            Ok(suffix) => RangeSpec::Satisfiable(size.saturating_sub(suffix), end_of_blob),
-            Err(_) => RangeSpec::Ignore,
-        },
-        // `bytes=N-`: from N to the end.
-        (false, true) => match first.parse::<u64>() {
-            Ok(start) if start > end_of_blob => RangeSpec::Unsatisfiable,
-            Ok(start) => RangeSpec::Satisfiable(start, end_of_blob),
-            Err(_) => RangeSpec::Ignore,
-        },
-        (false, false) => match (first.parse::<u64>(), last.parse::<u64>()) {
-            // `last < first` is not a range; nothing can be read backwards.
-            (Ok(start), Ok(end)) if start > end => RangeSpec::Ignore,
-            (Ok(start), Ok(_)) if start > end_of_blob => RangeSpec::Unsatisfiable,
-            (Ok(start), Ok(end)) => RangeSpec::Satisfiable(start, end.min(end_of_blob)),
-            _ => RangeSpec::Ignore,
-        },
-        (true, true) => RangeSpec::Ignore,
-    }
-}
-
-/// The `member` (and its `offset`) a layer-contents request selects, or `None` to list the layer.
-fn layer_query_member(query: &str) -> Option<(String, u64)> {
-    let mut member = None;
-    let mut offset = 0;
-    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        match key.as_ref() {
-            "member" => member = Some(value.into_owned()),
-            "offset" => offset = value.parse().unwrap_or(0),
-            _ => {}
-        }
-    }
-    member.map(|member| (member, offset))
-}
-
-/// A synthetic filename that tells the archive engine how the layer blob is framed. The engine picks
-/// its decoder by extension, and a content-addressed blob has none, so sniff the gzip magic and name
-/// it accordingly.
-fn layer_archive_name(path: &Path) -> &'static str {
-    let mut magic = [0_u8; 2];
-    let gzip = std::fs::File::open(path)
-        .and_then(|mut file| file.read_exact(&mut magic))
-        .is_ok()
-        && magic == [0x1f, 0x8b];
-    if gzip { "layer.tar.gz" } else { "layer.tar" }
-}
-
-/// List a stored layer's members, or preview one text member, as a response the web UI's archive
-/// browser consumes: a `{ "members": [...] }` document, or `text/plain` bytes with the member-size,
-/// offset, and next-offset headers of the neutral archive-inspect contract.
-fn layer_contents_response(path: &Path, selected: Option<(String, u64)>) -> Response {
-    let filename = layer_archive_name(path);
-    match selected {
-        None => match archive::list_members_path(filename, path) {
-            Ok(members) => axum::Json(serde_json::json!({ "members": members })).into_response(),
-            Err(err) => layer_error_response(&err),
-        },
-        Some((member, offset)) => {
-            match archive::read_text_member_chunk_nested_path(
-                filename,
-                path,
-                &[],
-                &member,
-                offset,
-                archive::DEFAULT_MEMBER_CHUNK,
-            ) {
-                Ok(chunk) => member_chunk_response(&chunk),
-                Err(err) => layer_error_response(&err),
-            }
-        }
-    }
-}
-
-/// A previewed text member: its bytes as `text/plain`, plus the size/offset/next-offset headers the
-/// browser reads to page through a large member.
-fn member_chunk_response(chunk: &MemberChunk) -> Response {
-    let mut response = Response::new(Body::from(chunk.bytes.clone()));
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    insert_member_header(headers, "x-peryx-member-size", chunk.size);
-    insert_member_header(headers, "x-peryx-member-offset", chunk.offset);
-    if let Some(next) = chunk.next_offset {
-        insert_member_header(headers, "x-peryx-next-offset", next);
-    }
-    response
-}
-
-fn insert_member_header(headers: &mut HeaderMap, name: &'static str, value: u64) {
-    if let Ok(value) = HeaderValue::from_str(&value.to_string()) {
-        headers.insert(HeaderName::from_static(name), value);
-    }
-}
-
-/// Map an archive engine failure onto a client status for peryx's own layer browser: a missing
-/// member is a `404`, a non-text member a `415`, a bad preview range a `416`, and anything else (a
-/// corrupt or unreadable layer) a `422`. This is not a distribution-spec route, so it answers with a
-/// plain status and message the web UI surfaces, not a coded registry error envelope.
-fn layer_error_response(err: &ArchiveError) -> Response {
-    let status = match err {
-        ArchiveError::MemberNotFound => StatusCode::NOT_FOUND,
-        ArchiveError::BinaryMember(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        ArchiveError::InvalidRange { .. } => StatusCode::RANGE_NOT_SATISFIABLE,
-        _ => StatusCode::UNPROCESSABLE_ENTITY,
-    };
-    (status, err.to_string()).into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,47 +450,6 @@ mod tests {
             blob_fault(BlobError::NotFound("x".to_owned())),
             ServeError::Transport(_)
         ));
-    }
-
-    #[test]
-    fn test_parse_range_reads_a_satisfiable_span() {
-        assert_eq!(parse_range("bytes=0-3", 10), RangeSpec::Satisfiable(0, 3));
-        assert_eq!(parse_range("bytes=5-", 10), RangeSpec::Satisfiable(5, 9));
-        assert_eq!(parse_range("bytes=-3", 10), RangeSpec::Satisfiable(7, 9));
-        // An end past the last byte is clamped, not refused.
-        assert_eq!(parse_range("bytes=8-99", 10), RangeSpec::Satisfiable(8, 9));
-    }
-
-    #[test]
-    fn test_parse_range_ignores_what_is_not_a_range() {
-        // RFC 9110 s14.2: an unparseable `Range` is ignored, and the whole representation served.
-        for header in [
-            "bytes=",
-            "bytes=-",
-            "bytes=abc-",
-            "bytes=-xyz",
-            "bytes=5-2",
-            "items=0-1",
-            // One half of the pair reads and the other does not; still not a range.
-            "bytes=1-abc",
-            "bytes=abc-9",
-        ] {
-            assert_eq!(parse_range(header, 10), RangeSpec::Ignore, "{header}");
-        }
-    }
-
-    #[test]
-    fn test_parse_range_refuses_only_what_the_blob_cannot_meet() {
-        assert_eq!(parse_range("bytes=10-", 10), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range("bytes=99-100", 10), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range("bytes=-0", 10), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range("bytes=0-0", 0), RangeSpec::Unsatisfiable);
-    }
-
-    #[test]
-    fn test_parse_range_serves_the_whole_blob_for_an_oversized_suffix() {
-        // RFC 9110 s14.1.2: a suffix longer than the representation uses the entire representation.
-        assert_eq!(parse_range("bytes=-99", 10), RangeSpec::Satisfiable(0, 9));
     }
 
     #[tokio::test]

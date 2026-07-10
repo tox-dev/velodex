@@ -33,7 +33,6 @@ use peryx_index::{Index, IndexKind};
 use peryx_policy::PolicyAction;
 use peryx_storage::blob::PendingBlob;
 use peryx_storage::meta::MetaError;
-use std::io::Read as _;
 use std::sync::Arc;
 
 mod blobs;
