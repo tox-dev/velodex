@@ -34,16 +34,18 @@ impl OciRegistry {
         }
         let response = match reference {
             Reference::Digest(digest) => {
-                let mut served = store::get_manifest(&state.meta, digest)?
-                    .map(|manifest| manifest_response(&manifest, digest, head));
-                for member in serving_members(state, index) {
-                    if served.is_some() {
-                        break;
-                    }
-                    if let Some(client) = proxy_client(&member.kind) {
-                        served = self
-                            .pull_manifest_by_digest(state, client, &member.name, repo, digest, head)
-                            .await?;
+                let mut served =
+                    store::get_manifest(&state.meta, digest)?.map(|manifest| manifest_response(manifest, digest, head));
+                if served.is_none() {
+                    for member in serving_members(state, index) {
+                        if let Some(client) = proxy_client(&member.kind) {
+                            served = self
+                                .pull_manifest_by_digest(state, client, &member.name, repo, digest, head)
+                                .await?;
+                            if served.is_some() {
+                                break;
+                            }
+                        }
                     }
                 }
                 served.unwrap_or_else(|| error_response(ErrorCode::ManifestUnknown, "manifest unknown"))
@@ -89,7 +91,7 @@ impl OciRegistry {
         let gate = flight_gate(state, &gate_key);
         let _guard = gate.lock().await;
         if let Some(manifest) = store::get_manifest(&state.meta, digest)? {
-            return Ok(Some(manifest_response(&manifest, digest, head)));
+            return Ok(Some(manifest_response(manifest, digest, head)));
         }
         let fetched = self
             .fetch_manifest_by_digest(state, client, index, repo, digest, head)
@@ -120,7 +122,7 @@ impl OciRegistry {
         };
         let (manifest, canonical) = store_manifest(state, index, repo, None, response).await?;
         Ok(Some(if canonical == digest {
-            manifest_response(&manifest, digest, head)
+            manifest_response(manifest, digest, head)
         } else {
             error_response(
                 ErrorCode::ManifestInvalid,
@@ -143,7 +145,7 @@ impl OciRegistry {
         let Some(client) = proxy_client(&member.kind) else {
             return Ok(match store::get_tag(&state.meta, &member.name, repo, tag)? {
                 Some(digest) => store::get_manifest(&state.meta, &digest)?
-                    .map(|manifest| manifest_response(&manifest, &digest, head)),
+                    .map(|manifest| manifest_response(manifest, &digest, head)),
                 None => None,
             });
         };
@@ -183,7 +185,7 @@ impl OciRegistry {
         {
             Ok(response) => {
                 let (manifest, canonical) = store_manifest(state, index, repo, Some(tag), response).await?;
-                Ok(Some(manifest_response(&manifest, &canonical, head)))
+                Ok(Some(manifest_response(manifest, &canonical, head)))
             }
             // A `404` is upstream saying the tag is gone, which is an answer. Everything else is a
             // failure to get one, and a failure to confirm a tag is not a reason to forget it: Docker
@@ -228,7 +230,7 @@ impl OciRegistry {
             return Ok(None);
         };
         store::set_tag_freshness(&state.meta, index, repo, tag, &cached, (state.clock)())?;
-        Ok(Some(manifest_response(&manifest, &cached, head)))
+        Ok(Some(manifest_response(manifest, &cached, head)))
     }
 }
 
@@ -243,7 +245,7 @@ fn stale_tag(state: &AppState, index: &str, repo: &str, tag: &str, head: bool) -
     if !within_stale_bound(state, fetched_at) {
         return Ok(None);
     }
-    Ok(store::get_manifest(&state.meta, &digest)?.map(|manifest| manifest_response(&manifest, &digest, head)))
+    Ok(store::get_manifest(&state.meta, &digest)?.map(|manifest| manifest_response(manifest, &digest, head)))
 }
 
 /// Store a manifest a client pushed, mapping the tag or verifying the digest reference.
@@ -440,7 +442,7 @@ fn manifest_created(location: &str, digest: &str, subject: Option<&str>) -> Resp
 
 /// Build the response for a stored manifest, headers-only for a `HEAD`. The content length is set the
 /// same either way, so a `HEAD` reports the size a `GET` would return.
-fn manifest_response(manifest: &Manifest, digest: &str, head: bool) -> Response {
+fn manifest_response(manifest: Manifest, digest: &str, head: bool) -> Response {
     let builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, &manifest.media_type)
@@ -449,7 +451,7 @@ fn manifest_response(manifest: &Manifest, digest: &str, head: bool) -> Response 
     let body = if head {
         Body::empty()
     } else {
-        Body::from(manifest.bytes.clone())
+        Body::from(manifest.bytes)
     };
     builder
         .body(body)
@@ -506,7 +508,7 @@ fn fresh_tag(state: &AppState, index: &str, repo: &str, tag: &str, head: bool) -
     if (state.clock)().saturating_sub(fetched_at) >= state.ttl_secs {
         return Ok(None);
     }
-    Ok(store::get_manifest(&state.meta, &digest)?.map(|manifest| manifest_response(&manifest, &digest, head)))
+    Ok(store::get_manifest(&state.meta, &digest)?.map(|manifest| manifest_response(manifest, &digest, head)))
 }
 
 /// A gateway fault for an upstream manifest failure. Callers treat an "absent" status as a member
