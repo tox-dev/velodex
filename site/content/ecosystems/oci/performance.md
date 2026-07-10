@@ -126,10 +126,10 @@ the single-flight gate. The window is [`cache_ttl_secs`](@/core/configuration.md
 
 `tag list` used to be the one row peryx lost, and it lost it for a structural reason: a single-member proxy passed the
 request straight to its upstream on every request, so the row measured a round trip to Docker Hub rather than a registry
-serving something it holds. A tag list is mutable, which is why it asked — but that is what a freshness window is for. It
-is now cached like a tag: trusted for [`cache_ttl_secs`](@/core/configuration.md), revalidated after, and answered from
-the last list when the upstream cannot be reached, bounded by `max_stale_secs`. A burst of listings costs the upstream
-one request, not one per client.
+serving something it holds. A tag list is mutable, which is why it asked — but that is what a freshness window is for.
+It is now cached like a tag: trusted for [`cache_ttl_secs`](@/core/configuration.md), revalidated after, and answered
+from the last list when the upstream cannot be reached, bounded by `max_stale_secs`. A burst of listings costs the
+upstream one request, not one per client.
 
 ## Reproducing
 

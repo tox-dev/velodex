@@ -133,16 +133,20 @@ fn build_row(
     absent: Absent,
     network_bound: bool,
 ) -> Row {
-    let reference = values
-        .get(baseline)
-        .and_then(Option::as_ref)
-        .map_or(f64::NAN, |summary| summary.median);
+    let anchor = values.get(baseline).and_then(Option::as_ref);
+    let reference = anchor.map_or(f64::NAN, |summary| summary.median);
     let higher_is_better = matches!(metric, Metric::Rate(_));
     let cost = |value: f64| if higher_is_better { 1.0 / value } else { value };
     let finite: Vec<f64> = values.iter().flatten().map(|summary| cost(summary.median)).collect();
     let best = finite.iter().copied().fold(f64::INFINITY, f64::min);
     let worst = finite.iter().copied().fold(0.0f64, f64::max);
     let span = (worst / best).ln().max(MIN_SPAN);
+    // The fastest party the row actually resolved. A cell whose rounds overlap this one's is not
+    // slower than it; the run merely cannot say so.
+    let leader = values
+        .iter()
+        .flatten()
+        .min_by(|a, b| cost(a.median).total_cmp(&cost(b.median)));
     let cells = values
         .iter()
         .map(|value| {
@@ -157,14 +161,17 @@ fn build_row(
                         reason = "position is a small non-negative ladder fraction"
                     )]
                     let index = ((position * LADDER.len() as f64) as usize).min(LADDER.len() - 1);
+                    let ties_leader = leader.is_some_and(|leader| indistinguishable(summary, leader));
                     Cell {
                         text: format_value(summary.median, metric),
                         ratio: if reference.is_finite() {
-                            format!("{:.2}x", summary.median / reference)
+                            let approximate = anchor.is_some_and(|anchor| indistinguishable(summary, anchor));
+                            let mark = if approximate { "\u{2248}" } else { "" };
+                            format!("{mark}{:.2}x", summary.median / reference)
                         } else {
                             "-".to_owned()
                         },
-                        tint: LADDER[index].to_owned(),
+                        tint: if ties_leader { LADDER[0] } else { LADDER[index] }.to_owned(),
                         spread: format_spread(summary),
                         range: format_range(summary, metric),
                         noisy: summary.noisy(),
@@ -369,6 +376,16 @@ pub fn publish(name: &str, table: Table) -> anyhow::Result<()> {
     std::fs::write(&path, toml::to_string_pretty(&report)?)?;
     println!("updated {} [{name}]", path.display());
     Ok(())
+}
+
+/// Whether the rounds behind two cells overlap, so this run cannot tell the two apart.
+///
+/// A median is one number drawn from a spread. Reading `19.2 s` as faster than `20.5 s` when both
+/// parties produced rounds covering the other's is reporting noise as a ranking, and a reader cannot
+/// see it from the medians alone. Rows that overlap get a `~` on the ratio and share the leader's
+/// colour, so only differences the run resolved are drawn as differences.
+fn indistinguishable(one: &Summary, other: &Summary) -> bool {
+    one.min <= other.max && other.min <= one.max
 }
 
 fn format_value(value: f64, metric: Metric) -> String {
