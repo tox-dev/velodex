@@ -91,3 +91,14 @@ pub(super) fn run_checked(command: &mut Command) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// Read a response body to its end and drop it, without materializing it.
+///
+/// `bytes()` copies the whole body into one buffer and `text()` also validates it as UTF-8. Both run
+/// inside the timed window and bill the client's work to the server, and every caller here wants only
+/// the status. Stream the frames past instead.
+pub(super) async fn drain(response: reqwest::Response) -> anyhow::Result<()> {
+    let mut response = response.error_for_status()?;
+    while response.chunk().await?.is_some() {}
+    Ok(())
+}

@@ -383,14 +383,16 @@ fn parse_project_version(spec: &str) -> Result<(String, Option<String>), Respons
         .map(path_safety::decode_path_segment)
         .transpose()
         .map_err(|err| path_error_response(&err))?
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_owned();
     path_safety::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
     let version = parts
         .next()
         .map(|version| path_safety::decode_path(version.trim_matches('/')))
         .transpose()
         .map_err(|err| path_error_response(&err))?
-        .filter(|version| !version.is_empty());
+        .filter(|version| !version.is_empty())
+        .map(std::borrow::Cow::into_owned);
     if let Some(version) = &version {
         path_safety::validate_path_segment("version", version).map_err(|err| path_error_response(&err))?;
     }

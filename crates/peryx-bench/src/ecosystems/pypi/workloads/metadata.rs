@@ -160,7 +160,7 @@ fn html_metadata_urls(page_url: &url::Url, body: &str) -> anyhow::Result<Vec<Str
 async fn timed_metadata_batch(urls: &[String], http: &reqwest::Client) -> anyhow::Result<f64> {
     let start = Instant::now();
     for url in urls {
-        http.get(url).send().await?.error_for_status()?.bytes().await?;
+        super::drain(http.get(url).send().await?).await?;
     }
     Ok(start.elapsed().as_secs_f64())
 }

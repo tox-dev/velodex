@@ -151,6 +151,15 @@ fn test_remove_deletes_existing_blob() {
 }
 
 #[test]
+fn test_remove_io_error_when_blob_path_is_a_directory() {
+    let (_dir, store) = store();
+    let digest = Digest::of(b"payload");
+    let path = store.path_for(&digest);
+    std::fs::create_dir_all(&path).unwrap();
+    assert!(matches!(store.remove(&digest), Err(BlobError::Io(_))));
+}
+
+#[test]
 fn test_write_io_error_when_root_is_a_file() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("not-a-dir");

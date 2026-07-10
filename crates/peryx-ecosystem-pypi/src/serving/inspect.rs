@@ -41,7 +41,7 @@ pub(super) async fn inspect_route(state: Arc<AppState>, route: String, target: &
         Some(member) => (rest, Some(member)),
         None if archive_query.containers.is_empty() => match rest.split_once('/') {
             Some((filename, member)) => match path_safety::decode_path(member) {
-                Ok(member) => (filename, Some(member)),
+                Ok(member) => (filename, Some(member.into_owned())),
                 Err(err) => return path_error_response(&err),
             },
             None => (rest, None),

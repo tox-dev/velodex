@@ -6,6 +6,15 @@ use sha2::{Digest as _, Sha256};
 use super::error::{BlobError, BlobScanError};
 use super::{Digest, sync_parent, to_hex};
 
+/// Name the blob a failed open was looking for. Opening already reports absence, so asking the
+/// filesystem whether the path is a file beforehand only re-walks the same directories.
+fn absent_or_io(err: std::io::Error, digest: &Digest) -> BlobError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        return BlobError::NotFound(digest.as_str().to_owned());
+    }
+    BlobError::Io(err)
+}
+
 /// A file found while walking the content-addressed blob tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobEntry {
@@ -84,11 +93,7 @@ impl BlobStore {
     /// Returns [`BlobError::NotFound`] if the blob is absent, or [`BlobError::Io`] on a read
     /// failure.
     pub fn read(&self, digest: &Digest) -> Result<Vec<u8>, BlobError> {
-        let path = self.path_for(digest);
-        if !path.is_file() {
-            return Err(BlobError::NotFound(digest.as_str().to_owned()));
-        }
-        Ok(std::fs::read(&path)?)
+        std::fs::read(self.path_for(digest)).map_err(|err| absent_or_io(err, digest))
     }
 
     /// Visit blob files under the content-addressed tree without collecting the store.
@@ -127,11 +132,7 @@ impl BlobStore {
     /// Returns [`BlobError::NotFound`] if the blob is absent, or [`BlobError::Io`] on a read
     /// failure.
     pub fn verify(&self, digest: &Digest) -> Result<bool, BlobError> {
-        let path = self.path_for(digest);
-        if !path.is_file() {
-            return Err(BlobError::NotFound(digest.as_str().to_owned()));
-        }
-        let mut file = std::fs::File::open(path)?;
+        let mut file = std::fs::File::open(self.path_for(digest)).map_err(|err| absent_or_io(err, digest))?;
         let mut hasher = Sha256::new();
         let mut buffer = vec![0; 1024 * 1024].into_boxed_slice();
         loop {
@@ -149,12 +150,11 @@ impl BlobStore {
     /// # Errors
     /// Returns [`BlobError::Io`] if the filesystem removal fails.
     pub fn remove(&self, digest: &Digest) -> Result<bool, BlobError> {
-        let path = self.path_for(digest);
-        if !path.is_file() {
-            return Ok(false);
+        match std::fs::remove_file(self.path_for(digest)) {
+            Ok(()) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(BlobError::Io(err)),
         }
-        std::fs::remove_file(path)?;
-        Ok(true)
     }
 
     fn digest_from_path(&self, path: &Path) -> Option<Digest> {

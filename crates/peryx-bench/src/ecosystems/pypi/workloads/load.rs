@@ -243,13 +243,6 @@ async fn tail_client(index_url: &str, user: usize, interval: Duration) -> Histog
 }
 
 async fn fetch_page(client: &reqwest::Client, target: &str) -> anyhow::Result<()> {
-    client
-        .get(target)
-        .header("Accept", super::SIMPLE_ACCEPT)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    Ok(())
+    let response = client.get(target).header("Accept", super::SIMPLE_ACCEPT).send().await?;
+    super::drain(response).await
 }

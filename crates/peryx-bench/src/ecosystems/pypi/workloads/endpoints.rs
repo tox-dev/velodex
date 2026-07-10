@@ -175,14 +175,7 @@ async fn probe(http: &reqwest::Client, url: &str, accept: &str) -> Option<f64> {
 /// Deliberately not `text()`: decoding a half-megabyte page into a `String` validates its UTF-8 on
 /// every probe, which put the client's work inside the server's row and made a 130 µs page read 1.3 ms.
 async fn drain(http: &reqwest::Client, url: &str, accept: &str) -> anyhow::Result<()> {
-    let mut response = http
-        .get(url)
-        .header("Accept", accept)
-        .send()
-        .await?
-        .error_for_status()?;
-    while response.chunk().await?.is_some() {}
-    Ok(())
+    super::drain(http.get(url).header("Accept", accept).send().await?).await
 }
 
 /// Fetch `url` as text, for the one untimed request whose body has to be parsed.

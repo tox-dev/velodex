@@ -142,7 +142,7 @@ impl EcosystemServing for PypiServing {
 fn safe_filename(raw: &str) -> Result<String, PathSafetyError> {
     let filename = path_safety::decode_path_segment(raw)?;
     path_safety::validate_filename(&filename)?;
-    Ok(filename)
+    Ok(filename.into_owned())
 }
 
 fn path_error_response(err: &PathSafetyError) -> Response {

@@ -228,7 +228,7 @@ fn legacy_json_target(rest: &str) -> Result<Option<LegacyJsonTarget>, Response> 
     path_safety::validate_path_segment("version", &version).map_err(|err| path_error_response(&err))?;
     Ok(Some(LegacyJsonTarget {
         project: normalize_name(&project),
-        version: Some(version),
+        version: Some(version.into_owned()),
     }))
 }
 

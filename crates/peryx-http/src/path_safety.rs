@@ -1,5 +1,6 @@
 use peryx_format::url_encoding::{push_component, push_path};
 use peryx_storage::blob::Digest;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathSafetyError {
@@ -42,7 +43,7 @@ pub fn local_file_url(route: &str, sha256: &str, filename: &str) -> String {
 /// # Errors
 /// Returns [`PathSafetyError::InvalidEncoding`] if the segment contains malformed percent escapes
 /// or decodes to non-UTF-8 bytes.
-pub fn decode_path_segment(segment: &str) -> Result<String, PathSafetyError> {
+pub fn decode_path_segment(segment: &str) -> Result<Cow<'_, str>, PathSafetyError> {
     decode_percent(segment)
 }
 
@@ -51,7 +52,7 @@ pub fn decode_path_segment(segment: &str) -> Result<String, PathSafetyError> {
 /// # Errors
 /// Returns [`PathSafetyError::InvalidEncoding`] if the path contains malformed percent escapes or
 /// decodes to non-UTF-8 bytes.
-pub fn decode_path(path: &str) -> Result<String, PathSafetyError> {
+pub fn decode_path(path: &str) -> Result<Cow<'_, str>, PathSafetyError> {
     decode_percent(path)
 }
 
@@ -140,7 +141,15 @@ fn hex_byte(hex: &[u8]) -> Option<u8> {
     Some(hex_nibble(hex[0])? << 4 | hex_nibble(hex[1])?)
 }
 
-fn decode_percent(input: &str) -> Result<String, PathSafetyError> {
+/// Percent-decode, borrowing when there is nothing to decode.
+///
+/// An escape starts with `%`, and a project name, version, or wheel filename almost never carries
+/// one. Copying every byte through a fresh buffer to discover that cost an allocation per segment on
+/// every request.
+fn decode_percent(input: &str) -> Result<Cow<'_, str>, PathSafetyError> {
+    if !input.contains('%') {
+        return Ok(Cow::Borrowed(input));
+    }
     let mut out = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut position = 0;
@@ -159,7 +168,9 @@ fn decode_percent(input: &str) -> Result<String, PathSafetyError> {
             position += 1;
         }
     }
-    String::from_utf8(out).map_err(|_| PathSafetyError::InvalidEncoding(input.to_owned()))
+    String::from_utf8(out)
+        .map(Cow::Owned)
+        .map_err(|_| PathSafetyError::InvalidEncoding(input.to_owned()))
 }
 
 const fn hex_nibble(byte: u8) -> Option<u8> {
