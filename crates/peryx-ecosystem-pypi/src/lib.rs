@@ -13,6 +13,8 @@ pub mod cache;
 pub mod discovery;
 mod filename;
 mod html;
+#[cfg(feature = "serving")]
+mod import;
 mod legacy_json;
 mod metadata;
 mod name;

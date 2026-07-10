@@ -168,6 +168,18 @@ impl EcosystemDriver for PypiServing {
         crate::admin::fsck_metadata(meta, blobs, out)
     }
 
+    fn import_dir(
+        &self,
+        meta: &peryx_storage::meta::MetaStore,
+        blobs: &peryx_storage::blob::BlobStore,
+        target_name: &str,
+        target_route: &str,
+        dir: &std::path::Path,
+        out: &mut dyn std::io::Write,
+    ) -> Result<(), String> {
+        crate::import::import_dir(meta, blobs, target_name, target_route, dir, out)
+    }
+
     fn project_names(&self, state: &ServingState, position: usize) -> Result<Vec<String>, String> {
         web::project_names(state, position)
     }

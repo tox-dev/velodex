@@ -120,6 +120,29 @@ pub trait EcosystemDriver: Send + Sync {
         Ok(0)
     }
 
+    /// Import every artifact under `dir` into the hosted index `target_name` (reached at
+    /// `target_route`), writing per-file progress to `out`. The neutral binary resolves the upload
+    /// target from the index topology; how a directory of files becomes stored artifacts is the
+    /// ecosystem's. Default: an ecosystem with no bulk-import format refuses.
+    ///
+    /// # Errors
+    /// Returns a user-visible message when the directory cannot be read or the ecosystem does not
+    /// support directory import.
+    fn import_dir(
+        &self,
+        _meta: &peryx_storage::meta::MetaStore,
+        _blobs: &peryx_storage::blob::BlobStore,
+        _target_name: &str,
+        _target_route: &str,
+        _dir: &std::path::Path,
+        _out: &mut dyn std::io::Write,
+    ) -> Result<(), String> {
+        Err(format!(
+            "the {} ecosystem does not support directory import",
+            self.ecosystem().as_str()
+        ))
+    }
+
     /// Revalidate stale cached pages once, invoked from the server's background sweep. A driver
     /// without a read-through cache sweeps nothing, so the default is a no-op.
     async fn refresh_stale(&self, _state: Arc<ServingState>) -> Result<RefreshSweep, String> {
