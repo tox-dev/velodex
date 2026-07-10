@@ -27,10 +27,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/+status", get(handlers::status))
         .route("/+stats", get(handlers::stats))
         .route("/metrics", get(handlers::metrics));
-    // A namespace ecosystem (OCI) owns top-level prefixes it declares; mount a catch-all under each,
-    // bound to that driver, so the router reaches it without naming the ecosystem.
-    for driver in &state.namespaces {
-        let prefixes = driver.prefixes();
+    // An absolute-mount ecosystem (OCI) owns top-level prefixes it declares; mount a catch-all under
+    // each, bound to that driver, so the router reaches it without naming the ecosystem.
+    for driver in state.drivers() {
+        let peryx_driver::serving::RouteMount::Absolute(prefixes) = driver.mount() else {
+            continue;
+        };
         let driver = driver.clone();
         let serve = move |State(state): State<Arc<AppState>>, request: Request| {
             let driver = driver.clone();

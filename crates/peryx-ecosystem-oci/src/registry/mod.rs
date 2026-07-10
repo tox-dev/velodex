@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt as _;
 use peryx_core::Ecosystem;
 use peryx_driver::AppState;
-use peryx_driver::serving::NamespaceServing;
+use peryx_driver::serving::{EcosystemDriver, RouteMount};
 use peryx_events::webhook::{WebhookEvent, WebhookEventKind};
 use peryx_index::{Index, IndexKind};
 use peryx_policy::PolicyAction;
@@ -129,13 +129,13 @@ impl OciRegistry {
     }
 }
 #[async_trait]
-impl NamespaceServing for OciRegistry {
+impl EcosystemDriver for OciRegistry {
     fn ecosystem(&self) -> peryx_core::Ecosystem {
         peryx_core::Ecosystem::Oci
     }
 
-    fn prefixes(&self) -> &'static [&'static str] {
-        &["/v2/"]
+    fn mount(&self) -> RouteMount {
+        RouteMount::Absolute(&["/v2/"])
     }
 
     async fn serve(&self, state: Arc<AppState>, request: Request) -> Response {
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_classify_route_buckets_blob_pulls_as_artifacts() {
         use peryx_driver::rate_limit::RouteClass;
-        use peryx_driver::serving::NamespaceServing as _;
+        use peryx_driver::serving::EcosystemDriver as _;
         let registry = OciRegistry::default();
         let digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
         assert_eq!(

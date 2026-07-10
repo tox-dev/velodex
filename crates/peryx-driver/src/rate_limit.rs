@@ -375,10 +375,10 @@ pub async fn enforce(State(state): State<Arc<AppState>>, request: axum::extract:
         // A GET inside an index namespace is classed by the driver that serves it, selected at the same
         // URL boundary the router dispatches on: a namespace ecosystem that owns the path, else the
         // per-index ecosystem's Simple-style API.
-        state.namespace_for_path(path).map_or_else(
+        state.absolute_driver_for_path(path).map_or_else(
             || {
                 state
-                    .serving_for_path(path)
+                    .driver_for_path(path)
                     .map_or(RouteClass::Listing, |driver| driver.classify_route(path))
             },
             |driver| driver.classify_route(path),
@@ -412,8 +412,8 @@ pub async fn enforce(State(state): State<Arc<AppState>>, request: axum::extract:
 ///
 /// Returns `None` for a GET inside an index's namespace (a project listing, metadata sibling, or
 /// artifact), whose class depends on the ecosystem's URL scheme and so is decided by the owning
-/// driver's `classify_route`: [`EcosystemServing`](crate::serving::EcosystemServing::classify_route)
-/// for a per-index ecosystem, [`NamespaceServing`](crate::serving::NamespaceServing::classify_route)
+/// driver's `classify_route`: an indexed-mount driver's `classify_route`
+/// for a per-index ecosystem, [`EcosystemDriver`](crate::serving::EcosystemDriver::classify_route)
 /// for one that owns a top-level namespace.
 #[must_use]
 pub fn service_route_class(method: &Method, path: &str) -> Option<RouteClass> {

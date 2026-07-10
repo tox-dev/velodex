@@ -25,13 +25,13 @@ fn discover_index_entry(
     index: peryx_driver::state::IndexDescription,
     base: Option<&peryx_driver::discovery::BaseUrl>,
 ) -> serde_json::Value {
-    if let Some(driver) = state.namespace_for_ecosystem(index.ecosystem) {
+    if let Some(driver) = state.driver_for_name(index.ecosystem) {
         driver.discover_index(index, base)
     } else if let Some(serving) = index
         .ecosystem
         .parse()
         .ok()
-        .and_then(|ecosystem| state.serving_for(ecosystem))
+        .and_then(|ecosystem| state.driver_for(ecosystem))
     {
         serving.discover_index(index, base)
     } else {

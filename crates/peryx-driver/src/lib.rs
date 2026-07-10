@@ -1,8 +1,8 @@
 //! The seam an ecosystem plugs into.
 //!
-//! An ecosystem crate implements [`EcosystemServing`](serving::EcosystemServing) — or
-//! [`NamespaceServing`](serving::NamespaceServing), when its wire protocol owns a top-level path
-//! prefix — and nothing else. Everything a driver needs to do that lives here: the process
+//! An ecosystem crate implements one [`EcosystemDriver`](serving::EcosystemDriver) and nothing else;
+//! where it mounts (per-index, or an absolute prefix like `OCI`'s `/v2/`) is data on the driver, not a
+//! second trait. Everything a driver needs to do that lives here: the process
 //! [`AppState`], the per-index route resolution it serves through, blob-download coordination, request
 //! classification for rate limiting, and the discovery envelope.
 //!

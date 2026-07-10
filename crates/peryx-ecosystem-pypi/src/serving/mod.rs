@@ -2,7 +2,7 @@
 //! archive-inspection downloads, the multipart upload API, and yank/restore/promote mutations.
 //!
 //! peryx-http routes a request to a configured index and hands it to that index's
-//! [`EcosystemServing`] driver. This module is the `PyPI` implementation; it composes the neutral
+//! [`EcosystemDriver`]. This module is the `PyPI` implementation; it composes the neutral
 //! surfaces peryx offers a driver (state, path safety, metrics, webhooks, security events, search)
 //! with this crate's cache, upload, and archive logic.
 #![allow(
@@ -22,7 +22,7 @@ use peryx_core::path::{self, PathSafetyError};
 use peryx_driver::discovery::BaseUrl;
 use peryx_driver::not_found;
 use peryx_driver::rate_limit::RouteClass;
-use peryx_driver::serving::{EcosystemServing, RefreshSweep};
+use peryx_driver::serving::{EcosystemDriver, RefreshSweep};
 use peryx_driver::state::{AppState, IndexDescription};
 use peryx_events::metrics::MetricFamily;
 use peryx_index::{Index, IndexKind};
@@ -89,7 +89,7 @@ const METADATA_FAMILY: MetricFamily = MetricFamily {
 const PYPI_FAMILIES: &[MetricFamily] = &[METADATA_FAMILY];
 
 #[async_trait]
-impl EcosystemServing for PypiServing {
+impl EcosystemDriver for PypiServing {
     fn ecosystem(&self) -> Ecosystem {
         Ecosystem::Pypi
     }

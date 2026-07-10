@@ -108,7 +108,7 @@ async fn test_refresh_sweep_detects_changed_page() {
 
 #[tokio::test]
 async fn test_serving_refresh_stale_reports_the_sweep() {
-    use peryx_driver::serving::EcosystemServing as _;
+    use peryx_driver::serving::EcosystemDriver as _;
 
     let h = harness().await;
     let digest = Digest::of(b"wheel-v1");
@@ -140,7 +140,7 @@ async fn test_serving_refresh_stale_reports_the_sweep() {
 
 #[tokio::test]
 async fn test_serving_refresh_stale_surfaces_errors_as_strings() {
-    use peryx_driver::serving::EcosystemServing as _;
+    use peryx_driver::serving::EcosystemDriver as _;
 
     let h = harness().await;
     let digest = Digest::of(b"wheel");

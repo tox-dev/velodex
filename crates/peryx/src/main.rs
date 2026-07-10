@@ -115,7 +115,7 @@ fn run_server(config: &Config) -> anyhow::Result<()> {
                 ticker.tick().await;
                 // Every registered driver sweeps its own cached pages; one whose ecosystem has no
                 // read-through cache sweeps nothing.
-                let servings: Vec<_> = refresher.servings().cloned().collect();
+                let servings: Vec<_> = refresher.drivers().cloned().collect();
                 for serving in servings {
                     let ecosystem = serving.ecosystem();
                     match serving.refresh_stale(refresher.clone()).await {

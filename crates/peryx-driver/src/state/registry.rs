@@ -42,73 +42,65 @@ impl AppState {
         }
     }
 
-    /// Register a route-mounted ecosystem's serving driver and its search indexer. Each driver's own
-    /// [`ecosystem`](crate::serving::EcosystemServing::ecosystem) picks its slot, so installing one
+    /// Register an ecosystem's serving driver and its search indexer. The driver's own
+    /// [`ecosystem`](crate::serving::EcosystemDriver::ecosystem) picks its slot, so installing one
     /// never displaces another.
     pub fn register_ecosystem(
         &mut self,
-        serving: Arc<dyn crate::serving::EcosystemServing>,
+        driver: Arc<dyn crate::serving::EcosystemDriver>,
         indexer: Arc<dyn peryx_search::PackageIndexer>,
     ) {
-        let slot = serving.ecosystem().slot();
-        self.serving[slot] = Some(serving);
+        let slot = driver.ecosystem().slot();
+        self.drivers[slot] = Some(driver);
         self.search.add_indexer(indexer);
     }
 
-    /// The route-mounted driver serving `ecosystem`, or `None` when none is installed for it.
+    /// The driver serving `ecosystem`, or `None` when none is installed for it.
     #[must_use]
-    pub fn serving_for(&self, ecosystem: Ecosystem) -> Option<&Arc<dyn crate::serving::EcosystemServing>> {
-        self.serving[ecosystem.slot()].as_ref()
+    pub fn driver_for(&self, ecosystem: Ecosystem) -> Option<&Arc<dyn crate::serving::EcosystemDriver>> {
+        self.drivers[ecosystem.slot()].as_ref()
     }
 
-    /// The route-mounted driver that would serve `path`, found by resolving the index it addresses.
+    /// The indexed-mount driver that would serve `path`, found by resolving the index it addresses.
     ///
     /// `path` is a request URI path, so it carries a leading slash; index routes do not.
     #[must_use]
-    pub fn serving_for_path(&self, path: &str) -> Option<&Arc<dyn crate::serving::EcosystemServing>> {
+    pub fn driver_for_path(&self, path: &str) -> Option<&Arc<dyn crate::serving::EcosystemDriver>> {
         let (position, _) = self.resolve_position(path.trim_start_matches('/'))?;
-        self.serving_for(self.index_at(position).ecosystem)
+        self.driver_for(self.index_at(position).ecosystem)
     }
 
-    /// Every installed route-mounted driver, in ecosystem declaration order.
-    pub fn servings(&self) -> impl Iterator<Item = &Arc<dyn crate::serving::EcosystemServing>> {
-        self.serving.iter().flatten()
+    /// Every installed driver, in ecosystem declaration order.
+    pub fn drivers(&self) -> impl Iterator<Item = &Arc<dyn crate::serving::EcosystemDriver>> {
+        self.drivers.iter().flatten()
     }
 
     /// Whether any ecosystem driver at all has been wired in. A process with none serves `503` rather
     /// than quietly answering nothing.
     #[must_use]
     pub fn has_any_driver(&self) -> bool {
-        self.serving.iter().any(Option::is_some) || !self.namespaces.is_empty()
+        self.drivers.iter().any(Option::is_some)
     }
 
-    /// Add another ecosystem's search indexer, composing with any already installed. An ecosystem
-    /// whose serving lives in its own slot (OCI) uses this to make its packages searchable too.
+    /// Add another ecosystem's search indexer, composing with any already installed.
     pub fn add_search_indexer(&mut self, indexer: Arc<dyn peryx_search::PackageIndexer>) {
         self.search.add_indexer(indexer);
     }
 
-    /// Wire in a namespace ecosystem's serving driver. The binary calls this once at startup for each
-    /// namespace ecosystem (OCI's `/v2/` registry) whose indexes are configured.
-    pub fn register_namespace(&mut self, driver: Arc<dyn crate::serving::NamespaceServing>) {
-        self.namespaces.push(driver);
+    /// The absolute-mount driver that owns `path` (`OCI`'s `/v2/`), or `None` when the path falls under
+    /// no such prefix and the per-index router handles it.
+    #[must_use]
+    pub fn absolute_driver_for_path(&self, path: &str) -> Option<&Arc<dyn crate::serving::EcosystemDriver>> {
+        self.drivers().find(|driver| match driver.mount() {
+            crate::serving::RouteMount::Absolute(prefixes) => prefixes.iter().any(|prefix| path.starts_with(prefix)),
+            crate::serving::RouteMount::Indexed => false,
+        })
     }
 
-    /// The namespace driver that owns `path`, or `None` when the path falls under no namespace (the
-    /// per-index router handles it). The first registered driver whose prefix matches wins.
+    /// The driver serving the ecosystem named `ecosystem`, so `/+api` renders that index's setup.
     #[must_use]
-    pub fn namespace_for_path(&self, path: &str) -> Option<&Arc<dyn crate::serving::NamespaceServing>> {
-        self.namespaces
-            .iter()
-            .find(|driver| driver.prefixes().iter().any(|prefix| path.starts_with(prefix)))
-    }
-
-    /// The namespace driver serving `ecosystem`, so `/+api` renders that index's setup through it.
-    #[must_use]
-    pub fn namespace_for_ecosystem(&self, ecosystem: &str) -> Option<&Arc<dyn crate::serving::NamespaceServing>> {
-        self.namespaces
-            .iter()
-            .find(|driver| driver.ecosystem().as_str() == ecosystem)
+    pub fn driver_for_name(&self, ecosystem: &str) -> Option<&Arc<dyn crate::serving::EcosystemDriver>> {
+        self.drivers().find(|driver| driver.ecosystem().as_str() == ecosystem)
     }
 
     /// Install the assembled `OpenAPI` document the `/api-docs/openapi.json` endpoint serves. The

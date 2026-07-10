@@ -294,8 +294,7 @@ impl AppState {
             rate_limits: RateLimiter::new(rate_limit),
             upstream_limits: UpstreamLimits::new(upstream_limits),
             webhooks,
-            serving: std::array::from_fn(|_| None),
-            namespaces: Vec::new(),
+            drivers: std::array::from_fn(|_| None),
             lexicons: LexiconRegistry::default(),
             openapi: std::sync::Arc::from(STUB_OPENAPI),
         }

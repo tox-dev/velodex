@@ -454,7 +454,7 @@ async fn test_upstream_limits_allow_unknown_and_uncapped_mirrors() {
 #[test]
 fn test_pypi_classify_route_distinguishes_metadata_artifact_listing() {
     use peryx_driver::rate_limit::RouteClass;
-    use peryx_driver::serving::EcosystemServing as _;
+    use peryx_driver::serving::EcosystemDriver as _;
 
     let driver = crate::PypiServing;
     assert_eq!(driver.classify_route("/pypi/simple/flask/"), RouteClass::Listing);

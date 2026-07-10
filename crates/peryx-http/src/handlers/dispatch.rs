@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::discover::index_api;
 use super::query::index_search;
-use peryx_driver::serving::EcosystemServing;
+use peryx_driver::serving::EcosystemDriver;
 use peryx_driver::state::AppState;
 
 /// Why a request reached no driver.
@@ -31,8 +31,8 @@ impl NoDriver {
 }
 
 /// The driver for the index already resolved to `position`.
-fn driver_at(state: &AppState, position: usize) -> Result<&Arc<dyn EcosystemServing>, NoDriver> {
-    state.serving_for(state.index_at(position).ecosystem).ok_or_else(|| {
+fn driver_at(state: &AppState, position: usize) -> Result<&Arc<dyn EcosystemDriver>, NoDriver> {
+    state.driver_for(state.index_at(position).ecosystem).ok_or_else(|| {
         if state.has_any_driver() {
             NoDriver::Unroutable
         } else {
@@ -43,7 +43,7 @@ fn driver_at(state: &AppState, position: usize) -> Result<&Arc<dyn EcosystemServ
 
 /// The driver serving the index `path` resolves to. Used by the write methods, which have not already
 /// resolved the route; `GET` resolves once and calls [`driver_at`] instead.
-fn driver_for<'a>(state: &'a AppState, path: &str) -> Result<&'a Arc<dyn EcosystemServing>, NoDriver> {
+fn driver_for<'a>(state: &'a AppState, path: &str) -> Result<&'a Arc<dyn EcosystemDriver>, NoDriver> {
     let Some((position, _)) = state.resolve_position(path) else {
         return Err(NoDriver::Unroutable);
     };

@@ -60,15 +60,12 @@ pub struct AppState {
     pub upstream_limits: UpstreamLimits,
     /// Signed webhook delivery runtime.
     pub webhooks: WebhookRuntime,
-    /// The route-mounted serving drivers, one slot per [`Ecosystem`]. A request is dispatched to the
-    /// driver of the index it resolved to, so several route-mounted ecosystems coexist; a slot stays
-    /// `None` for an ecosystem nobody installed, and for one whose wire protocol owns a top-level
-    /// prefix instead (see `namespaces`).
-    pub(super) serving: [Option<Arc<dyn crate::serving::EcosystemServing>>; Ecosystem::COUNT],
-    /// Ecosystems whose wire protocol owns top-level path prefixes and resolves indexes itself (`OCI`'s
-    /// `/v2/`). Empty until a namespace ecosystem is installed; the router and rate limiter read the
-    /// prefixes each declares so neither names an ecosystem.
-    pub namespaces: Vec<Arc<dyn crate::serving::NamespaceServing>>,
+    /// The ecosystem serving drivers, one slot per [`Ecosystem`]. A request is dispatched to the driver
+    /// of the index it resolved to (or of the absolute prefix it fell under), so several ecosystems
+    /// coexist; a slot stays `None` for an ecosystem nobody installed. Each driver's
+    /// [`mount`](crate::serving::EcosystemDriver::mount) tells the router and rate limiter how to reach
+    /// it, so neither names an ecosystem.
+    pub(super) drivers: [Option<Arc<dyn crate::serving::EcosystemDriver>>; Ecosystem::COUNT],
     /// Each ecosystem's user-facing vocabulary, registered by its driver at install time so surfaces
     /// localize a label by an index's ecosystem without the neutral core naming any ecosystem's words.
     pub(super) lexicons: LexiconRegistry,

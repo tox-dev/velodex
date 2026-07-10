@@ -50,8 +50,7 @@ pub use store::referenced_blob_digests;
 /// driver and the `/v2/` namespace stays inert, so a deployment without OCI indexes carries no OCI cost.
 pub fn install(state: &mut AppState) {
     if state.indexes.iter().any(|index| index.ecosystem == Ecosystem::Oci) {
-        state.register_namespace(Arc::new(OciRegistry::new()));
-        state.add_search_indexer(Arc::new(OciIndexer));
+        state.register_ecosystem(Arc::new(OciRegistry::new()), Arc::new(OciIndexer));
         state.register_lexicon(Ecosystem::Oci, &OCI_LEXICON);
     }
 }

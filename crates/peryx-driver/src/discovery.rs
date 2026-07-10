@@ -4,8 +4,7 @@
 //! The envelope (version, service URLs) and the public-base-URL resolution are ecosystem-agnostic and
 //! live here; each ecosystem renders its own per-index entry (the Simple-API setup for `PyPI`, the
 //! `docker pull` setup for `OCI`) through
-//! [`EcosystemServing::discover_index`](crate::serving::EcosystemServing::discover_index) and
-//! [`NamespaceServing::discover_index`](crate::serving::NamespaceServing::discover_index).
+//! [`EcosystemDriver::discover_index`](crate::serving::EcosystemDriver::discover_index).
 
 use std::str::FromStr as _;
 

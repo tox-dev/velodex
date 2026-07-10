@@ -132,7 +132,7 @@ async fn test_unwired_discovery_renders_a_minimal_entry_per_index() {
 struct StubServing(peryx_core::Ecosystem);
 
 #[async_trait::async_trait]
-impl peryx_driver::serving::EcosystemServing for StubServing {
+impl peryx_driver::serving::EcosystemDriver for StubServing {
     fn ecosystem(&self) -> peryx_core::Ecosystem {
         self.0
     }
@@ -191,14 +191,14 @@ impl peryx_driver::serving::EcosystemServing for StubServing {
 
 #[test]
 fn test_a_driver_publishes_no_metric_families_by_default() {
-    use peryx_driver::serving::EcosystemServing as _;
+    use peryx_driver::serving::EcosystemDriver as _;
 
     assert!(StubServing(peryx_core::Ecosystem::Pypi).metric_families().is_empty());
 }
 
 #[tokio::test]
 async fn test_a_driver_sweeps_nothing_by_default() {
-    use peryx_driver::serving::{EcosystemServing as _, RefreshSweep};
+    use peryx_driver::serving::{EcosystemDriver as _, RefreshSweep};
 
     let (_dir, state) = unwired_state();
     assert_eq!(
@@ -215,7 +215,7 @@ fn test_an_unwired_state_holds_no_driver_for_any_ecosystem() {
     let (_dir, state) = unwired_state();
     assert!(!state.has_any_driver());
     for ecosystem in peryx_core::Ecosystem::ALL {
-        assert!(state.serving_for(*ecosystem).is_none(), "{ecosystem} was wired in");
+        assert!(state.driver_for(*ecosystem).is_none(), "{ecosystem} was wired in");
     }
 }
 
@@ -232,8 +232,8 @@ fn test_serving_for_path_resolves_a_request_uri_path() {
     // A request URI path carries a leading slash; index routes do not. The rate limiter classes a
     // route by the driver this finds, so failing to resolve here silently downgrades every artifact
     // request to the listing limit.
-    assert!(state.serving_for_path("/pypi/files/abc/x.whl").is_some());
-    assert!(state.serving_for_path("/unconfigured/simple/").is_none());
+    assert!(state.driver_for_path("/pypi/files/abc/x.whl").is_some());
+    assert!(state.driver_for_path("/unconfigured/simple/").is_none());
 }
 
 #[tokio::test]

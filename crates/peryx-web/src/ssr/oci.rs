@@ -96,7 +96,7 @@ fn header_u64(headers: &axum::http::HeaderMap, name: &str) -> Option<u64> {
 /// Serve an in-process request through the namespace driver that owns its path (`OCI`'s `/v2/`), or
 /// `None` when no namespace driver is configured.
 async fn serve_namespace(app: &Arc<AppState>, request: axum::extract::Request) -> Option<axum::response::Response> {
-    let driver = app.namespace_for_path(request.uri().path())?.clone();
+    let driver = app.absolute_driver_for_path(request.uri().path())?.clone();
     Some(driver.serve(app.clone(), request).await)
 }
 
