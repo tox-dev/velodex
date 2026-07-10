@@ -259,11 +259,11 @@ fn python_version(filename: &str) -> &str {
     if !extension_eq(filename, "whl") {
         return "source";
     }
+    // A wheel name is name-version[-build]-python-abi-platform, so the tag is always third from the
+    // end. Collecting the stem allocated a Vec per file just to read one of its middle elements.
     let stem = &filename[..filename.len() - 4];
-    let parts: Vec<&str> = stem.split('-').collect();
-    match parts.as_slice() {
-        [_name, _version, python, _abi, _platform] => python,
-        [_name, _version, _build, python, _abi, _platform] => python,
+    match stem.split('-').count() {
+        5 | 6 => stem.rsplit('-').nth(2).unwrap_or("source"),
         _ => "source",
     }
 }

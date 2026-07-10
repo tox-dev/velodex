@@ -155,13 +155,9 @@ fn OverlayCard(index: UiIndex, all: Vec<UiIndex>, counters: Option<UiCounters>) 
         .iter()
         .enumerate()
         .map(|(position, name)| {
-            let member = all.iter().find(|candidate| candidate.name == *name).cloned();
-            let kind = member
-                .as_ref()
-                .map_or_else(|| "?".to_owned(), |member| member.kind.clone());
-            let route = member
-                .as_ref()
-                .map(|member| index_endpoint(&member.route, &member.ecosystem));
+            let member = all.iter().find(|candidate| candidate.name == *name);
+            let kind = member.map_or_else(|| "?".to_owned(), |member| member.kind.clone());
+            let route = member.map(|member| index_endpoint(&member.route, &member.ecosystem));
             let is_upload_target = upload_to.as_deref() == Some(name.as_str());
             view! {
                 <li class="layer">

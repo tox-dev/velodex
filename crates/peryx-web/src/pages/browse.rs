@@ -140,7 +140,7 @@ fn ProjectList(route: String, names: Vec<String>, filter: ReadSignal<String>) ->
                 let needle = filter.get().to_lowercase();
                 names
                     .iter()
-                    .filter(|name| name.to_lowercase().contains(&needle))
+                    .filter(|name| needle.is_empty() || name.to_lowercase().contains(&needle))
                     .map(|name| {
                         let href = browse_project_url(&route, name);
                         view! { <li><a href=href>{name.clone()}</a></li> }

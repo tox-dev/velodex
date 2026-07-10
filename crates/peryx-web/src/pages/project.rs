@@ -119,18 +119,11 @@ fn FileTable(route: String, project: String, files: Vec<UiFile>) -> impl IntoVie
     let query = use_query_map();
     let navigate = use_navigate();
     let files = Arc::new(files);
-    let filenames = Arc::new(
-        files
-            .iter()
-            .map(|file| file.filename.to_lowercase())
-            .collect::<Vec<_>>(),
-    );
     let initial = FileSearch::from_query(&query.read());
-    let (initial_matches, initial_error) =
-        match matching_file_indexes(&files, &filenames, &initial.pattern, initial.mode) {
-            Ok(indexes) => (indexes, None),
-            Err(message) => ((0..files.len()).collect(), Some(message)),
-        };
+    let (initial_matches, initial_error) = match matching_file_indexes(&files, &initial.pattern, initial.mode) {
+        Ok(indexes) => (indexes, None),
+        Err(message) => ((0..files.len()).collect(), Some(message)),
+    };
     let (pattern, set_pattern) = signal(initial.pattern);
     let (mode, set_mode) = signal(initial.mode);
     let (matches, set_matches) = signal(initial_matches);
@@ -147,7 +140,7 @@ fn FileTable(route: String, project: String, files: Vec<UiFile>) -> impl IntoVie
     });
     Effect::new({
         let files = files.clone();
-        move |_| match matching_file_indexes(&files, &filenames, &pattern.get(), mode.get()) {
+        move |_| match matching_file_indexes(&files, &pattern.get(), mode.get()) {
             Ok(indexes) => {
                 set_error.set(None);
                 set_matches.set(indexes);
@@ -304,22 +297,17 @@ impl FileSearchMode {
     }
 }
 
-fn matching_file_indexes(
-    files: &[UiFile],
-    filenames: &[String],
-    pattern: &str,
-    mode: FileSearchMode,
-) -> Result<Vec<usize>, String> {
+fn matching_file_indexes(files: &[UiFile], pattern: &str, mode: FileSearchMode) -> Result<Vec<usize>, String> {
     if pattern.is_empty() {
         return Ok((0..files.len()).collect());
     }
     match mode {
         FileSearchMode::Substring => {
             let needle = pattern.to_lowercase();
-            Ok(filenames
+            Ok(files
                 .iter()
                 .enumerate()
-                .filter_map(|(index, filename)| filename.contains(&needle).then_some(index))
+                .filter_map(|(index, file)| file.filename.to_lowercase().contains(&needle).then_some(index))
                 .collect())
         }
         FileSearchMode::Regex => {
