@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
-use peryx_core::Ecosystem;
+use peryx_core::{Ecosystem, LexiconRegistry};
 
-use super::{OCI_WORDS, state};
-use crate::search::{PackageDocument, PackageIndexer, PackageSource, SearchError, SearchParams};
-use crate::state::AppState;
+use super::{OCI_WORDS, Stores};
+use crate::context::IndexerCtx;
+use crate::{PackageDocument, PackageIndexer, PackageSearch, PackageSource, SearchError, SearchParams};
 
-/// A stand-in ecosystem indexer that yields one document of a given ecosystem regardless of state.
+/// A stand-in ecosystem indexer that yields one document of a given ecosystem regardless of context.
 struct OneDoc {
     name: &'static str,
     ecosystem: &'static str,
 }
 
 impl PackageIndexer for OneDoc {
-    fn documents(&self, _state: &AppState) -> Result<Vec<PackageDocument>, SearchError> {
+    fn documents(&self, _ctx: &IndexerCtx<'_>) -> Result<Vec<PackageDocument>, SearchError> {
         Ok(vec![PackageDocument {
             display_name: self.name.to_owned(),
             normalized_name: self.name.to_owned(),
@@ -30,27 +30,29 @@ impl PackageIndexer for OneDoc {
 #[test]
 fn test_add_indexer_composes_both_ecosystems_with_localized_labels() {
     let dir = tempfile::tempdir().unwrap();
-    let mut state = state(&dir);
-    state.register_lexicon(Ecosystem::Oci, &OCI_WORDS);
-    state.add_search_indexer(Arc::new(OneDoc {
+    let stores = Stores::open(&dir);
+    let mut lexicons = LexiconRegistry::default();
+    lexicons.register(Ecosystem::Oci, &OCI_WORDS);
+    let mut search = PackageSearch::in_memory();
+    search.add_indexer(Arc::new(OneDoc {
         name: "pyalpha",
         ecosystem: "pypi",
     }));
-    state.add_search_indexer(Arc::new(OneDoc {
+    search.add_indexer(Arc::new(OneDoc {
         name: "ocibeta",
         ecosystem: "oci",
     }));
 
-    let all = state
-        .search
+    let all = search
         .search(
-            &state,
+            &stores.ctx(&lexicons),
             SearchParams {
                 query: String::new(),
                 ..SearchParams::default()
             },
         )
         .unwrap();
+
     let pypi = all
         .results
         .iter()

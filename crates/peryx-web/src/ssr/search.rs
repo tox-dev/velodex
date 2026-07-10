@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use leptos::prelude::*;
 use peryx_http::AppState;
-use peryx_http::search::{SearchParams, SourceFilter};
+use peryx_search::{SearchParams, SourceFilter};
 
 use crate::model::UiSearchPage;
 
@@ -24,7 +24,7 @@ pub fn search(query: &str, source_type: &str, page: usize, page_size: usize) -> 
     };
     let response = app
         .search
-        .search(&app, params)
+        .search(&app.search_ctx(), params)
         .map_err(|err| format!("package search: {err}"))?;
     let value = serde_json::to_value(response).map_err(|err| format!("search result: {err}"))?;
     Ok(UiSearchPage::from_search(&value))
@@ -45,7 +45,7 @@ pub fn repositories(route: &str) -> Result<Vec<String>, String> {
     };
     let response = app
         .search
-        .search(&app, params)
+        .search(&app.search_ctx(), params)
         .map_err(|err| format!("repository list on index {route:?}: {err}"))?;
     Ok(response.results.into_iter().map(|result| result.display_name).collect())
 }

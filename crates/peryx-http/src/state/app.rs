@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use peryx_core::Ecosystem;
+use peryx_core::{Ecosystem, LexiconRegistry};
 use peryx_storage::blob::BlobStore;
 use peryx_storage::meta::MetaStore;
 
@@ -14,8 +14,8 @@ use peryx_index::{Index, IndexKind};
 use super::describe::{IndexDescription, describe_indexes};
 use crate::metrics::Metrics;
 use crate::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RateLimiter, UpstreamLimits};
-use crate::search::{PackageSearch, SearchError};
 use crate::webhook::WebhookRuntime;
+use peryx_search::{IndexerCtx, PackageSearch, SearchCtx, SearchError};
 
 /// A source of the current unix time, injectable so cache-freshness logic is deterministic in
 /// tests.
@@ -106,7 +106,7 @@ pub struct AppState {
     pub namespaces: Vec<Arc<dyn crate::serving::NamespaceServing>>,
     /// Each ecosystem's user-facing vocabulary, registered by its driver at install time so surfaces
     /// localize a label by an index's ecosystem without the neutral core naming any ecosystem's words.
-    lexicons: std::collections::HashMap<Ecosystem, &'static peryx_core::Lexicon>,
+    lexicons: LexiconRegistry,
     /// The `OpenAPI` document served at `/api-docs/openapi.json`. The binary assembles it from each
     /// ecosystem driver's paths at startup and installs it here, so this neutral crate carries no
     /// format-specific API description, only a minimal stub until the binary sets the real one.
@@ -353,33 +353,51 @@ impl AppState {
             webhooks,
             serving: default_serving(),
             namespaces: Vec::new(),
-            lexicons: std::collections::HashMap::new(),
+            lexicons: LexiconRegistry::default(),
             openapi: std::sync::Arc::from(STUB_OPENAPI),
         }
     }
 
     /// Register an ecosystem's user-facing vocabulary; its driver calls this at install time.
     pub fn register_lexicon(&mut self, ecosystem: Ecosystem, lexicon: &'static peryx_core::Lexicon) {
-        self.lexicons.insert(ecosystem, lexicon);
+        self.lexicons.register(ecosystem, lexicon);
     }
 
     /// The user-facing vocabulary for `ecosystem`, or peryx's neutral words if none is registered.
     #[must_use]
     pub fn lexicon(&self, ecosystem: Ecosystem) -> &'static peryx_core::Lexicon {
-        self.lexicons
-            .get(&ecosystem)
-            .copied()
-            .unwrap_or(&peryx_core::Lexicon::NEUTRAL)
+        self.lexicons.get(ecosystem)
+    }
+
+    /// The stores and indexes an ecosystem's search indexer walks.
+    #[must_use]
+    pub fn indexer_ctx(&self) -> IndexerCtx<'_> {
+        IndexerCtx {
+            indexes: &self.indexes,
+            meta: &self.meta,
+            blobs: &self.blobs,
+        }
+    }
+
+    /// What one search request reads from this state: the indexers' stores, the mutation epoch that
+    /// decides whether the derived index is stale, and the registered vocabularies.
+    #[must_use]
+    pub fn search_ctx(&self) -> SearchCtx<'_> {
+        SearchCtx {
+            indexer: self.indexer_ctx(),
+            epoch: self.epoch.load(std::sync::atomic::Ordering::Relaxed),
+            lexicons: &self.lexicons,
+        }
     }
 
     /// Wire in the ecosystem serving driver and its search indexer. The binary calls this once at
     /// startup with the configured ecosystem's implementations; a state built without it serves the
     /// neutral defaults ([`UnconfiguredServing`](crate::serving::UnconfiguredServing) and
-    /// [`EmptyIndexer`](crate::search::EmptyIndexer)).
+    /// [`EmptyIndexer`](peryx_search::EmptyIndexer)).
     pub fn set_ecosystem(
         &mut self,
         serving: Arc<dyn crate::serving::EcosystemServing>,
-        indexer: Arc<dyn crate::search::PackageIndexer>,
+        indexer: Arc<dyn peryx_search::PackageIndexer>,
     ) {
         self.serving = serving;
         self.search.set_indexer(indexer);
@@ -387,7 +405,7 @@ impl AppState {
 
     /// Add another ecosystem's search indexer, composing with any already installed. An ecosystem
     /// whose serving lives in its own slot (OCI) uses this to make its packages searchable too.
-    pub fn add_search_indexer(&mut self, indexer: Arc<dyn crate::search::PackageIndexer>) {
+    pub fn add_search_indexer(&mut self, indexer: Arc<dyn peryx_search::PackageIndexer>) {
         self.search.add_indexer(indexer);
     }
 

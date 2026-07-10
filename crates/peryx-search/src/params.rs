@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::error::SearchError;
+use crate::error::SearchError;
 
 const DEFAULT_PAGE_SIZE: usize = 25;
 const PAGE_SIZES: [usize; 3] = [25, 50, 100];

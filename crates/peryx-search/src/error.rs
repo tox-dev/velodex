@@ -23,6 +23,19 @@ pub enum SearchError {
     InvalidSource(String),
 }
 
+impl SearchError {
+    /// Whether the caller's query was at fault, rather than the server. A caller maps this to a
+    /// `400`; anything else is a `500`. Deciding it here keeps the tantivy error taxonomy inside this
+    /// crate instead of leaking into whichever surface renders the failure.
+    #[must_use]
+    pub const fn is_bad_request(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidSource(_) | Self::Tantivy(tantivy::TantivyError::InvalidArgument(_))
+        )
+    }
+}
+
 impl From<MetaScanError<Self>> for SearchError {
     fn from(err: MetaScanError<Self>) -> Self {
         match err {

@@ -11,10 +11,10 @@ use super::http_tests::{get, harness, harness_with_policies};
 use crate::cache;
 use crate::upload::Uploaded;
 use peryx_http::path_safety::local_file_url;
-use peryx_http::search::{PackageSearch, PackageSource, SearchError, SourceFilter};
 use peryx_http::state::AppState;
 use peryx_index::{Index, IndexKind};
 use peryx_policy::{Policy, PolicyConfig};
+use peryx_search::{PackageSearch, PackageSource, SearchError, SourceFilter};
 
 #[tokio::test]
 async fn test_search_indexes_uploaded_metadata_and_route_scope() {

@@ -128,7 +128,9 @@ pub async fn mirror(
 ) -> anyhow::Result<Vec<MirrorRow>> {
     let mut rows = Vec::new();
     let Some((base, auth)) = serving_members(state, index).into_iter().find_map(|member| {
-        member.proxy_client().map(|client| (client.base_url().to_owned(), client.auth().clone()))
+        member
+            .proxy_client()
+            .map(|client| (client.base_url().to_owned(), client.auth().clone()))
     }) else {
         rows.push(MirrorRow::error(
             "summary",

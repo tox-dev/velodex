@@ -119,7 +119,12 @@ fn state_for(server: &MockServer, dir: &tempfile::TempDir, cached_policy: Policy
     let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
     let blobs = BlobStore::new(dir.path().join("blobs"));
     let upstream = UpstreamClient::new(&format!("{}/simple/", server.uri())).unwrap();
-    super::wired(AppState::new(meta, blobs, 60, cached_first_indexes(upstream, cached_policy)))
+    super::wired(AppState::new(
+        meta,
+        blobs,
+        60,
+        cached_first_indexes(upstream, cached_policy),
+    ))
 }
 
 #[tokio::test]

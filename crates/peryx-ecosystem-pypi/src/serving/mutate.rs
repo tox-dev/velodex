@@ -12,8 +12,8 @@ use axum::response::{IntoResponse, Response};
 use peryx_http::handlers::not_found;
 use peryx_http::path_safety::{self};
 use peryx_http::state::AppState;
-use peryx_index::{Index, IndexKind};
 use peryx_http::webhook::{WebhookEvent, WebhookEventKind};
+use peryx_index::{Index, IndexKind};
 
 use crate::cache::{self, CacheError};
 use crate::{Yanked, normalize_name};

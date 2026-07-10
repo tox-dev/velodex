@@ -10,8 +10,10 @@
 //! this one.
 
 pub mod ecosystem;
+pub mod lexicon;
 pub mod role;
 pub mod url_encoding;
 
-pub use ecosystem::{Ecosystem, Lexicon, UnknownEcosystem};
+pub use ecosystem::{Ecosystem, UnknownEcosystem};
+pub use lexicon::{Lexicon, LexiconRegistry};
 pub use role::Role;

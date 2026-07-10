@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use tantivy::collector::{Count, TopDocs};
@@ -13,11 +12,11 @@ use tantivy::schema::{FAST, Field, IndexRecordOption, STORED, STRING, Schema, Te
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer, TokenizerManager};
 use tantivy::{Index as TantivyIndex, IndexReader, Order, Term};
 
-use super::error::SearchError;
-use super::indexer::{CompositeIndexer, PackageDocument, PackageIndexer, default_indexer};
-use super::params::{PackageSource, SearchParams};
-use super::response::{SearchResponse, SearchResult};
-use crate::state::AppState;
+use crate::context::SearchCtx;
+use crate::error::SearchError;
+use crate::indexer::{CompositeIndexer, PackageDocument, PackageIndexer, default_indexer};
+use crate::params::{PackageSource, SearchParams};
+use crate::response::{SearchResponse, SearchResult};
 
 const SUBSTRING_TOKENIZER: &str = "peryx_substring";
 const MIN_NGRAM: usize = 2;
@@ -110,8 +109,8 @@ impl PackageSearch {
     ///
     /// # Errors
     /// Returns an error if the derived index cannot refresh or the query is invalid.
-    pub fn search(&self, state: &AppState, params: SearchParams) -> Result<SearchResponse, SearchError> {
-        self.ensure_current(state)?;
+    pub fn search(&self, ctx: &SearchCtx<'_>, params: SearchParams) -> Result<SearchResponse, SearchError> {
+        self.ensure_current(ctx)?;
         let query = self.query(&params)?;
         let searcher = self.reader.searcher();
         let offset = params.offset();
@@ -126,7 +125,7 @@ impl PackageSearch {
                 searcher.doc::<TantivyDocument>(address).map(|doc| {
                     let mut result = self.result_from_doc(&doc);
                     let ecosystem = result.ecosystem.parse().unwrap_or_default();
-                    state.lexicon(ecosystem).search_noun.clone_into(&mut result.type_label);
+                    ctx.lexicon(ecosystem).search_noun.clone_into(&mut result.type_label);
                     result
                 })
             })
@@ -142,8 +141,8 @@ impl PackageSearch {
         })
     }
 
-    fn ensure_current(&self, state: &AppState) -> Result<(), SearchError> {
-        let epoch = state.epoch.load(Ordering::Relaxed);
+    fn ensure_current(&self, ctx: &SearchCtx<'_>) -> Result<(), SearchError> {
+        let epoch = ctx.epoch;
         let _guard = self.rebuild_lock.lock().expect("search rebuild lock");
         if self
             .indexed_epoch
@@ -151,7 +150,7 @@ impl PackageSearch {
             .expect("search epoch lock")
             .is_none_or(|indexed| indexed != epoch)
         {
-            self.write(&self.indexer.documents(state)?)?;
+            self.write(&self.indexer.documents(&ctx.indexer)?)?;
             *self.indexed_epoch.lock().expect("search epoch lock") = Some(epoch);
         }
         Ok(())

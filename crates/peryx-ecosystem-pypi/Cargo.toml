@@ -16,6 +16,7 @@ default = ["serving"]
 serving = [
   "dep:peryx-http",
   "dep:peryx-index",
+  "dep:peryx-search",
   "dep:peryx-policy",
   "dep:peryx-identity",
   "dep:peryx-storage",
@@ -29,7 +30,6 @@ serving = [
   "dep:csv",
   "dep:reqwest",
   "dep:rustls",
-  "dep:tantivy",
   "dep:thiserror",
   "dep:async-trait",
   "dep:tracing",
@@ -58,6 +58,7 @@ sha2.workspace = true
 # Serving layer (enabled by the `serving` feature).
 peryx-http = { workspace = true, optional = true }
 peryx-index = { workspace = true, optional = true }
+peryx-search = { workspace = true, optional = true }
 peryx-policy = { workspace = true, optional = true }
 peryx-identity = { workspace = true, optional = true }
 peryx-storage = { workspace = true, optional = true }
@@ -71,7 +72,6 @@ blake2 = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-tantivy = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }

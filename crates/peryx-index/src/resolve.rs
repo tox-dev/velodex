@@ -83,10 +83,7 @@ mod tests {
 
     #[test]
     fn test_resolve_position_prefers_the_longest_route() {
-        let indexes = vec![
-            index("short", "team", hosted()),
-            index("long", "team/dev", hosted()),
-        ];
+        let indexes = vec![index("short", "team", hosted()), index("long", "team/dev", hosted())];
         assert_eq!(resolve_position(&indexes, "team/dev/simple"), Some((1, "simple")));
         assert_eq!(resolve_position(&indexes, "team/other"), Some((0, "other")));
         assert_eq!(resolve_position(&indexes, "elsewhere"), None);

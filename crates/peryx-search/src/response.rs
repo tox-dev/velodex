@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::params::{PackageSource, SourceFilter};
+use crate::params::{PackageSource, SourceFilter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchResponse {
