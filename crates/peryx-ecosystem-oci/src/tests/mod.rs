@@ -8,7 +8,7 @@ mod mirror_tests;
 mod policy_tests;
 mod push_tests;
 mod search_tests;
-mod serve_tests;
+mod serve;
 mod virtual_tests;
 mod webhooks_tests;
 
