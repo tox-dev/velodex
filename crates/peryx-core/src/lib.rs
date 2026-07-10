@@ -11,6 +11,7 @@
 
 pub mod ecosystem;
 pub mod lexicon;
+pub mod path;
 pub mod role;
 pub mod url_encoding;
 

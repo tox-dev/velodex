@@ -1,5 +1,10 @@
-use peryx_core::url_encoding::{push_component, push_path};
-use peryx_storage::blob::Digest;
+//! Guarding the parts of a URL path peryx builds and parses: index routes, artifact filenames,
+//! and percent-encoded path segments.
+//!
+//! Pure string work, so it sits in the core beneath every crate that constructs or validates a
+//! path: the serving layer, the ecosystem drivers, and the binary's config validation alike.
+
+use crate::url_encoding::{push_component, push_path};
 use std::borrow::Cow;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -54,14 +59,6 @@ pub fn decode_path_segment(segment: &str) -> Result<Cow<'_, str>, PathSafetyErro
 /// decodes to non-UTF-8 bytes.
 pub fn decode_path(path: &str) -> Result<Cow<'_, str>, PathSafetyError> {
     decode_percent(path)
-}
-
-/// Parse a sha256 digest from a route parameter.
-///
-/// # Errors
-/// Returns [`PathSafetyError::InvalidDigest`] if `hex` is not exactly 64 lowercase hex characters.
-pub fn parse_digest(hex: &str) -> Result<Digest, PathSafetyError> {
-    Digest::from_hex(hex).ok_or_else(|| PathSafetyError::InvalidDigest(hex.to_owned()))
 }
 
 /// Validate an index route as a raw URL path prefix.
@@ -185,8 +182,8 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PathSafetyError, decode_path, decode_path_segment, local_file_url, parse_digest, validate_filename,
-        validate_path_segment, validate_route,
+        PathSafetyError, decode_path, decode_path_segment, local_file_url, validate_filename, validate_path_segment,
+        validate_route,
     };
 
     #[test]
@@ -224,14 +221,6 @@ mod tests {
         assert_eq!(
             decode_path("peryxpkg-1.0.dist-info%2FMETADATA").unwrap(),
             "peryxpkg-1.0.dist-info/METADATA"
-        );
-    }
-
-    #[test]
-    fn test_digest_parser_explains_shape() {
-        assert_eq!(
-            parse_digest("nothex").unwrap_err(),
-            PathSafetyError::InvalidDigest("nothex".to_owned())
         );
     }
 

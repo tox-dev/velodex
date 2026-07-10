@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashSet};
 use crate::policy::PypiPolicy as _;
 use crate::upload::Uploaded;
 use crate::{CoreMetadata, File, Meta, ProjectDetail, ProjectList, ProjectListEntry, parse_detail};
-use peryx_http::path_safety::local_file_url;
+use peryx_core::path::local_file_url;
 use peryx_http::state::AppState;
 use peryx_index::{Index, IndexKind};
 use peryx_policy::PolicyAction;

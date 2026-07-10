@@ -15,7 +15,7 @@ use peryx_storage::blob::{BlobError, BlobStore, Digest, StagedBlob};
 use peryx_storage::meta::{MetaError, MetaStore, MetadataSibling, PublishedFile};
 use serde::{Deserialize, Serialize};
 
-use peryx_http::path_safety::{local_file_url, validate_filename};
+use peryx_core::path::{local_file_url, validate_filename};
 
 /// An uploaded file plus the version it belongs to, stored per file on a private index and
 /// reassembled into the project's detail page.

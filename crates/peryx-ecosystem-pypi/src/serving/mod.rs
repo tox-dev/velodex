@@ -3,8 +3,8 @@
 //!
 //! peryx-http routes a request to a configured index and hands it to that index's
 //! [`EcosystemServing`] driver. This module is the `PyPI` implementation; it composes the neutral
-//! peryx-http surfaces (state, path safety, metrics, webhooks, security events, search) with this
-//! crate's cache, upload, and archive logic.
+//! surfaces peryx offers a driver (state, path safety, metrics, webhooks, security events, search)
+//! with this crate's cache, upload, and archive logic.
 #![allow(
     clippy::result_large_err,
     reason = "handler helpers carry an axum Response as their error; boxing it everywhere adds noise"
@@ -18,14 +18,15 @@ use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use peryx_core::Ecosystem;
 use peryx_core::Role;
+use peryx_core::path::{self, PathSafetyError};
 use peryx_events::metrics::MetricFamily;
 use peryx_http::discovery::BaseUrl;
 use peryx_http::handlers::not_found;
-use peryx_http::path_safety::{self, PathSafetyError};
 use peryx_http::rate_limit::RouteClass;
 use peryx_http::serving::{EcosystemServing, RefreshSweep};
 use peryx_http::state::{AppState, IndexDescription};
 use peryx_index::{Index, IndexKind};
+use peryx_storage::blob::Digest;
 
 use crate::cache::{self};
 use crate::discovery;
@@ -142,13 +143,22 @@ impl EcosystemServing for PypiServing {
 }
 
 fn safe_filename(raw: &str) -> Result<String, PathSafetyError> {
-    let filename = path_safety::decode_path_segment(raw)?;
-    path_safety::validate_filename(&filename)?;
+    let filename = path::decode_path_segment(raw)?;
+    path::validate_filename(&filename)?;
     Ok(filename.into_owned())
 }
 
 fn path_error_response(err: &PathSafetyError) -> Response {
     (StatusCode::BAD_REQUEST, err.to_string()).into_response()
+}
+
+/// Parse a sha256 digest out of a route parameter. `PyPI` addresses a stored artifact by its digest,
+/// so a bad one is a client error, not a missing file.
+///
+/// # Errors
+/// Returns [`PathSafetyError::InvalidDigest`] unless `hex` is exactly 64 lowercase hex characters.
+pub(crate) fn parse_digest(hex: &str) -> Result<Digest, PathSafetyError> {
+    Digest::from_hex(hex).ok_or_else(|| PathSafetyError::InvalidDigest(hex.to_owned()))
 }
 
 /// The writable hosted index behind `index`: itself if hosted, its upload layer if a virtual index.

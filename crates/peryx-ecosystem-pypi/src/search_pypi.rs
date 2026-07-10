@@ -14,7 +14,7 @@ use peryx_storage::blob::Digest;
 use peryx_storage::meta::CachedIndex;
 
 use crate::upload::Uploaded;
-use peryx_http::path_safety::local_file_url;
+use peryx_core::path::local_file_url;
 use peryx_index::{Index, IndexKind};
 use peryx_search::{
     INDEXED_TEXT_BYTES, IndexerCtx, PackageDocument, PackageIndexer, PackageSource, SearchError, truncate_to_chars,

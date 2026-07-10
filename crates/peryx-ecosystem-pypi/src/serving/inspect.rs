@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use peryx_core::path::{self};
 use peryx_http::handlers::not_found;
-use peryx_http::path_safety::{self};
 use peryx_http::state::AppState;
 
 use crate::cache::{self};
@@ -29,7 +29,7 @@ pub(super) async fn inspect_route(state: Arc<AppState>, route: String, target: &
     let Some((sha256, rest)) = target.split_once('/') else {
         return not_found();
     };
-    let digest = match path_safety::parse_digest(sha256) {
+    let digest = match super::parse_digest(sha256) {
         Ok(digest) => digest,
         Err(err) => return path_error_response(&err),
     };
@@ -40,7 +40,7 @@ pub(super) async fn inspect_route(state: Arc<AppState>, route: String, target: &
     let (raw_filename, member) = match archive_query.member {
         Some(member) => (rest, Some(member)),
         None if archive_query.containers.is_empty() => match rest.split_once('/') {
-            Some((filename, member)) => match path_safety::decode_path(member) {
+            Some((filename, member)) => match path::decode_path(member) {
                 Ok(member) => (filename, Some(member.into_owned())),
                 Err(err) => return path_error_response(&err),
             },

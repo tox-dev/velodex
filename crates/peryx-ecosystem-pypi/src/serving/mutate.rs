@@ -9,9 +9,9 @@ use std::sync::atomic::Ordering;
 
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use peryx_core::path::{self};
 use peryx_events::webhook::{WebhookEvent, WebhookEventKind};
 use peryx_http::handlers::not_found;
-use peryx_http::path_safety::{self};
 use peryx_http::state::AppState;
 use peryx_index::{Index, IndexKind};
 
@@ -381,21 +381,21 @@ fn parse_project_version(spec: &str) -> Result<(String, Option<String>), Respons
     let mut parts = trimmed.splitn(2, '/');
     let project = parts
         .next()
-        .map(path_safety::decode_path_segment)
+        .map(path::decode_path_segment)
         .transpose()
         .map_err(|err| path_error_response(&err))?
         .unwrap_or_default()
         .into_owned();
-    path_safety::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
+    path::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
     let version = parts
         .next()
-        .map(|version| path_safety::decode_path(version.trim_matches('/')))
+        .map(|version| path::decode_path(version.trim_matches('/')))
         .transpose()
         .map_err(|err| path_error_response(&err))?
         .filter(|version| !version.is_empty())
         .map(std::borrow::Cow::into_owned);
     if let Some(version) = &version {
-        path_safety::validate_path_segment("version", version).map_err(|err| path_error_response(&err))?;
+        path::validate_path_segment("version", version).map_err(|err| path_error_response(&err))?;
     }
     Ok((normalize_name(&project), version))
 }

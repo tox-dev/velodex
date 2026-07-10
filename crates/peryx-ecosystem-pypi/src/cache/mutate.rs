@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::file_matches_version;
 use crate::upload::{self, PreparedUpload, Uploaded};
 use crate::{ProjectStatus, Yanked, parse_distribution_filename, to_json};
-use peryx_http::path_safety::local_file_url;
+use peryx_core::path::local_file_url;
 use peryx_http::state::AppState;
 use peryx_index::{Index, IndexKind};
 

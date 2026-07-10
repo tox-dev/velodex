@@ -9,6 +9,7 @@ description = "Ecosystem-neutral domain core for peryx: the Ecosystem axis, inde
 
 [dependencies]
 serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

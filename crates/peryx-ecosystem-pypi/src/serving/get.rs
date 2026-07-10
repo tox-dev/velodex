@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use peryx_core::path::{self};
 use peryx_events::metrics::Event;
 use peryx_http::handlers::not_found;
-use peryx_http::path_safety::{self};
 use peryx_http::state::AppState;
 use peryx_index::Index;
 use peryx_policy::PolicyAction;
@@ -142,7 +142,7 @@ async fn file_route(state: &Arc<AppState>, index: &Index, file: &str) -> Respons
     let Some((sha256, raw_filename)) = file.split_once('/') else {
         return not_found();
     };
-    let digest = match path_safety::parse_digest(sha256) {
+    let digest = match super::parse_digest(sha256) {
         Ok(digest) => digest,
         Err(err) => return path_error_response(&err),
     };
@@ -216,17 +216,17 @@ fn legacy_json_target(rest: &str) -> Result<Option<LegacyJsonTarget>, Response> 
         return Ok(None);
     };
     let Some((project, version)) = spec.split_once('/') else {
-        let project = path_safety::decode_path_segment(spec).map_err(|err| path_error_response(&err))?;
-        path_safety::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
+        let project = path::decode_path_segment(spec).map_err(|err| path_error_response(&err))?;
+        path::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
         return Ok(Some(LegacyJsonTarget {
             project: normalize_name(&project),
             version: None,
         }));
     };
-    let project = path_safety::decode_path_segment(project).map_err(|err| path_error_response(&err))?;
-    let version = path_safety::decode_path(version).map_err(|err| path_error_response(&err))?;
-    path_safety::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
-    path_safety::validate_path_segment("version", &version).map_err(|err| path_error_response(&err))?;
+    let project = path::decode_path_segment(project).map_err(|err| path_error_response(&err))?;
+    let version = path::decode_path(version).map_err(|err| path_error_response(&err))?;
+    path::validate_path_segment("project", &project).map_err(|err| path_error_response(&err))?;
+    path::validate_path_segment("version", &version).map_err(|err| path_error_response(&err))?;
     Ok(Some(LegacyJsonTarget {
         project: normalize_name(&project),
         version: Some(version.into_owned()),

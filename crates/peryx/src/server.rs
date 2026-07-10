@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use axum::Router;
+use peryx_core::path;
 use peryx_events::webhook::{WebhookRuntime, WebhookTargetConfig};
-use peryx_http::{AppState, Index, IndexKind, RuntimeOptions, path_safety, router};
+use peryx_http::{AppState, Index, IndexKind, RuntimeOptions, router};
 use peryx_policy::Policy;
 use peryx_storage::blob::BlobStore;
 use peryx_storage::meta::MetaStore;
@@ -80,7 +81,7 @@ pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::R
     let mut positions = HashMap::with_capacity(configs.len());
     let mut routes = HashMap::with_capacity(configs.len());
     for (pos, index) in configs.iter().enumerate() {
-        path_safety::validate_route(&index.route).with_context(|| format!("invalid index route {}", index.route))?;
+        path::validate_route(&index.route).with_context(|| format!("invalid index route {}", index.route))?;
         if positions.insert(index.name.as_str(), pos).is_some() {
             bail!("duplicate index name {}", index.name);
         }

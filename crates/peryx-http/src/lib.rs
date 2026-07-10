@@ -5,7 +5,6 @@ pub mod body;
 pub mod discovery;
 pub mod download;
 pub mod handlers;
-pub mod path_safety;
 pub mod rate_limit;
 pub mod router;
 pub mod serving;

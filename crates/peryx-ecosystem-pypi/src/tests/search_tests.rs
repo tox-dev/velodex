@@ -10,7 +10,7 @@ use peryx_upstream::UpstreamClient;
 use super::http_tests::{get, harness, harness_with_policies};
 use crate::cache;
 use crate::upload::Uploaded;
-use peryx_http::path_safety::local_file_url;
+use peryx_core::path::local_file_url;
 use peryx_http::state::AppState;
 use peryx_index::{Index, IndexKind};
 use peryx_policy::{Policy, PolicyConfig};
