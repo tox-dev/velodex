@@ -324,13 +324,7 @@ fn served_bytes(response: &Response) -> u64 {
 /// The per-blob lock concurrent misses share so a single upstream fetch serves them all, the same
 /// single-flight coalescing every cached fetch shares. Keyed in its own namespace on the blob digest.
 fn flight_gate(state: &AppState, key: &str) -> Arc<tokio::sync::Mutex<()>> {
-    state
-        .inflight
-        .lock()
-        .expect("inflight lock")
-        .entry(key.to_owned())
-        .or_default()
-        .clone()
+    peryx_index::serving::flight_gate(&state.inflight, key)
 }
 /// Find the OCI index whose route is the longest segment-aligned prefix of `name`, and the upstream
 /// repository (the remainder). An empty route matches at the root, losing every tie to a real prefix.
@@ -385,10 +379,7 @@ fn unauthorized() -> Response {
 /// The same bound a stale `PyPI` page gets: serve past the freshness window while an upstream is
 /// down, but not without end. `0` removes the bound.
 fn within_stale_bound(state: &AppState, fetched_at: i64) -> bool {
-    if state.max_stale_secs == 0 {
-        return true;
-    }
-    (state.clock)().saturating_sub(fetched_at) < state.ttl_secs + state.max_stale_secs
+    peryx_index::serving::within_stale_bound((state.clock)(), state.max_stale_secs, fetched_at, state.ttl_secs)
 }
 
 async fn bounded_body(response: reqwest::Response, max: usize) -> Result<bytes::Bytes, ServeError> {

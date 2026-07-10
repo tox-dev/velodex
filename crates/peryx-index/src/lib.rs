@@ -8,6 +8,7 @@
 
 pub mod index;
 pub mod resolve;
+pub mod serving;
 
 pub use index::{Index, IndexKind};
 pub use resolve::{remainder, resolve_position, shadow_order};

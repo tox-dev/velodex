@@ -133,15 +133,12 @@ impl CacheError {
 
 /// The per-page lock concurrent cache misses share.
 pub(crate) fn flight_gate(state: &AppState, key: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let mut inflight = state.inflight.lock().expect("inflight lock");
-    inflight.entry(key.to_owned()).or_default().clone()
+    peryx_index::serving::flight_gate(&state.inflight, key)
 }
 
-/// Release a single-flight hold: unlock first so a waiter parked on the gate proceeds, then drop
-/// the map entry so later requests start fresh.
+/// Release a single-flight hold.
 fn release_flight(state: &AppState, key: &str, guard: tokio::sync::OwnedMutexGuard<()>) {
-    drop(guard);
-    state.inflight.lock().expect("inflight lock").remove(key);
+    peryx_index::serving::release_flight(&state.inflight, key, guard);
 }
 
 /// The cached raw page, when it is still within its freshness window: upstream's `Cache-Control`
@@ -189,10 +186,12 @@ pub fn rendered_expiry(state: &AppState, index: &Index, project: &str) -> Result
 /// a fork. `max_stale_secs` bounds the outage a stale page papers over. `0` removes the bound, which
 /// is what an operator deliberately mirroring an unreliable upstream asks for.
 pub(crate) fn servable_stale(state: &AppState, record: &CachedIndex) -> bool {
-    if state.max_stale_secs == 0 {
-        return true;
-    }
-    (state.clock)() - record.fetched_at_unix < freshness(state, record) + state.max_stale_secs
+    peryx_index::serving::within_stale_bound(
+        (state.clock)(),
+        state.max_stale_secs,
+        record.fetched_at_unix,
+        freshness(state, record),
+    )
 }
 
 /// How long a page stays fresh: the lifetime upstream granted, never longer than the configured one.
