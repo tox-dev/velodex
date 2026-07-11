@@ -6,6 +6,23 @@ use sha2::{Digest as _, Sha256};
 use super::error::{BlobError, BlobScanError};
 use super::{Digest, sync_parent, to_hex};
 
+/// Settle a no-clobber move of a freshly written temp blob into its content-addressed `dest`.
+///
+/// A no-clobber rename fails when `dest` already exists on every platform (a plain rename overwrites on
+/// Unix but errors on Windows, so two racing writers of the same digest would diverge). Since the bytes
+/// are identical for a given digest, a `dest` that already holds it means the blob is stored, so a lost
+/// race is success. Any other failure is a real io error.
+fn commit_placement(persisted: Result<(), std::io::Error>, dest: &Path) -> Result<(), BlobError> {
+    match persisted {
+        Ok(()) => {
+            sync_parent(dest);
+            Ok(())
+        }
+        Err(_) if dest.is_file() => Ok(()),
+        Err(err) => Err(BlobError::Io(err)),
+    }
+}
+
 /// Name the blob a failed open was looking for. Opening already reports absence, so asking the
 /// filesystem whether the path is a file beforehand only re-walks the same directories.
 fn absent_or_io(err: std::io::Error, digest: &Digest) -> BlobError {
@@ -65,8 +82,7 @@ impl BlobStore {
         let mut tmp = tempfile::NamedTempFile::new_in(&parent)?;
         tmp.write_all(bytes)?;
         tmp.as_file().sync_all()?;
-        tmp.persist(&dest).map_err(|err| err.error)?;
-        sync_parent(&dest);
+        commit_placement(tmp.persist_noclobber(&dest).map(drop).map_err(|err| err.error), &dest)?;
         Ok(digest)
     }
 
@@ -240,9 +256,7 @@ impl BlobStore {
             return Ok(());
         }
         std::fs::create_dir_all(dest.parent().expect("blob paths always have a parent"))?;
-        staged.path.persist(&dest).map_err(|err| BlobError::Io(err.error))?;
-        sync_parent(&dest);
-        Ok(())
+        commit_placement(staged.path.persist_noclobber(&dest).map_err(|err| err.error), &dest)
     }
 
     /// Finish a streamed write: verify the digest and move the blob into place.
@@ -332,5 +346,36 @@ impl StagedBlob {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::commit_placement;
+    use crate::blob::error::BlobError;
+
+    #[test]
+    fn test_commit_placement_succeeds_on_a_clean_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob");
+        std::fs::write(&dest, b"bytes").unwrap();
+        assert!(commit_placement(Ok(()), &dest).is_ok());
+    }
+
+    #[test]
+    fn test_commit_placement_treats_a_lost_race_as_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob");
+        std::fs::write(&dest, b"bytes").unwrap();
+        let clash = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        assert!(commit_placement(Err(clash), &dest).is_ok());
+    }
+
+    #[test]
+    fn test_commit_placement_reports_a_real_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("nothing-here");
+        let failure = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(commit_placement(Err(failure), &absent), Err(BlobError::Io(_))));
     }
 }
