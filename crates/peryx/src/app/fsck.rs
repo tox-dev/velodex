@@ -12,7 +12,8 @@ pub(super) fn fsck_cache(stores: &CacheStores, out: &mut dyn Write) -> anyhow::R
     for driver in crate::server::drivers().present() {
         problems += driver
             .fsck_metadata(&stores.meta, &stores.blobs, out)
-            .map_err(|reason| anyhow::anyhow!("fsck {} metadata: {reason}", driver.ecosystem().as_str()))?;
+            .map_err(anyhow::Error::msg)
+            .context(format!("fsck {} metadata", driver.ecosystem().as_str()))?;
     }
     stores
         .blobs

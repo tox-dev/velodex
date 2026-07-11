@@ -35,11 +35,11 @@ pub fn import_dir(
         route: target_route,
     };
     let mut counts = ImportCounts::default();
-    writeln!(out, "status\tfilename\tproject\tversion\treason").map_err(|err| err.to_string())?;
+    writeln!(out, "status\tfilename\tproject\tversion\treason").map_err(crate::error_message)?;
     walk_files(dir, &mut |path| {
         import_file(dir, path, target, meta, blobs, &mut counts, out)
     })
-    .map_err(|err| err.to_string())?;
+    .map_err(crate::error_message)?;
     let ImportCounts {
         imported,
         skipped,
@@ -49,7 +49,7 @@ pub fn import_dir(
         out,
         "summary\t\t\t\timported={imported} skipped={skipped} rejected={rejected}"
     )
-    .map_err(|err| err.to_string())
+    .map_err(crate::error_message)
 }
 
 #[derive(Default)]

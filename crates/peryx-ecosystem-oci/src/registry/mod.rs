@@ -103,6 +103,13 @@ impl ServeError {
         }
     }
 }
+/// The web browse methods return a user-visible message, so a fault propagated with `?` reads as its
+/// one-line description without a per-call-site closure.
+impl From<ServeError> for String {
+    fn from(err: ServeError) -> Self {
+        err.message()
+    }
+}
 /// The OCI/Docker registry driver: one shared upstream fetcher over the process's stores, plus the
 /// in-progress blob uploads a hosted push accumulates across its `POST`/`PATCH`/`PUT` requests.
 #[derive(Default)]
@@ -224,7 +231,7 @@ impl EcosystemDriver for OciRegistry {
         &self,
         meta: &peryx_storage::meta::MetaStore,
     ) -> Result<std::collections::BTreeSet<String>, String> {
-        crate::referenced_blob_digests(meta).map_err(|err| err.to_string())
+        Ok(crate::referenced_blob_digests(meta).map_err(ServeError::from)?)
     }
 
     fn client_endpoint(&self, route: &str) -> String {
@@ -235,7 +242,7 @@ impl EcosystemDriver for OciRegistry {
     }
 
     fn project_names(&self, state: &ServingState, position: usize) -> Result<Vec<String>, String> {
-        repositories(state, state.index_at(position)).map_err(|err| err.to_string())
+        Ok(repositories(state, state.index_at(position)).map_err(ServeError::from)?)
     }
 
     async fn browse_project(
@@ -245,10 +252,7 @@ impl EcosystemDriver for OciRegistry {
         project: String,
     ) -> Result<Option<peryx_core::UiProjectView>, String> {
         let index = state.index_at(position);
-        let names = self
-            .repository_tags(&state, index, &project)
-            .await
-            .map_err(|err| err.message())?;
+        let names = self.repository_tags(&state, index, &project).await?;
         Ok(Some(peryx_core::UiProjectView::References { names }))
     }
 
@@ -263,16 +267,11 @@ impl EcosystemDriver for OciRegistry {
         let Some(reference) = crate::name::parse_reference(&reference) else {
             return Ok(None);
         };
-        let response = self
-            .serve_manifest(&state, &name, &reference, false)
-            .await
-            .map_err(|err| err.message())?;
+        let response = self.serve_manifest(&state, &name, &reference, false).await?;
         if response.status() != StatusCode::OK {
             return Ok(None);
         }
-        let bytes = axum::body::to_bytes(response.into_body(), MAX_MANIFEST_BYTES)
-            .await
-            .map_err(|err| err.to_string())?;
+        let bytes = read_body(response.into_body(), MAX_MANIFEST_BYTES).await?;
         crate::web::manifest_from_bytes(&bytes).map(Some)
     }
 
@@ -284,18 +283,12 @@ impl EcosystemDriver for OciRegistry {
         digest: String,
     ) -> Result<Vec<peryx_core::UiMember>, String> {
         let name = full_name(&state.index_at(position).route, &project);
-        let response = self
-            .serve_layer_contents(&state, &name, &digest, "")
-            .await
-            .map_err(|err| err.message())?;
+        let response = self.serve_layer_contents(&state, &name, &digest, "").await?;
         if !response.status().is_success() {
             return Err(layer_error_message(&name, &digest, response).await);
         }
-        let bytes = axum::body::to_bytes(response.into_body(), 8 << 20)
-            .await
-            .map_err(|err| err.to_string())?;
-        let value = serde_json::from_slice(&bytes).map_err(|err| err.to_string())?;
-        Ok(crate::web::members_from_listing(&value))
+        let bytes = read_body(response.into_body(), 8 << 20).await?;
+        crate::web::members_from_bytes(&bytes)
     }
 
     async fn artifact_member_chunk(
@@ -312,22 +305,16 @@ impl EcosystemDriver for OciRegistry {
             .append_pair("member", &member)
             .append_pair("offset", &offset.to_string())
             .finish();
-        let response = self
-            .serve_layer_contents(&state, &name, &digest, &query)
-            .await
-            .map_err(|err| err.message())?;
+        let response = self.serve_layer_contents(&state, &name, &digest, &query).await?;
         if !response.status().is_success() {
             return Err(layer_error_message(&name, &digest, response).await);
         }
         let size = crate::web::header_u64(response.headers(), "x-peryx-member-size");
         let chunk_offset = crate::web::header_u64(response.headers(), "x-peryx-member-offset").unwrap_or_default();
         let next_offset = crate::web::header_u64(response.headers(), "x-peryx-next-offset");
-        let bytes = axum::body::to_bytes(response.into_body(), 4 << 20)
-            .await
-            .map_err(|err| err.to_string())?;
+        let bytes = read_body(response.into_body(), 4 << 20).await?;
         Ok(peryx_core::UiMemberChunk {
-            text: String::from_utf8(bytes.to_vec())
-                .map_err(|err| format!("layer member {member:?} on {name:?} for {digest} is not valid UTF-8: {err}"))?,
+            text: decode_member_text(&bytes, &member, &name, &digest)?,
             size,
             offset: chunk_offset,
             next_offset,
@@ -406,6 +393,22 @@ async fn layer_error_message(name: &str, digest: &str, response: Response) -> St
         ),
         Err(err) => format!("layer contents for {digest} on {name:?}: {status}: {err}"),
     }
+}
+/// Read a response body into memory, capped, mapping an over-cap or transfer failure to a user-visible
+/// message. One helper, so the web browse methods carry no per-call-site error closure.
+///
+/// # Errors
+/// Returns a message when the body exceeds `cap` or the transfer fails.
+async fn read_body(body: Body, cap: usize) -> Result<bytes::Bytes, String> {
+    axum::body::to_bytes(body, cap).await.map_err(|err| err.to_string())
+}
+/// Decode a previewed layer member's bytes as UTF-8 text, naming the member and layer on failure.
+///
+/// # Errors
+/// Returns a message when the bytes are not valid UTF-8.
+fn decode_member_text(bytes: &[u8], member: &str, name: &str, digest: &str) -> Result<String, String> {
+    String::from_utf8(bytes.to_vec())
+        .map_err(|err| format!("layer member {member:?} on {name:?} for {digest} is not valid UTF-8: {err}"))
 }
 /// Resolve the writable hosted index behind `name` and authorize the request, or return a ready error
 /// response (unknown name, read-only index, uploads disabled, or bad credentials). A virtual index
@@ -692,5 +695,45 @@ mod tests {
             registry.classify_route(&format!("/v2/store/app/blobs/{digest}/contents")),
             RouteClass::Listing
         );
+    }
+
+    #[test]
+    fn test_serve_error_converts_to_its_message_string() {
+        assert_eq!(
+            String::from(ServeError::Io(std::io::Error::other("disk"))),
+            "blob io error: disk"
+        );
+        assert_eq!(
+            String::from(ServeError::Transport("reset".to_owned())),
+            "upstream transfer failed: reset"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_body_returns_bytes_within_the_cap_and_rejects_an_over_cap_body() {
+        assert_eq!(
+            read_body(Body::from(b"hello".to_vec()), 1 << 20).await.unwrap(),
+            "hello"
+        );
+        // A body larger than the cap is refused rather than buffered.
+        assert!(read_body(Body::from(vec![0u8; 2 << 20]), 1 << 20).await.is_err());
+    }
+
+    #[test]
+    fn test_decode_member_text_accepts_utf8_and_names_a_non_utf8_member() {
+        assert_eq!(
+            decode_member_text(b"name = \"peryx\"", "app/config.toml", "store/app", "sha256:x").unwrap(),
+            "name = \"peryx\""
+        );
+        let err = decode_member_text(&[0xff, 0xfe], "app/logo.bin", "store/app", "sha256:x").unwrap_err();
+        assert!(err.contains("app/logo.bin") && err.contains("not valid UTF-8"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_layer_error_message_reports_an_unreadable_error_body() {
+        // An error response whose body exceeds the read cap still yields a message carrying the status.
+        let response = (StatusCode::BAD_GATEWAY, Body::from(vec![0u8; 2 << 20])).into_response();
+        let message = layer_error_message("store/app", "sha256:x", response).await;
+        assert!(message.contains("502"), "{message}");
     }
 }

@@ -454,3 +454,24 @@ async fn test_oci_index_rejects_pypi_protocol_dispatch() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn test_project_page_reports_an_unreachable_upstream() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = custom_state(&dir, "http://127.0.0.1:9/simple/", |client| {
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            ecosystem: peryx_core::Ecosystem::Pypi,
+            kind: IndexKind::Cached { client, offline: false },
+            policy: peryx_policy::Policy::default(),
+        }]
+    });
+    // A cached index whose upstream cannot be reached surfaces the fetch failure as a browse error.
+    let result = crate::serving::PypiServing
+        .project_page(state.serving.clone(), 0, "flask".to_owned())
+        .await;
+    assert!(result.is_err(), "{result:?}");
+}

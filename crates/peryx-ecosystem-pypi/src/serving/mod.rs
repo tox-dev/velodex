@@ -148,8 +148,8 @@ impl EcosystemDriver for PypiServing {
         }
         let config = toml::Value::Table(policy.clone())
             .try_into()
-            .map_err(|err: toml::de::Error| err.to_string())?;
-        crate::policy::compile_rules(&config).map_err(|err| err.to_string())
+            .map_err(crate::error_message)?;
+        crate::policy::compile_rules(&config).map_err(crate::error_message)
     }
 
     fn normalize_name(&self, name: &str) -> String {
@@ -199,7 +199,7 @@ impl EcosystemDriver for PypiServing {
         index_names: &[String],
         recent_limit: usize,
     ) -> Result<std::collections::HashMap<String, peryx_driver::serving::IndexSummary>, String> {
-        crate::store::summarize_indexes(meta, index_names, recent_limit).map_err(|err| err.to_string())
+        crate::store::summarize_indexes(meta, index_names, recent_limit).map_err(crate::error_message)
     }
 
     fn cache_pages(

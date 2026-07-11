@@ -28,10 +28,10 @@ pub fn import_dir(config: &Config, selector: &str, dir: &Path, out: &mut dyn Wri
     let blobs = BlobStore::new(config.data_dir.join("blobs"));
     let driver = crate::server::drivers()
         .get(target.ecosystem)
-        .with_context(|| format!("no driver for the {} ecosystem", target.ecosystem))?;
+        .context(format!("no driver for the {} ecosystem", target.ecosystem))?;
     driver
         .import_dir(&meta, &blobs, &target.name, &target.route, dir, out)
-        .map_err(|reason| anyhow::anyhow!("{reason}"))
+        .map_err(anyhow::Error::msg)
 }
 
 #[derive(Debug)]

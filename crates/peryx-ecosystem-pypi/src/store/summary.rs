@@ -174,6 +174,37 @@ mod tests {
     }
 
     #[test]
+    fn test_summarize_indexes_breaks_an_upload_time_tie_by_filename() {
+        let (_dir, meta) = store();
+        // Same upload-time on both, so the sort falls through to the filename tiebreak.
+        upload(
+            &meta,
+            "hosted",
+            "flask",
+            "flask-2.0.whl",
+            "2.0",
+            "2026-01-01T00:00:00Z",
+            10,
+        );
+        upload(
+            &meta,
+            "hosted",
+            "flask",
+            "flask-1.0.whl",
+            "1.0",
+            "2026-01-01T00:00:00Z",
+            10,
+        );
+        let summary = meta.summarize_indexes(&["hosted".to_owned()], 5).unwrap();
+        let recent: Vec<&str> = summary["hosted"]
+            .recent_uploads
+            .iter()
+            .map(|upload| upload.filename.as_str())
+            .collect();
+        assert_eq!(recent, vec!["flask-1.0.whl", "flask-2.0.whl"]);
+    }
+
+    #[test]
     fn test_summarize_indexes_truncates_recent_to_the_limit() {
         let (_dir, meta) = store();
         upload(

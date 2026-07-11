@@ -101,6 +101,14 @@ impl From<upload::UploadStoreError> for CacheError {
     }
 }
 
+/// A browse method that surfaces a user-visible message maps a cache fault through `?` to its
+/// [`user_message`](CacheError::user_message), so the call site carries no error-mapping closure.
+impl From<CacheError> for String {
+    fn from(err: CacheError) -> Self {
+        err.user_message()
+    }
+}
+
 impl CacheError {
     /// Error text safe for user-visible responses, without upstream URLs or credentials.
     #[must_use]
@@ -268,6 +276,14 @@ fn source_mirror(state: &ServingState, source: &str) -> Result<(UpstreamClient, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cache_error_converts_to_its_user_message_string() {
+        assert_eq!(
+            String::from(CacheError::Unavailable),
+            "upstream is unavailable and no cached page exists"
+        );
+    }
 
     #[test]
     fn test_cache_error_archive_message_is_user_visible() {

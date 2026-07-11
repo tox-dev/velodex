@@ -21,14 +21,14 @@ pub(super) fn purge_project(
         .indexes
         .iter()
         .find(|index| index.name == args.index)
-        .with_context(|| format!("unknown index {:?}", args.index))?
+        .context(format!("unknown index {:?}", args.index))?
         .ecosystem;
     let driver = crate::server::drivers()
         .get(ecosystem)
-        .with_context(|| format!("no driver for the {ecosystem} ecosystem"))?;
+        .context(format!("no driver for the {ecosystem} ecosystem"))?;
     let report = driver
         .purge_project(&stores.meta, &args.index, &args.project, args.yes)
-        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+        .map_err(anyhow::Error::msg)?;
     write_project_purge_report(out, if args.yes { "removed" } else { "dry-run" }, &args.index, &report)
 }
 

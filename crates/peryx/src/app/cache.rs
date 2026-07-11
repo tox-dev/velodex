@@ -49,9 +49,7 @@ fn list_cache(
             // surfaces the same way an unreadable store would.
             let mut render = || -> anyhow::Result<()> {
                 let project_filter = args.project.as_deref().map(|project| driver.normalize_name(project));
-                let pages = driver
-                    .cache_pages(&stores.meta, &names)
-                    .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+                let pages = driver.cache_pages(&stores.meta, &names).map_err(anyhow::Error::msg)?;
                 for page in pages {
                     let age = age_secs(now, page.fetched_at_unix);
                     let ttl = page.fresh_secs.unwrap_or(config.cache_ttl_secs);
@@ -119,7 +117,8 @@ fn size_cache(config: &Config, stores: &CacheStores, now: i64, out: &mut dyn Wri
     for driver in crate::server::drivers().present() {
         let pages = driver
             .cache_pages(&stores.meta, &names)
-            .map_err(|reason| anyhow::anyhow!("scan cached index pages: {reason}"))?;
+            .map_err(anyhow::Error::msg)
+            .context("scan cached index pages")?;
         for page in pages {
             index_pages += 1;
             index_bytes += page.record_bytes;
@@ -129,11 +128,7 @@ fn size_cache(config: &Config, stores: &CacheStores, now: i64, out: &mut dyn Wri
         }
         // Each driver labels its own record kinds, so the labels across drivers never collide; the
         // counts append rather than merge.
-        record_counts.extend(
-            driver
-                .cache_record_counts(&stores.meta)
-                .map_err(|reason| anyhow::anyhow!("{reason}"))?,
-        );
+        record_counts.extend(driver.cache_record_counts(&stores.meta).map_err(anyhow::Error::msg)?);
     }
 
     let mut blob_files = 0_u64;

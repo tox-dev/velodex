@@ -12,10 +12,8 @@ use crate::{normalize_name, to_json, ui_meta, ui_project_from_detail};
 
 /// The project names of the cached/hosted/virtual index at `position`.
 pub(super) fn project_names(state: &ServingState, position: usize) -> Result<Vec<String>, String> {
-    let index = state.index_at(position);
-    cache::resolve_list(state, index)
-        .map(|list| list.projects.into_iter().map(|entry| entry.name).collect())
-        .map_err(|err| format!("project list on index {:?}: {}", index.route, err.user_message()))
+    let list = cache::resolve_list(state, state.index_at(position))?;
+    Ok(list.projects.into_iter().map(|entry| entry.name).collect())
 }
 
 /// A project's page data: its files as a neutral [`UiProject`], and the neutral [`UiMeta`] of its
@@ -39,8 +37,8 @@ pub(super) async fn project_page(
     else {
         return Ok(None);
     };
-    let value = serde_json::from_str(&to_json(&detail))
-        .map_err(|err| format!("project detail on index {route:?} for project {normalized:?}: {err}"))?;
+    // `to_json` serializes the detail, so parsing it straight back cannot fail.
+    let value = serde_json::from_str(&to_json(&detail)).expect("to_json emits JSON that round-trips");
     let ui = ui_project_from_detail(&value);
     let meta = match ui.files.iter().rev().find(|file| file.has_metadata) {
         Some(file) => metadata_for(&state, &route, file).await?,

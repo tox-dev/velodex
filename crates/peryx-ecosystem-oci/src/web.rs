@@ -65,9 +65,18 @@ fn artifact_ref(value: &serde_json::Value) -> UiArtifactRef {
     }
 }
 
+/// Parse a stored layer-inspect listing's JSON bytes into the neutral member view.
+///
+/// # Errors
+/// Returns a message when the bytes are not valid JSON.
+pub fn members_from_bytes(bytes: &[u8]) -> Result<Vec<UiMember>, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|err| err.to_string())?;
+    Ok(members_from_listing(&value))
+}
+
 /// Rebuild a layer's member listing from the neutral archive-inspect document the layer browser serves.
 #[must_use]
-pub fn members_from_listing(value: &serde_json::Value) -> Vec<UiMember> {
+fn members_from_listing(value: &serde_json::Value) -> Vec<UiMember> {
     value["members"]
         .as_array()
         .into_iter()
@@ -88,4 +97,27 @@ pub fn header_u64(headers: &axum::http::HeaderMap, name: &str) -> Option<u64> {
 
 fn string_at(value: &serde_json::Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::members_from_bytes;
+
+    #[test]
+    fn test_members_from_bytes_parses_a_listing() {
+        let members =
+            members_from_bytes(br#"{"members":[{"path":"a.txt","size":3,"kind":"text","previewable":true}]}"#).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].path, "a.txt");
+    }
+
+    #[test]
+    fn test_members_from_bytes_rejects_invalid_json() {
+        assert!(members_from_bytes(b"not json").is_err());
+    }
+
+    #[test]
+    fn test_manifest_from_bytes_rejects_invalid_json() {
+        assert!(super::manifest_from_bytes(b"not json").is_err());
+    }
 }
