@@ -46,16 +46,32 @@ peryx stores a manifest byte-for-byte and addresses it by the sha256 of those ex
 `GET`/`HEAD /v2/<name>/manifests/<reference>` resolves the reference through the index's members hosted-first (a hosted
 image shadows the same name upstream, the [dependency-confusion defense](@/core/glossary.md#shadowing)). A hosted member
 reads its stored tag mapping; an online proxy member revalidates the tag against upstream and caches the result. A pull
-by digest is served from the content-addressed store when present, else pulled through. The response carries the stored
-`Content-Type`, `Docker-Content-Digest`, and `Content-Length`; a `HEAD` returns those headers with an empty body. A
-reference no member can serve is `404 MANIFEST_UNKNOWN`.
+by digest is scoped to the requesting repository: peryx serves it from the content-addressed store only when a member
+records that digest under this repository, meaning a manifest pushed or tagged here, a child of an image index or
+manifest list it serves, or a referrer pushed here. A proxy member still pulls an unauthorized miss through its upstream
+under this repository, so a legitimate pull-through stays intact, but a digest that no member records and no proxy can
+fetch is `404 MANIFEST_UNKNOWN`, even when the same bytes sit in the store under another repository. See
+[how peryx scopes and serves manifest reads](@/ecosystems/oci/manifest-serving.md) for the reasoning. The response
+carries the stored `Content-Type`, `Docker-Content-Digest`, and `Content-Length`; a `HEAD` returns those headers with an
+empty body. A reference no member can serve is `404 MANIFEST_UNKNOWN`.
+
+When a resolved manifest is an image index or manifest list and the request's `Accept` names neither list media type,
+peryx serves the index's `linux/amd64` child image manifest instead, the substitution that lets legacy Docker (below
+17.06) and older tooling that send only the schema-2 image type still pull. The response then carries the child's
+`Content-Type` and `Docker-Content-Digest`, reading it from the store or fetching it by digest through a proxy member; a
+`HEAD` returns the same headers with an empty body. An `Accept` that is absent or names a list type, a manifest that is
+not a list, and a list without a `linux/amd64` child all serve the resolved manifest unchanged. Modern docker, podman,
+containerd, and oras send full `Accept` lists that name the index types, so they receive the index.
 
 `PUT /v2/<name>/manifests/<reference>` stores the request body under its canonical `sha256:` digest and, when
 `<reference>` is a tag, points that tag at the digest. The `Content-Type` header is recorded as the manifest's media
-type (defaulting to `application/vnd.oci.image.manifest.v1+json`); bodies over 4 MiB are rejected. When `<reference>` is
-a digest, the body must hash to it or the response is `400 DIGEST_INVALID`. Success is `201` with `Location`,
-`Docker-Content-Digest`, and (when the manifest declares a `subject`) an `OCI-Subject` header echoing that subject's
-digest. A declared subject is also recorded for the referrers API.
+type (defaulting to `application/vnd.oci.image.manifest.v1+json`); peryx ignores any `Content-Type` parameters, so
+`application/vnd.oci.image.manifest.v1+json; charset=utf-8` matches and stores as the bare base type rather than failing
+with `400 MANIFEST_INVALID`. A body over 4 MiB is rejected with `413 Payload Too Large`, distinct from the `502` a
+broken transfer returns. When `<reference>` is a digest, the body must hash to it or the response is
+`400 DIGEST_INVALID`. Success is `201` with `Location`, `Docker-Content-Digest`, and (when the manifest declares a
+`subject`) an `OCI-Subject` header echoing that subject's digest. A declared subject is also recorded for the referrers
+API.
 
 `DELETE /v2/<name>/manifests/<reference>` removes the manifest by digest, or drops the tag mapping when `<reference>` is
 a tag. Success is `202`; a reference that was not present is `404 MANIFEST_UNKNOWN`.
@@ -170,3 +186,7 @@ Errors use the distribution-spec shape `{"errors": [{"code": "<CODE>", "message"
 
 An upstream that fails or answers unexpectedly during a pull-through returns `502` with code `UNKNOWN`, so the puller
 does not mistake a gateway fault for a client error it would not retry.
+
+A manifest push whose body exceeds the 4 MiB cap answers `413 Payload Too Large` with code `SIZE_INVALID`. The
+distribution spec defines no size-specific code, so peryx reuses `SIZE_INVALID` under the overridden status rather than
+add one, and reserves `502` for a genuine transport fault while reading the body.

@@ -151,6 +151,8 @@ crane push --insecure alpine.tar 127.0.0.1:4433/images/alpine:latest
 
 - Pull Docker Hub official images by their short name (`ubuntu`, `nginx`) through a routed proxy:
   [Docker Hub names and upstream auth](@/ecosystems/oci/hub-names-and-auth.md)
+- Why a by-digest pull is scoped to its repository, and why a tag can hand back a single-platform image:
+  [how peryx scopes and serves manifest reads](@/ecosystems/oci/manifest-serving.md)
 - How peryx compares to [distribution](https://distribution.github.io/distribution/) and [zot](https://zotregistry.dev/)
   as a Docker Hub cache: [OCI performance](@/ecosystems/oci/performance.md)
 - The full walkthrough: [run a container registry](@/ecosystems/oci/guides/container-registry.md)
