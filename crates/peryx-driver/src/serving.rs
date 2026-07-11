@@ -91,6 +91,14 @@ pub trait EcosystemDriver: Send + Sync {
         )
     }
 
+    /// Fold a project key into the form this ecosystem matches against, so the neutral policy engine
+    /// keys an operator's allow/block list the same way it keys an incoming request. `PyPI` applies
+    /// `PEP 503` normalization; the default leaves a name untouched, which suits a format like `OCI`
+    /// whose repository names are case-sensitive.
+    fn normalize_name(&self, name: &str) -> String {
+        name.to_owned()
+    }
+
     /// The stored-blob digests this ecosystem's metadata references, so the neutral orphan-blob
     /// collector keeps them and reclaims the rest. Blobs are content-addressed and shared across
     /// ecosystems, so the collector unions this over every installed driver. Default: none.

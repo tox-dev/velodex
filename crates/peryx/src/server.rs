@@ -106,9 +106,10 @@ pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::R
     configs
         .iter()
         .map(|index| {
-            let rules = drivers()
+            let driver = drivers()
                 .get(index.ecosystem)
-                .expect("every configured ecosystem has a registered driver")
+                .expect("every configured ecosystem has a registered driver");
+            let rules = driver
                 .compile_policy(&index.ecosystem_policy)
                 .map_err(|reason| anyhow::anyhow!("compile policy for {}: {reason}", index.name))?;
             Ok(Index {
@@ -116,7 +117,7 @@ pub(crate) fn build_indexes(configs: &[IndexConfig], offline: bool) -> anyhow::R
                 route: index.route.clone(),
                 ecosystem: index.ecosystem,
                 kind: build_kind(index, configs, &positions, offline)?,
-                policy: Policy::compile(&index.policy).with_rules(rules),
+                policy: Policy::compile(&index.policy, |name| driver.normalize_name(name)).with_rules(rules),
             })
         })
         .collect()

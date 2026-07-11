@@ -165,7 +165,7 @@ pub fn policy(configure: impl FnOnce(&mut PolicyConfig, &mut PypiPolicyConfig)) 
     let mut neutral = PolicyConfig::default();
     let mut pypi = PypiPolicyConfig::default();
     configure(&mut neutral, &mut pypi);
-    Policy::compile(&neutral).with_rules(compile_rules(&pypi).unwrap())
+    Policy::compile(&neutral, crate::normalize_name).with_rules(compile_rules(&pypi).unwrap())
 }
 pub fn put_raw_project_status(path: &Path, key: &str, value: &[u8]) {
     let db = redb::Database::create(path).unwrap();

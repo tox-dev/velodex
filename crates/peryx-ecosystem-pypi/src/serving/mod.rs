@@ -152,6 +152,10 @@ impl EcosystemDriver for PypiServing {
         crate::policy::compile_rules(&config).map_err(|err| err.to_string())
     }
 
+    fn normalize_name(&self, name: &str) -> String {
+        crate::normalize_name(name)
+    }
+
     fn referenced_blob_digests(
         &self,
         meta: &peryx_storage::meta::MetaStore,

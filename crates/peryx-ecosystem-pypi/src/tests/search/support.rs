@@ -21,7 +21,7 @@ pub(super) use peryx_search::{PackageSearch, PackageSource, SearchError, SourceF
 pub(super) fn policy(configure: impl FnOnce(&mut PolicyConfig)) -> Policy {
     let mut config = PolicyConfig::default();
     configure(&mut config);
-    Policy::compile(&config)
+    Policy::compile(&config, crate::normalize_name)
 }
 
 pub(super) fn put_uploaded_package(

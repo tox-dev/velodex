@@ -157,7 +157,7 @@ fn test_cache_error_user_message_describes_store_and_policy_errors() {
         block_projects: vec!["flask".to_owned()],
         ..PolicyConfig::default()
     };
-    let denial = Policy::compile(&config)
+    let denial = Policy::compile(&config, crate::normalize_name)
         .check_project(PolicyAction::Serve, "flask")
         .unwrap_err();
     assert_eq!(

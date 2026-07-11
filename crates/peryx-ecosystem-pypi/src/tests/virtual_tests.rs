@@ -44,7 +44,7 @@ fn active_policy() -> Policy {
     Policy::compile(&PolicyConfig {
         block_projects: vec!["some-other-project".to_owned()],
         ..PolicyConfig::default()
-    })
+    }, crate::normalize_name)
 }
 
 /// A virtual index whose `layers` name the cached layer *before* the hosted one. Shadowing must not
