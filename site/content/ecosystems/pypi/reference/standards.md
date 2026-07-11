@@ -13,11 +13,18 @@ consolidation of most of them; peryx serves `meta.api-version` 1.4.
 Knowing the request sequence makes the table below concrete. For `pip install requests` against any standards-compliant
 index:
 
-{% mermaid() %} sequenceDiagram participant P as pip / uv participant I as index P->>+I: GET /simple/requests/ (Accept:
-PEP 691 JSON) I-->>-P: file list: names, URLs, sha256, yanked, core-metadata P->>+I: GET …requests-2.32.5…whl.metadata
-(PEP 658) I-->>-P: core metadata: dependencies, requires-python Note over P: resolve, repeating metadata fetches<br/>for
-candidates as needed P->>+I: GET …requests-2.32.5…whl I-->>-P: the wheel, which pip verifies against its sha256 {% end
-%}
+{% mermaid() %}
+sequenceDiagram
+participant P as pip / uv
+participant I as index
+P->>+I: GET /simple/requests/ (Accept: PEP 691 JSON)
+I-->>-P: file list: names, URLs, sha256, yanked, core-metadata
+P->>+I: GET …requests-2.32.5…whl.metadata (PEP 658)
+I-->>-P: core metadata: dependencies, requires-python
+Note over P: resolve, repeating metadata fetches<br/>for candidates as needed
+P->>+I: GET …requests-2.32.5…whl
+I-->>-P: the wheel, which pip verifies against its sha256
+{% end %}
 
 Every hop names a standard: the page format is PEP 503/691, its fields are PEP 700, the yank markers are PEP 592, the
 metadata shortcut is PEP 658/714, and the filename [pip](https://pip.pypa.io/) parsed to pick a wheel is PEP 427. peryx
