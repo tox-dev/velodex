@@ -70,8 +70,16 @@ impl ErrorCode {
 /// Build a distribution-spec error response with the code's canonical status.
 #[must_use]
 pub fn error_response(code: ErrorCode, message: &str) -> Response {
+    error_response_with_status(code.status(), code, message)
+}
+
+/// Build a distribution-spec error body under a status the code does not canonically pair with. The
+/// spec has no "payload too large" code, so an oversize manifest borrows `SIZE_INVALID` yet answers
+/// `413` instead of that code's usual `400`.
+#[must_use]
+pub fn error_response_with_status(status: StatusCode, code: ErrorCode, message: &str) -> Response {
     let body = json!({ "errors": [{ "code": code.as_str(), "message": message }] }).to_string();
-    (code.status(), [(header::CONTENT_TYPE, "application/json")], body).into_response()
+    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 /// A `502` for an upstream that failed or answered unexpectedly, so a pull-through miss reports a

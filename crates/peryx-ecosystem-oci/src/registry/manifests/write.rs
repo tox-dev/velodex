@@ -9,7 +9,7 @@ use peryx_driver::ServingState;
 use peryx_events::webhook::WebhookEventKind;
 use peryx_storage::meta::MetaStore;
 
-use crate::error::{ErrorCode, error_response};
+use crate::error::{ErrorCode, error_response, error_response_with_status};
 use crate::store::{self, Manifest};
 
 use super::*;
@@ -29,10 +29,16 @@ pub(in crate::registry) async fn put_manifest(
     if policy_blocks(index, PolicyAction::Upload, &repo) {
         return Ok(error_response(ErrorCode::Denied, "image name is blocked by policy"));
     }
-    let media_type = headers
+    let declared = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or(DEFAULT_MANIFEST_TYPE)
+        .unwrap_or(DEFAULT_MANIFEST_TYPE);
+    // The spec says a registry SHOULD ignore Content-Type parameters, so match and store the base
+    // media type only: `application/…+json; charset=utf-8` is the same manifest type as the bare form.
+    let media_type = declared
+        .split_once(';')
+        .map_or(declared, |(base, _)| base)
+        .trim()
         .to_owned();
     if !is_supported_manifest_type(&media_type) {
         return Ok(error_response(
@@ -40,9 +46,17 @@ pub(in crate::registry) async fn put_manifest(
             &format!("unsupported manifest media type {media_type}"),
         ));
     }
-    let bytes = axum::body::to_bytes(body, MAX_MANIFEST_BYTES)
-        .await
-        .map_err(|err| ServeError::Transport(err.to_string()))?;
+    let bytes = match axum::body::to_bytes(body, MAX_MANIFEST_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(err) if is_length_limit(&err) => {
+            return Ok(error_response_with_status(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                ErrorCode::SizeInvalid,
+                &format!("manifest exceeds the {MAX_MANIFEST_BYTES}-byte limit"),
+            ));
+        }
+        Err(err) => return Err(ServeError::Transport(err.to_string())),
+    };
     let canonical = format!("sha256:{}", Digest::of(&bytes).as_str());
     if let Reference::Digest(digest) = reference
         && *digest != canonical
@@ -186,6 +200,18 @@ fn is_supported_manifest_type(media_type: &str) -> bool {
             | "application/vnd.docker.distribution.manifest.v2+json"
             | "application/vnd.docker.distribution.manifest.list.v2+json"
     )
+}
+/// Whether a body-read failure is axum's length-limit rejection rather than a transport fault, so an
+/// oversize manifest answers `413` while a broken transfer stays a gateway error.
+fn is_length_limit(err: &axum::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(err) = source {
+        if err.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
 }
 /// The error response for a pushed manifest that names content the store does not hold: a config or
 /// layer blob, or an image index's child manifest. A resolver would 404 on the missing piece after the

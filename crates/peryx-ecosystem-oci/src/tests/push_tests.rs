@@ -647,6 +647,47 @@ async fn test_manifest_push_rejects_unsupported_media_type() {
 }
 
 #[tokio::test]
+async fn test_manifest_push_over_the_size_limit_is_413() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    // One byte past the 4 MiB manifest cap: the body read hits axum's length limit before validation.
+    let oversize = vec![b'{'; 4 * 1024 * 1024 + 1];
+    let (status, _, body) = send_body(
+        &app,
+        Method::PUT,
+        "/v2/store/app/manifests/v1",
+        &[("authorization", &auth(TOKEN)), ("content-type", MANIFEST_TYPE)],
+        oversize,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(body_has_code(&body, "SIZE_INVALID"), "{body:?}");
+}
+
+#[tokio::test]
+async fn test_manifest_push_ignores_content_type_parameters() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let manifest = br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#;
+    let (status, _, _) = send_body(
+        &app,
+        Method::PUT,
+        "/v2/store/app/manifests/v1",
+        &[
+            ("authorization", &auth(TOKEN)),
+            ("content-type", &format!("{MANIFEST_TYPE}; charset=utf-8")),
+        ],
+        manifest.to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, headers, _) = send(&app, Method::GET, "/v2/store/app/manifests/v1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], MANIFEST_TYPE);
+}
+
+#[tokio::test]
 async fn test_manifest_push_rejects_missing_referenced_blob() {
     let dir = tempfile::tempdir().unwrap();
     let (_state, app) = hosted_writable(&dir, TOKEN);
