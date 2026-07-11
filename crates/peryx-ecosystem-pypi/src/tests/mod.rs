@@ -16,6 +16,7 @@ mod refresh_tests;
 mod search;
 mod serve;
 mod simple;
+mod simple_client;
 mod stream;
 mod upload;
 mod version_tests;

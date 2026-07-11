@@ -1,11 +1,11 @@
 mod client_tests;
 mod error_tests;
+mod response_tests;
 mod retry_tests;
 
+use peryx_upstream::UpstreamClient;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use crate::client::UpstreamClient;
 
 pub(super) async fn mount_get(server: &MockServer, request_path: &str, response: ResponseTemplate) {
     Mock::given(method("GET"))

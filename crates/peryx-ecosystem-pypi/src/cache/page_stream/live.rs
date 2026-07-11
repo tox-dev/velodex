@@ -18,7 +18,7 @@ pub(super) struct FreshJsonStream {
     pub(super) context: crate::stream::PageContext,
     pub(super) cached_present: bool,
     pub(super) guard: tokio::sync::OwnedMutexGuard<()>,
-    pub(super) head: peryx_upstream::SimpleHead,
+    pub(super) head: crate::simple_client::SimpleHead,
     pub(super) permit: UpstreamPermit,
 }
 

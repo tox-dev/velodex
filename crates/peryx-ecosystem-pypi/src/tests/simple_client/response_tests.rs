@@ -1,9 +1,10 @@
 use futures_util::TryStreamExt as _;
+use peryx_upstream::UpstreamError;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{mount_get, simple_client};
-use crate::client::UpstreamError;
+use crate::simple_client::SimpleClientExt as _;
 
 #[tokio::test]
 async fn test_fetch_project_json_with_metadata() {

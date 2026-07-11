@@ -10,7 +10,9 @@ use peryx_driver::state::ServingState;
 use peryx_events::metrics::Event;
 use peryx_index::{Index, IndexKind};
 use peryx_policy::PolicyAction;
-use peryx_upstream::{SimpleResponse, UpstreamClient};
+use peryx_upstream::UpstreamClient;
+
+use crate::simple_client::{SimpleClientExt as _, SimpleResponse};
 
 use super::{CacheError, NEGATIVE_TTL_SECS, is_json, mirror_route, project_negative_key, upstream_permit};
 

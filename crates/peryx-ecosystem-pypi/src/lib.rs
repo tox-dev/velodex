@@ -28,6 +28,8 @@ pub mod search_pypi;
 pub mod serving;
 mod simple;
 #[cfg(feature = "serving")]
+mod simple_client;
+#[cfg(feature = "serving")]
 pub mod store;
 #[cfg(feature = "serving")]
 pub mod stream;
@@ -39,6 +41,8 @@ mod version;
 pub use search_pypi::PypiIndexer;
 #[cfg(feature = "serving")]
 pub use serving::PypiServing;
+#[cfg(feature = "serving")]
+pub use simple_client::{ACCEPT_SIMPLE, SimpleClientExt, SimpleHead, SimpleResponse, UpstreamProtocol};
 
 pub use filename::{DistributionFilename, DistributionFilenameError, DistributionKind, parse_distribution_filename};
 pub use html::{parse_detail_html, parse_index_html};

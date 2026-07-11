@@ -1,8 +1,9 @@
-use wiremock::matchers::{header, method, path};
+use peryx_upstream::UpstreamClient;
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::simple_client;
-use crate::client::UpstreamClient;
+use crate::simple_client::SimpleClientExt as _;
 
 fn truncated_then_ok_server(body: &'static [u8], content_type: Option<&'static str>) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -36,38 +37,49 @@ fn write_response(mut socket: std::net::TcpStream, body: &[u8], content_length: 
 }
 
 #[tokio::test]
-async fn test_fetch_bytes_retries_transient_statuses() {
+async fn test_fetch_index_retries_body_errors() {
+    let base = truncated_then_ok_server(
+        b"{\"meta\":{},\"projects\":[]}",
+        Some("application/vnd.pypi.simple.v1+json"),
+    );
+    let client = UpstreamClient::new(&base).unwrap();
+
+    let response = client.fetch_index().await.unwrap();
+
+    assert_eq!(&response.body[..], b"{\"meta\":{},\"projects\":[]}");
+}
+
+#[tokio::test]
+async fn test_fetch_project_retries_transient_statuses() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/files/pkg.whl"))
+        .and(path("/simple/flask/"))
         .respond_with(ResponseTemplate::new(500))
         .up_to_n_times(2)
         .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/files/pkg.whl"))
-        .and(header("accept-encoding", "identity"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"wheelbytes".to_vec()))
+        .and(path("/simple/flask/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(b"{\"meta\":{}}".to_vec(), "application/vnd.pypi.simple.v1+json"),
+        )
         .expect(1)
         .mount(&server)
         .await;
     let client = simple_client(&server);
 
-    let bytes = client
-        .fetch_bytes(&format!("{}/files/pkg.whl", server.uri()))
-        .await
-        .unwrap();
+    let response = client.fetch_project("flask", None).await.unwrap();
 
-    assert_eq!(&bytes[..], b"wheelbytes");
+    assert_eq!(response.status, 200);
 }
 
 #[tokio::test]
-async fn test_fetch_bytes_retries_body_errors() {
-    let base = truncated_then_ok_server(b"wheelbytes", None);
+async fn test_fetch_project_retries_body_errors() {
+    let base = truncated_then_ok_server(b"{\"meta\":{}}", Some("application/vnd.pypi.simple.v1+json"));
     let client = UpstreamClient::new(&base).unwrap();
 
-    let bytes = client.fetch_bytes(&format!("{base}pkg.whl")).await.unwrap();
+    let response = client.fetch_project("flask", None).await.unwrap();
 
-    assert_eq!(&bytes[..], b"wheelbytes");
+    assert_eq!(&response.body[..], b"{\"meta\":{}}");
 }

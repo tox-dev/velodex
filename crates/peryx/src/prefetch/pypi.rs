@@ -6,9 +6,8 @@ use anyhow::{Context as _, bail};
 use peryx_driver::AppState;
 use peryx_ecosystem_pypi::store::CachedIndex;
 use peryx_ecosystem_pypi::store::PypiStore as _;
-use peryx_ecosystem_pypi::{ProjectDetail, parse_detail, parse_detail_html};
+use peryx_ecosystem_pypi::{ProjectDetail, SimpleClientExt as _, SimpleResponse, parse_detail, parse_detail_html};
 use peryx_storage::blob::Digest;
-use peryx_upstream::SimpleResponse;
 
 use super::report::{
     blob_size, unix_now, write_count, write_file_row, write_file_row_bytes, write_page_row, write_row,

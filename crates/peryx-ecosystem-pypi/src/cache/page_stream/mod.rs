@@ -13,7 +13,9 @@ use peryx_driver::state::ServingState;
 use peryx_events::metrics::Event;
 use peryx_index::{Index, IndexKind};
 use peryx_policy::PolicyAction;
-use peryx_upstream::{SimpleResponse, UpstreamClient};
+use peryx_upstream::UpstreamClient;
+
+use crate::simple_client::{SimpleClientExt as _, SimpleHead, SimpleResponse};
 
 use super::fetch::canonical_raw;
 use super::metadata::spawn_metadata_backfill;
@@ -251,7 +253,7 @@ async fn buffer_html_page(
     cached_name: &str,
     project: &str,
     now: i64,
-    head: peryx_upstream::SimpleHead,
+    head: SimpleHead,
 ) -> Result<CachedIndex, CacheError> {
     let url = head.url.clone();
     let content_type = head.content_type.clone();
