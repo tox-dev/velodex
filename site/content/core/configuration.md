@@ -113,8 +113,11 @@ the role. peryx rejects unknown keys.
 | `offline`              | cached  | Serve this cached index from disk only                                | `false`            |
 | `prefetch`             | cached  | Package and artifact selection for `peryx mirror`                     | (see below)        |
 | `hosted`               | hosted  | `true` marks this index as a hosted store (implied by `upload_token`) | `false`            |
-| `upload_token`         | hosted  | Basic-auth password uploads must present; unset disables uploads      | (none)             |
+| `upload_token`         | hosted  | Sugar for one token granted write and delete over every project       | (none)             |
+| `upload_token_file`    | hosted  | Path to read `upload_token` from instead of inlining it               | (none)             |
 | `volatile`             | hosted  | Allow delete and overwrite                                            | `true`             |
+| `anonymous_read`       | all     | Whether a credential-less request may read this index                 | `[auth]` default   |
+| `access_token`         | all     | Named credentials the index accepts, with scoped grants               | none               |
 | `layers`               | virtual | Ordered index names to compose; first match per filename wins         |                    |
 | `upload`               | virtual | Hosted layer that receives uploads                                    | first hosted layer |
 | `policy`               | all     | Nested index policy table                                             | empty              |
@@ -224,6 +227,37 @@ PyPI defines no settings, so `[index.settings]` on a PyPI index fails to start. 
 index, which decides how that index spells a repository name when it asks its upstream for it. Its values, and what each
 one rewrites, are in [OCI index settings](@/ecosystems/oci/reference/settings.md).
 
+### `[[index.access_token]]`
+
+Each `[[index.access_token]]` table adds one named credential the index accepts, with a grant scoped to some projects
+and actions. Put these under the hosted index that stores the writes. The [access model](@/core/authentication.md)
+covers the grammar; the keys are:
+
+```toml
+[[index]]
+name = "hosted"
+hosted = true
+
+[[index.access_token]]
+name = "ci"
+secret = "ci-secret"
+projects = ["team-*"]
+actions = ["write", "delete"]
+expires_at = "2027-01-01T00:00:00Z"
+```
+
+| Key           | Meaning                                                                      | Default    |
+| ------------- | ---------------------------------------------------------------------------- | ---------- |
+| `name`        | Subject the token authenticates as; unique per index, not `upload_token`     | (required) |
+| `secret`      | Password a client presents as its Basic password                             | (required) |
+| `secret_file` | Path to read `secret` from instead of inlining it                            | (none)     |
+| `projects`    | Project globs the token may act on; `*` matches any run of characters        | `["*"]`    |
+| `actions`     | Any of `read`, `write`, `delete`; at least one                               | (required) |
+| `expires_at`  | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) time after which it stops | never      |
+
+A token needs exactly one of `secret` and `secret_file`. Write and delete are enforced now; a `read` grant records a
+read policy that the forthcoming read challenge will enforce.
+
 ### `[index.prefetch]`
 
 Cached indexes can declare the default selection for `peryx mirror plan`, `peryx mirror sync`, and
@@ -309,6 +343,30 @@ name = "pypi"
 cached = "https://pypi.org/simple/"
 upstream_concurrency = 4
 ```
+
+## `[auth]`
+
+The `[auth]` table holds the access settings every index shares: the signing key of peryx's token realm, the lifetime of
+a minted token, and the default each index's `anonymous_read` takes. All keys are optional.
+
+```toml
+[auth]
+signing_key_file = "/run/secrets/peryx-signing-key"
+token_ttl_secs = 300
+default_anonymous_read = false
+```
+
+| Key                      | Meaning                                                              | Default |
+| ------------------------ | -------------------------------------------------------------------- | ------- |
+| `signing_key`            | Secret peryx signs its own tokens with                               | (none)  |
+| `signing_key_file`       | Path to read `signing_key` from instead of inlining it               | (none)  |
+| `token_ttl_secs`         | Lifetime of a minted token, in seconds; must be positive             | `300`   |
+| `default_anonymous_read` | What an index's `anonymous_read` defaults to when the index omits it | `true`  |
+
+Set at most one of `signing_key` and `signing_key_file`. `signing_key` and `token_ttl_secs` configure the token realm
+the forthcoming OCI Bearer flow mints from; peryx reads the key at startup so a deployment can stage it, and nothing
+mints a token from it in this release. `default_anonymous_read = false` makes a fully private server one knob instead of
+a flag per index. The full model is in [authentication and access control](@/core/authentication.md).
 
 ## `[[index.webhook]]`
 

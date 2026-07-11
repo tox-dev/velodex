@@ -93,8 +93,9 @@ built on [Tantivy](https://github.com/quickwit-oss/tantivy) (a
 [webhooks](https://en.wikipedia.org/wiki/Webhook) (an outbound HTTP callback fired when something changes);
 `peryx-policy` the neutral allow/deny engine; `peryx-upstream` the neutral upstream transport — conditional GET, retry,
 and range and streaming fetch — that each ecosystem's protocol layer builds on to reach the real *upstream* index peryx
-proxies (such as [pypi.org](https://pypi.org/) or [Docker Hub](https://hub.docker.com/)); `peryx-identity` the
-upload-token check.
+proxies (such as [pypi.org](https://pypi.org/) or [Docker Hub](https://hub.docker.com/)); `peryx-identity` the neutral
+access model — principals, project-glob grants, per-index ACLs, and its own token mint and verify — that both ecosystems
+authorize through.
 
 **The seam.** `peryx-driver` defines what an ecosystem plugs into. The word *seam* here is the software-design sense: a
 place where you can change behavior by substituting a component rather than editing in place. The formal name for this
@@ -362,9 +363,9 @@ class retry,bp warn
 
 ## Cross-cutting concerns
 
-Three more layers run alongside the serving path rather than on it: full-text search across every index, the policy
-engine that gates what may be served or published, and the events that make the server observable. Each stays neutral,
-and each ecosystem extends it through the same seam.
+Four more layers run alongside the serving path rather than on it: full-text search across every index, the policy
+engine that gates what may be served or published, the identity model that decides who may act, and the events that make
+the server observable. Each stays neutral, and each ecosystem extends it through the same seam.
 
 ### The search layer
 
@@ -452,6 +453,50 @@ class driver good
 class deny warn
 {% end %}
 
+### The identity layer
+
+`peryx-identity` decides who a request speaks as and whether that principal may act. It began as a single upload-token
+predicate; it is now the neutral seam both ecosystems authorize through, and it names no wire protocol.
+
+**Abstraction.** The model is a `Principal` (anonymous, or a named subject), an `Action` (`Read`, `Write`, `Delete`),
+and a `Grant` pairing actions with project globs. An index carries an `IndexAcl`: its `anonymous_read` flag and its
+named tokens, each with a secret, grants, and an optional expiry. Two calls do the work. `IndexAcl::identify` turns an
+`Authorization` header into a `Principal` by matching the presented password against a live token.
+`authorize(principal, acl, project, action)` answers the one access question and returns a typed `Denial` (unavailable,
+unauthenticated, or forbidden) an ecosystem maps to its own status. The crate also mints and verifies peryx's own JWTs
+through `Signer`, so the signing key is identity state rather than protocol state; the OCI token endpoint that will call
+it lands with the Bearer flow.
+
+**Extension.** The neutral core knows `(Principal, IndexAcl, project, Action)` and nothing about how a client presented
+itself. Each ecosystem reduces its wire protocol to those four before it calls in. PyPI reads a Basic
+`__token__:<token>` header on its upload path and calls `authorize` with `Write` or `Delete`; OCI's `resolve_writable`
+does the same for a push or delete, and the forthcoming Bearer realm will parse an OCI
+`scope=repository:<name>:pull,push` string into a project and action there, never in the core. The grant grammar is
+deliberately glob-over-project so it maps onto a PyPI project name and an OCI repository name alike without the core
+learning either. A contributor keeps the boundary by asking one question: does this name a wire format? If so it belongs
+in the ecosystem crate; if it is a principal, an action, or a grant, it belongs here.
+
+{% mermaid() %}
+flowchart TD
+pypi["PyPI upload<br/>Basic __token__:tok"]
+oci["OCI push / delete<br/>resolve_writable"]
+bearer["OCI Bearer realm<br/>scope=repository:name:push (forthcoming)"]
+id["identify header to Principal"]
+auth["authorize(principal, acl, project, action)"]
+acl["IndexAcl<br/>anonymous_read · named tokens · grants"]
+verdict["Ok · Denial (unavailable · unauthenticated · forbidden)"]
+pypi --> id
+oci --> id
+bearer --> id
+id --> auth
+acl --> auth
+auth --> verdict
+
+class auth accent
+class acl good
+class bearer warn
+{% end %}
+
 ### The events layer
 
 `peryx-events` carries three streams, all format-neutral.
@@ -469,7 +514,10 @@ at 300 s) up to five attempts before marking the delivery failed.
 
 **Extension.** This layer stays neutral by construction: an ecosystem emits an event through the shared API rather than
 defining its own stream. A publish or a yank from either driver becomes the same metric increment and the same webhook
-payload shape; the event names a project or a repository as data, never as a type the events crate knows.
+payload shape; the event names a project or a repository as data, never as a type the events crate knows. Its
+`security::actor` takes the `Principal` the identity layer already resolved rather than re-parsing a Basic header, so a
+record names the same subject the access decision ran against, and a bearer credential that carries no username still
+attributes the action.
 
 {% mermaid() %}
 flowchart TD
