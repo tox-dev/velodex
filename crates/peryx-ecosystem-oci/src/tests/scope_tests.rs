@@ -3,9 +3,8 @@
 //! gave DELETE. A digest cached under one repository is not readable under another it does not belong to.
 
 use axum::http::{Method, StatusCode};
-use peryx_index::IndexKind;
 
-use super::{app_with_indexes, auth, body_has_code, oci_digest, oci_index, send, send_body};
+use super::{app_with_indexes, auth, body_has_code, oci_digest, send, send_body, writable_index};
 
 const TOKEN: &str = "s3cret";
 const MANIFEST_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
@@ -14,16 +13,7 @@ const INDEX_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 /// Two writable hosted indexes, `store` and `vault`, over one pair of stores: the manifest bytes dedup
 /// into a single content pool, but the repositories are distinct.
 fn two_stores(dir: &tempfile::TempDir) -> axum::Router {
-    let hosted = |name: &str| {
-        oci_index(
-            name,
-            name,
-            IndexKind::Hosted {
-                upload_token: Some(TOKEN.to_owned()),
-                volatile: true,
-            },
-        )
-    };
+    let hosted = |name: &str| writable_index(name, name, true, TOKEN);
     let (_state, app) = app_with_indexes(dir, vec![hosted("store"), hosted("vault")]);
     app
 }
