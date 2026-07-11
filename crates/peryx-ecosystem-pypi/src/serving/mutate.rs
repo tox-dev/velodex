@@ -380,10 +380,13 @@ fn emit_mutation_webhook(
     );
 }
 
+/// Peel a trailing `/{action}` off the spec, but only when a project segment precedes it. A project
+/// whose PEP 503 name is itself `yank`/`restore`/`promote` must stay addressable at the project
+/// level, so the action grammar never claims the whole spec.
 fn strip_action_segment<'a>(spec: &'a str, action: &str) -> Option<&'a str> {
     let spec = spec.trim_end_matches('/');
     let base = spec.strip_suffix(action)?;
-    (base.is_empty() || base.ends_with('/')).then_some(base)
+    base.ends_with('/').then_some(base)
 }
 
 fn parse_project_version(spec: &str) -> Result<(String, Option<String>), Response> {

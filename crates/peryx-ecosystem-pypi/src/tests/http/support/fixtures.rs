@@ -267,6 +267,9 @@ pub fn upload_record(
     }
 }
 pub fn put_local_file(state: &AppState, filename: &str, bytes: &[u8], version: &str) -> Digest {
+    put_local_project(state, "peryxpkg", filename, bytes, version)
+}
+pub fn put_local_project(state: &AppState, project: &str, filename: &str, bytes: &[u8], version: &str) -> Digest {
     let digest = Digest::of(bytes);
     state.blobs.write_verified(bytes, &digest).unwrap();
     let uploaded = upload_record(
@@ -278,8 +281,8 @@ pub fn put_local_file(state: &AppState, filename: &str, bytes: &[u8], version: &
     );
     state
         .meta
-        .put_upload("hosted", "peryxpkg", filename, &to_json(&uploaded).into_bytes())
+        .put_upload("hosted", project, filename, &to_json(&uploaded).into_bytes())
         .unwrap();
-    state.meta.put_project("hosted", "peryxpkg", "peryxpkg").unwrap();
+    state.meta.put_project("hosted", project, project).unwrap();
     digest
 }

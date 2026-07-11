@@ -350,3 +350,48 @@ async fn test_yank_with_corrupt_record_is_server_error() {
     let status = request(&h.state, "PUT", "/hosted/peryxpkg/1.0/yank", Some(&upload_auth())).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+#[tokio::test]
+async fn test_delete_project_named_yank() {
+    // `yank` is a legal PEP 503 name; the action grammar must not swallow it as the whole path.
+    let h = harness().await;
+    put_local_project(&h.state, "yank", "yank-1.0-py3-none-any.whl", b"payload", "1.0");
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/yank/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/hosted/simple/yank/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn test_yank_project_named_yank() {
+    let h = harness().await;
+    put_local_project(&h.state, "yank", "yank-1.0-py3-none-any.whl", b"payload", "1.0");
+    assert_eq!(
+        request(&h.state, "PUT", "/hosted/yank/yank", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (_, _, detail) = get(&h.state, "/hosted/simple/yank/", Some("application/json")).await;
+    assert!(detail.contains("\"yanked\":true"));
+}
+#[tokio::test]
+async fn test_delete_project_named_restore() {
+    let h = harness().await;
+    put_local_project(&h.state, "restore", "restore-1.0-py3-none-any.whl", b"payload", "1.0");
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/restore/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/hosted/simple/restore/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn test_delete_project_named_promote() {
+    let h = harness().await;
+    put_local_project(&h.state, "promote", "promote-1.0-py3-none-any.whl", b"payload", "1.0");
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/promote/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/hosted/simple/promote/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
