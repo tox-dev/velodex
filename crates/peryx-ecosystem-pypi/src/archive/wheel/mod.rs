@@ -9,7 +9,7 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use super::{ArchiveError, read_error, safe_member_name};
-use crate::{DistributionKind, parse_distribution_filename};
+use crate::{DistributionKind, Version, normalize_name, parse_distribution_filename, parse_version};
 
 mod entry_points;
 mod metadata;
@@ -45,14 +45,15 @@ pub fn validate_wheel_path(filename: &str, path: &Path) -> Result<Vec<u8>, Archi
 }
 
 fn validate_wheel_reader(filename: &str, reader: impl Read + Seek) -> Result<Vec<u8>, ArchiveError> {
-    let expected_dist_info = expected_wheel_dist_info_dir(filename)?;
-    let metadata_path = format!("{expected_dist_info}/METADATA");
-    let wheel_path = format!("{expected_dist_info}/WHEEL");
-    let record_path = format!("{expected_dist_info}/RECORD");
-    let entry_points_path = format!("{expected_dist_info}/entry_points.txt");
+    let expected = expected_wheel_dist_info(filename)?;
 
     let mut archive = zip::ZipArchive::new(reader).map_err(read_error)?;
-    let members = wheel_members(&mut archive, &expected_dist_info)?;
+    let members = wheel_members(&mut archive, &expected)?;
+    let dist_info = members.dist_info.as_str();
+    let metadata_path = format!("{dist_info}/METADATA");
+    let wheel_path = format!("{dist_info}/WHEEL");
+    let record_path = format!("{dist_info}/RECORD");
+    let entry_points_path = format!("{dist_info}/entry_points.txt");
     for path in [&metadata_path, &wheel_path, &record_path] {
         if !members.files.contains_key(path) {
             return Err(invalid_wheel(format!("missing required {path}")));
@@ -64,7 +65,7 @@ fn validate_wheel_reader(filename: &str, reader: impl Read + Seek) -> Result<Vec
     validate_wheel_file(filename, &wheel)?;
 
     let record = read_zip_member_limited(&mut archive, &record_path, MAX_WHEEL_RECORD_BYTES)?;
-    validate_record(&mut archive, &members.files, &record, &record_path, &expected_dist_info)?;
+    validate_record(&mut archive, &members.files, &record, &record_path, dist_info)?;
 
     if members.files.contains_key(&entry_points_path) {
         let entry_points = read_zip_member_limited(&mut archive, &entry_points_path, MAX_WHEEL_ENTRY_POINTS_BYTES)?;
@@ -76,6 +77,7 @@ fn validate_wheel_reader(filename: &str, reader: impl Read + Seek) -> Result<Vec
 
 #[derive(Debug)]
 struct WheelMembers {
+    dist_info: String,
     files: BTreeMap<String, WheelMember>,
 }
 
@@ -87,7 +89,7 @@ struct WheelMember {
 
 fn wheel_members<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
-    expected_dist_info: &str,
+    expected: &ExpectedDistInfo,
 ) -> Result<WheelMembers, ArchiveError> {
     let mut dist_info_dirs = BTreeSet::new();
     let mut files = BTreeMap::new();
@@ -116,11 +118,17 @@ fn wheel_members<R: Read + Seek>(
 
     match dist_info_dirs.len() {
         0 => Err(invalid_wheel("missing .dist-info directory")),
-        1 if dist_info_dirs.contains(expected_dist_info) => Ok(WheelMembers { files }),
-        1 => Err(invalid_wheel(format!(
-            ".dist-info directory {} does not match expected {expected_dist_info}",
-            dist_info_dirs.iter().next().expect("one dist-info directory")
-        ))),
+        1 => {
+            let dist_info = dist_info_dirs.into_iter().next().expect("one dist-info directory");
+            if dist_info_matches(&dist_info, expected) {
+                Ok(WheelMembers { dist_info, files })
+            } else {
+                Err(invalid_wheel(format!(
+                    ".dist-info directory {dist_info} does not match expected {}",
+                    expected.dir
+                )))
+            }
+        }
         _ => Err(invalid_wheel(format!(
             "multiple .dist-info directories found: {}",
             dist_info_dirs.into_iter().collect::<Vec<_>>().join(", ")
@@ -133,7 +141,28 @@ fn top_level_dist_info_dir(path: &str) -> Option<&str> {
     first.ends_with(".dist-info").then_some(first)
 }
 
-fn expected_wheel_dist_info_dir(filename: &str) -> Result<String, ArchiveError> {
+/// Whether an archive's `.dist-info` directory names the same project and version as the filename.
+/// Historical build tools spell the directory un-normalized (`Flask-0.12.dist-info`), so pip and
+/// Warehouse accept it by comparing the PEP 503 normalized name and the parsed version rather than
+/// the exact bytes; a byte match would reject wheels that exist on `PyPI` today.
+fn dist_info_matches(dir: &str, expected: &ExpectedDistInfo) -> bool {
+    let stem = dir
+        .strip_suffix(".dist-info")
+        .expect("dist-info directory ends with .dist-info");
+    let Some((name, version)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    normalize_name(name) == expected.normalized_name
+        && parse_version(version).is_some_and(|parsed| parsed == expected.version)
+}
+
+struct ExpectedDistInfo {
+    dir: String,
+    normalized_name: String,
+    version: Version,
+}
+
+fn expected_wheel_dist_info(filename: &str) -> Result<ExpectedDistInfo, ArchiveError> {
     let parsed = parse_distribution_filename(filename)
         .map_err(|err| invalid_wheel(format!("invalid wheel filename {filename:?}: {err:?}")))?;
     if parsed.kind != DistributionKind::Wheel {
@@ -141,7 +170,15 @@ fn expected_wheel_dist_info_dir(filename: &str) -> Result<String, ArchiveError> 
     }
     let name = parsed.normalized_name.replace('-', "_");
     let version = parsed.version.to_string().replace('-', "_");
-    Ok(format!("{name}-{version}.dist-info"))
+    Ok(ExpectedDistInfo {
+        dir: format!("{name}-{version}.dist-info"),
+        normalized_name: parsed.normalized_name,
+        version: parsed.version,
+    })
+}
+
+fn expected_wheel_dist_info_dir(filename: &str) -> Result<String, ArchiveError> {
+    Ok(expected_wheel_dist_info(filename)?.dir)
 }
 
 fn read_zip_member_limited<R: Read + Seek>(

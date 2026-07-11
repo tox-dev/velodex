@@ -31,18 +31,30 @@ fn test_prepare_rejects_invalid_wheel_structure() {
         ),
         "missing required flask-1.0.dist-info/RECORD",
     );
-    assert_wheel_invalid(
-        &wheel_zip(
-            &[
-                ("Flask/__init__.py", init.as_slice()),
-                ("Flask-1.0.dist-info/METADATA", metadata.as_slice()),
-                ("Flask-1.0.dist-info/WHEEL", wheel.as_slice()),
-            ],
-            Some("Flask-1.0.dist-info/RECORD"),
-            None,
+    for (dist_info, reason) in [
+        (
+            "other-1.0",
+            "other-1.0.dist-info does not match expected flask-1.0.dist-info",
         ),
-        ".dist-info directory Flask-1.0.dist-info does not match expected flask-1.0.dist-info",
-    );
+        (
+            "flask-2.0",
+            "flask-2.0.dist-info does not match expected flask-1.0.dist-info",
+        ),
+        ("flask", "flask.dist-info does not match expected flask-1.0.dist-info"),
+    ] {
+        assert_wheel_invalid(
+            &wheel_zip(
+                &[
+                    ("Flask/__init__.py", init.as_slice()),
+                    (&format!("{dist_info}.dist-info/METADATA"), metadata.as_slice()),
+                    (&format!("{dist_info}.dist-info/WHEEL"), wheel.as_slice()),
+                ],
+                Some(&format!("{dist_info}.dist-info/RECORD")),
+                None,
+            ),
+            reason,
+        );
+    }
     assert_wheel_invalid(
         &wheel_zip(
             &[
@@ -83,6 +95,26 @@ fn test_prepare_accepts_wheel_with_directory_entries() {
         ],
         &["flask-1.0.dist-info/"],
         Some("flask-1.0.dist-info/RECORD"),
+        None,
+    );
+    let (_dir, staged) = staged_upload(&bytes);
+
+    let prepared = prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap();
+
+    assert_eq!(prepared.metadata.as_slice(), metadata);
+}
+#[test]
+fn test_prepare_accepts_unnormalized_dist_info() {
+    let metadata = b"Metadata-Version: 2.1\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\n";
+    let wheel = b"Wheel-Version: 1.0\nGenerator: peryx-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
+    let init = b"VALUE = 1\n";
+    let bytes = wheel_zip(
+        &[
+            ("Flask/__init__.py", init.as_slice()),
+            ("Flask-1.0.dist-info/METADATA", metadata.as_slice()),
+            ("Flask-1.0.dist-info/WHEEL", wheel.as_slice()),
+        ],
+        Some("Flask-1.0.dist-info/RECORD"),
         None,
     );
     let (_dir, staged) = staged_upload(&bytes);
