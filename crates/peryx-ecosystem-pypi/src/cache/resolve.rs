@@ -258,6 +258,9 @@ fn present_file(mut file: File, route: &str, known_metadata: &std::collections::
     if !is_local_file_url(route, &file.url) {
         file.url = local_file_url(route, &sha256, &file.filename);
     }
+    // The URL now points at peryx's route, which serves the blob but never the detached `.asc`
+    // sibling, so drop any inherited gpg-sig rather than advertise a signature peryx cannot serve.
+    file.gpg_sig = None;
     file
 }
 
@@ -392,5 +395,50 @@ mod tests {
 
         assert_eq!(file.url, local_file_url("pypi", &sha256, "pkg-1.0-py3-none-any.whl"));
         assert_eq!(file.hashes.get("md5").map(String::as_str), Some("deadbeef"));
+    }
+
+    #[test]
+    fn test_present_file_drops_gpg_sig_once_url_points_at_peryx() {
+        let sha256 = "a".repeat(64);
+        let file = File {
+            filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+            url: "https://files.example/pkg-1.0-py3-none-any.whl".to_owned(),
+            hashes: BTreeMap::from([("sha256".to_owned(), sha256.clone())]),
+            requires_python: None,
+            size: None,
+            upload_time: None,
+            yanked: Yanked::No,
+            core_metadata: CoreMetadata::Absent,
+            dist_info_metadata: CoreMetadata::Absent,
+            gpg_sig: Some(true),
+            provenance: Provenance::default(),
+        };
+
+        let file = present_file(file, "pypi", &HashMap::new());
+
+        assert_eq!(file.url, local_file_url("pypi", &sha256, "pkg-1.0-py3-none-any.whl"));
+        assert_eq!(file.gpg_sig, None);
+    }
+
+    #[test]
+    fn test_present_file_keeps_gpg_sig_when_url_stays_upstream() {
+        let file = File {
+            filename: "pkg-1.0.tar.gz".to_owned(),
+            url: "https://files.example/pkg-1.0.tar.gz".to_owned(),
+            hashes: BTreeMap::from([("md5".to_owned(), "deadbeef".to_owned())]),
+            requires_python: None,
+            size: None,
+            upload_time: None,
+            yanked: Yanked::No,
+            core_metadata: CoreMetadata::Absent,
+            dist_info_metadata: CoreMetadata::Absent,
+            gpg_sig: Some(true),
+            provenance: Provenance::default(),
+        };
+
+        let file = present_file(file, "pypi", &HashMap::new());
+
+        assert_eq!(file.url, "https://files.example/pkg-1.0.tar.gz");
+        assert_eq!(file.gpg_sig, Some(true));
     }
 }

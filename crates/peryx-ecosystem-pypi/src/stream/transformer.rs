@@ -412,7 +412,9 @@ impl PageTransformer {
             file.yanked = yanked.clone();
         }
         if is_local_file_url(&self.context.route, &file.url) {
-            // A legacy cached record already carries peryx-route URLs; serve it as-is.
+            // A legacy cached record already carries peryx-route URLs; serve it as-is, but still drop
+            // the gpg-sig since peryx never serves the detached `.asc` at that route.
+            file.gpg_sig = None;
             if self.emitted_in_array {
                 out.push(b',');
             }
@@ -453,6 +455,9 @@ impl PageTransformer {
                 )])));
             }
             file.url = local_file_url(&self.context.route, &sha256, &file.filename);
+            // The URL now points at peryx's route, which never serves the detached `.asc` sibling,
+            // so drop any inherited gpg-sig rather than advertise a signature peryx cannot serve.
+            file.gpg_sig = None;
         } else {
             file.clear_metadata();
         }

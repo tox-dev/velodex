@@ -397,7 +397,7 @@ fn test_preserves_simple_api_fields_during_streaming() {
                     "sha256".to_owned(),
                     "bb22".to_owned(),
                 )])),
-                Some(false),
+                None,
                 &Provenance::Url("https://up/demo-1.0-py3-none-any.whl.provenance".to_owned()),
             ),
             "chunk size {chunk}"
@@ -539,6 +539,25 @@ fn test_legacy_record_urls_pass_through_unregistered() {
     let (out, registrations) = transform(page, plain_context(), 6);
     assert!(out.contains("/root/pypi/files/aa11/demo-1.0-py3-none-any.whl"));
     assert!(registrations.is_empty());
+}
+
+#[test]
+fn test_streaming_drops_gpg_sig_on_a_legacy_local_record() {
+    let page = r#"{"name":"demo","files":[{"filename":"demo-1.0-py3-none-any.whl",
+        "url":"/root/pypi/files/aa11/demo-1.0-py3-none-any.whl","hashes":{"sha256":"aa11"},"gpg-sig":true}]}"#;
+    let (out, _) = transform(page, plain_context(), 8);
+    let detail = parse_detail(out.as_bytes()).unwrap();
+    assert_eq!(detail.files[0].gpg_sig, None);
+}
+
+#[test]
+fn test_streaming_keeps_gpg_sig_when_the_url_stays_upstream() {
+    let page = r#"{"name":"demo","files":[{"filename":"demo-1.0.tar.gz",
+        "url":"https://up/demo-1.0.tar.gz","hashes":{},"gpg-sig":true}]}"#;
+    let (out, _) = transform(page, plain_context(), 7);
+    let detail = parse_detail(out.as_bytes()).unwrap();
+    assert_eq!(detail.files[0].url, "https://up/demo-1.0.tar.gz");
+    assert_eq!(detail.files[0].gpg_sig, Some(true));
 }
 
 #[test]

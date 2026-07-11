@@ -115,7 +115,8 @@ async fn test_mirror_detail_json_preserves_simple_api_fields() {
     assert_eq!(file["upload-time"], "2024-01-01T00:00:00Z");
     assert_eq!(file["core-metadata"]["sha256"], meta_digest.as_str());
     assert_eq!(file["dist-info-metadata"]["sha256"], meta_digest.as_str());
-    assert_eq!(file["gpg-sig"], false);
+    // Content-addressed onto peryx's route, which cannot serve the `.asc`, so the marker is dropped.
+    assert_eq!(file["gpg-sig"], serde_json::Value::Null);
     assert_eq!(file["provenance"], "https://example.test/flask.provenance");
     assert!(file["url"].as_str().unwrap().starts_with("/pypi/files/"));
 }
@@ -151,7 +152,7 @@ async fn test_mirror_detail_from_html_only_upstream() {
     assert!(body.contains(&format!("/pypi/files/{}/flask-1.0.whl", digest.as_str())));
 }
 #[tokio::test]
-async fn test_mirror_detail_from_html_preserves_simple_api_fields() {
+async fn test_mirror_detail_from_html_keeps_fields_but_drops_gpg_sig() {
     let h = harness().await;
     let digest = Digest::of(b"wheel");
     let metadata = Digest::of(b"meta");
@@ -183,7 +184,8 @@ async fn test_mirror_detail_from_html_preserves_simple_api_fields() {
     assert_eq!(detail["meta"]["project-status-reason"], "read only");
     assert_eq!(file["core-metadata"]["sha256"], metadata.as_str());
     assert_eq!(file["dist-info-metadata"]["sha256"], metadata.as_str());
-    assert_eq!(file["gpg-sig"], true);
+    // The URL is now peryx's route, which cannot serve the `.asc`, so the marker must be gone.
+    assert_eq!(file["gpg-sig"], serde_json::Value::Null);
     assert_eq!(file["provenance"], "https://example.test/flask.provenance");
 }
 #[tokio::test]
