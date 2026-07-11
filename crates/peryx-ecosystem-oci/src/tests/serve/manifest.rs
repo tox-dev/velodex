@@ -229,6 +229,71 @@ async fn test_manifest_by_digest_mismatch_is_rejected() {
     assert!(body_has_code(&body, "MANIFEST_INVALID"), "{body:?}");
 }
 #[tokio::test]
+async fn test_manifest_by_tag_accepts_a_non_sha256_advertised_digest() {
+    let server = MockServer::start().await;
+    let body = br#"{"schemaVersion":2,"config":{}}"#;
+    // A registry that content-addresses with sha512 advertises it in the header the spec permits; peryx
+    // keys its store on the sha256 of the exact bytes, so a byte-identical manifest still caches.
+    Mock::given(method("GET"))
+        .and(path("/v2/app/manifests/latest"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("docker-content-digest", format!("sha512:{}", "a".repeat(128)).as_str())
+                .set_body_raw(body.to_vec(), MANIFEST_TYPE),
+        )
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (state, app) = proxy(&dir, &format!("{}/", server.uri()), false);
+    let (status, headers, got) = send(&app, Method::GET, "/v2/hub/app/manifests/latest").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, &body[..]);
+    // Stored and tagged under the canonical sha256, not the advertised sha512.
+    assert_eq!(headers["docker-content-digest"], oci_digest(body));
+    assert_eq!(
+        store::get_tag(&state.meta, "hub", "app", "latest").unwrap(),
+        Some(oci_digest(body))
+    );
+}
+#[tokio::test]
+async fn test_manifest_by_tag_wrong_sha256_advertised_is_a_gateway_error() {
+    let server = MockServer::start().await;
+    let body = br#"{"schemaVersion":2,"config":{}}"#;
+    // A sha256 advertisement that does not hash the bytes is a corrupting hop, rejected as before.
+    Mock::given(method("GET"))
+        .and(path("/v2/app/manifests/latest"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("docker-content-digest", format!("sha256:{}", "b".repeat(64)).as_str())
+                .set_body_raw(body.to_vec(), MANIFEST_TYPE),
+        )
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = proxy(&dir, &format!("{}/", server.uri()), false);
+    let (status, _, _) = send(&app, Method::GET, "/v2/hub/app/manifests/latest").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+#[tokio::test]
+async fn test_manifest_by_non_sha256_digest_is_served() {
+    let server = MockServer::start().await;
+    let body = br#"{"schemaVersion":2,"config":{}}"#;
+    let requested = format!("sha512:{}", "c".repeat(128));
+    // A pull by a sha512 digest can never equal the sha256 canonical; upstream content-addresses it, so
+    // the bytes are served under the requested digest rather than reported invalid.
+    Mock::given(method("GET"))
+        .and(path(format!("/v2/app/manifests/{requested}")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.to_vec(), MANIFEST_TYPE))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = proxy(&dir, &format!("{}/", server.uri()), false);
+    let (status, headers, got) = send(&app, Method::GET, &format!("/v2/hub/app/manifests/{requested}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, &body[..]);
+    assert_eq!(headers["docker-content-digest"], requested);
+}
+#[tokio::test]
 async fn test_manifest_by_digest_upstream_error_is_a_gateway_error() {
     let server = MockServer::start().await;
     let digest = format!("sha256:{}", "3".repeat(64));

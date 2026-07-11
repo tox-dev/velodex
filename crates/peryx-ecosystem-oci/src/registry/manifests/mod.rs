@@ -185,13 +185,16 @@ impl OciRegistry {
             Err(err) => return Ok(Some(upstream_manifest_error(&err))),
         };
         let (manifest, canonical) = store_manifest(state, index, repo, None, response).await?;
-        Ok(Some(if canonical == digest {
-            manifest_response(manifest, digest, head)
-        } else {
+        // A pull by sha256 digest must hash to it, or the upstream bytes are corrupt. A digest in
+        // another algorithm the spec permits content-addresses upstream and peryx cannot recompute it,
+        // so the bytes are served under the requested digest rather than rejected as a mismatch.
+        Ok(Some(if digest.starts_with("sha256:") && canonical != digest {
             error_response(
                 ErrorCode::ManifestInvalid,
                 &format!("upstream digest {canonical} does not match requested {digest}"),
             )
+        } else {
+            manifest_response(manifest, digest, head)
         }))
     }
 
@@ -365,9 +368,12 @@ pub async fn store_manifest(
         .map(str::to_owned);
     let bytes = bounded_body(response, MAX_MANIFEST_BYTES).await?;
     let canonical = format!("sha256:{}", Digest::of(&bytes).as_str());
-    // A corrupting proxy or CDN between peryx and upstream could return altered bytes; if upstream
-    // advertised a digest, the bytes must hash to it, or the manifest is not stored.
+    // A corrupting proxy or CDN between peryx and upstream could return altered bytes; a sha256 digest
+    // upstream advertises must hash to it, or the manifest is not stored. The spec permits another
+    // algorithm (e.g. sha512), which peryx cannot recompute but still content-addresses under its own
+    // sha256, so a non-sha256 advertisement is not a mismatch to reject.
     if let Some(advertised) = advertised
+        && advertised.starts_with("sha256:")
         && advertised != canonical
     {
         return Err(ServeError::Transport(format!(

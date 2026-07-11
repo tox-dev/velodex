@@ -57,7 +57,7 @@ const OCTET_STREAM: &str = "application/octet-stream";
 const DEFAULT_MANIFEST_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 /// The largest manifest body accepted on a push or read through from an upstream. Manifests are small;
 /// this only bounds abuse.
-const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 /// The largest tag-list body read from an upstream. Tag lists are text; this bounds a hostile or
 /// broken upstream that would otherwise stream an unbounded body into memory.
 const MAX_TAGS_BYTES: usize = 4 * 1024 * 1024;
@@ -622,7 +622,7 @@ fn within_stale_bound(state: &ServingState, fetched_at: i64) -> bool {
 /// Read an upstream response body into memory, refusing one larger than `max`. A caching proxy holds
 /// the whole body to hash or re-serve it, so an unbounded read would let a hostile or broken upstream
 /// drive peryx out of memory.
-async fn bounded_body(response: reqwest::Response, max: usize) -> Result<bytes::Bytes, ServeError> {
+pub async fn bounded_body(response: reqwest::Response, max: usize) -> Result<bytes::Bytes, ServeError> {
     let mut stream = response.bytes_stream();
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {

@@ -447,6 +447,27 @@ async fn test_mirror_tolerates_a_non_json_manifest() {
 }
 
 #[tokio::test]
+async fn test_mirror_bounds_an_oversized_manifest() {
+    let server = MockServer::start().await;
+    // A manifest past the read cap aborts the sync instead of being buffered whole, as the serving path
+    // also refuses one over the limit.
+    let body = vec![b'x'; 4 * 1024 * 1024 + 1];
+    mount_manifest(&server, "library/app", "latest", &body, MANIFEST_TYPE).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _app) = proxy(&dir, &format!("{}/", server.uri()), false);
+    let err = mirror(
+        &state.serving,
+        &state.indexes[0],
+        &["library/app:latest".to_owned()],
+        MirrorMode::Sync,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("exceeds"), "{err}");
+}
+
+#[tokio::test]
 async fn test_mirror_pulls_a_single_segment_name_under_the_library_prefix() {
     let server = MockServer::start().await;
     let config = b"{}";

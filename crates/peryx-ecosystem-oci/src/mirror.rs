@@ -10,7 +10,7 @@ use peryx_storage::blob::Digest;
 use peryx_upstream::Auth;
 use serde::Serialize;
 
-use crate::registry::{download_blob, serving_members};
+use crate::registry::{MAX_MANIFEST_BYTES, bounded_body, download_blob, serving_members};
 use crate::settings::{IndexSettings, upstream_repo};
 use crate::store::{self, Manifest};
 use crate::upstream::Upstream;
@@ -231,7 +231,9 @@ impl Mirror<'_> {
             .and_then(|value| value.to_str().ok())
             .unwrap_or(DEFAULT_MANIFEST_TYPE)
             .to_owned();
-        let bytes = response.bytes().await?;
+        let bytes = bounded_body(response, MAX_MANIFEST_BYTES)
+            .await
+            .map_err(|err| anyhow::anyhow!(String::from(err)))?;
         let digest = format!("sha256:{}", Digest::of(&bytes).as_str());
         // A reference that is itself a digest (no tag) pins the exact bytes; if the upstream, or a proxy
         // between, returns something else, storing it under the computed digest would report `synced`
