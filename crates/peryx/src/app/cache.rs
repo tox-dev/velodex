@@ -127,15 +127,13 @@ fn size_cache(config: &Config, stores: &CacheStores, now: i64, out: &mut dyn Wri
             let ttl = page.fresh_secs.unwrap_or(config.cache_ttl_secs);
             stale_index_pages += u64::from(is_stale(age, ttl));
         }
-        for (label, count) in driver
-            .cache_record_counts(&stores.meta)
-            .map_err(|reason| anyhow::anyhow!("{reason}"))?
-        {
-            match record_counts.iter_mut().find(|(existing, _)| *existing == label) {
-                Some(entry) => entry.1 += count,
-                None => record_counts.push((label, count)),
-            }
-        }
+        // Each driver labels its own record kinds, so the labels across drivers never collide; the
+        // counts append rather than merge.
+        record_counts.extend(
+            driver
+                .cache_record_counts(&stores.meta)
+                .map_err(|reason| anyhow::anyhow!("{reason}"))?,
+        );
     }
 
     let mut blob_files = 0_u64;
