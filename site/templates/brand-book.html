@@ -5,7 +5,7 @@
     --bg:#f7f4ef;--bg-panel:#fffdf9;--bg-sink:#efeae1;
     --text:#1a1a1a;--text-strong:#111111;--text-soft:#3f3d3b;--text-faint:#6b6862;
     --border:#e6dfd2;--border-strong:#d8cfbe;
-    --brand-a:#f74c00;--brand-b:#ffb600;--accent:#c53d00;--accent-strong:#b23800;
+    --brand-a:#f74c00;--brand-b:#ffb600;--accent:#a83600;--accent-strong:#8a2c00;
     --chip:#1e2226;--tile-dark:#16130e;--tile-light:#fbfaf6;
     --term-bg:#17140f;--term-text:#e7ddcf;--term-dim:#8a8175;
     --ok:#0a7d0a;--warn:#8f5a00;--bad:#c62222;
@@ -571,7 +571,7 @@
             <tr><td>Headings</td><td class="pass">17 / 18 : 1</td></tr>
             <tr><td>Secondary text</td><td class="pass">9.9 / 9.9 : 1</td></tr>
             <tr><td>Faint labels</td><td class="pass">5.1 / 5.3 : 1</td></tr>
-            <tr><td>Accent / links</td><td class="pass">4.7 / 5.4 : 1</td></tr>
+            <tr><td>Accent / links</td><td class="pass">6.0 / 5.4 : 1</td></tr>
             <tr><td>Status (ok · warn · bad)</td><td class="pass">≥ 4.8 : 1</td></tr>
           </table>
         </div>
@@ -631,7 +631,7 @@
   document.querySelectorAll('[data-motion]').forEach(e=>e.innerHTML=`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;display:block"><g class="falcon"><path fill="url(#gW)" d="${FAL}"/></g></svg>`);
   document.querySelectorAll('[data-loop]').forEach(e=>e.innerHTML=`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;display:block"><g class="falcon-loop"><path fill="url(#gW)" d="${FAL}"/></g></svg>`);
 
-  const PALETTE=[['Brand A','#f74c00','--brand-a'],['Brand B','#ffb600','--brand-b'],['Accent','#c53d00','--accent (light)'],['Accent strong','#b23800','--accent-strong'],['Ink','#1a1a1a','--text (light)'],['Paper','#f7f4ef','--bg (light)'],['Ink soft','#3f3d3b','--text-soft'],['Border','#e6dfd2','--border'],['Chip','#1e2226','icon container'],['Graphite','#4b5058','neutral'],['Night','#131110','--bg (dark)'],['Mist','#bcbcbe','--text-soft (dark)']];
+  const PALETTE=[['Brand A','#f74c00','--brand-a'],['Brand B','#ffb600','--brand-b'],['Accent','#a83600','--accent (light)'],['Accent strong','#b23800','--accent-strong'],['Ink','#1a1a1a','--text (light)'],['Paper','#f7f4ef','--bg (light)'],['Ink soft','#3f3d3b','--text-soft'],['Border','#e6dfd2','--border'],['Chip','#1e2226','icon container'],['Graphite','#4b5058','neutral'],['Night','#131110','--bg (dark)'],['Mist','#bcbcbe','--text-soft (dark)']];
   const SEM=[['Faster / OK','#0a7d0a'],['Warn','#8f5a00'],['Slow','#b34700'],['Critical','#c62222']];
   const rgb=h=>{const n=parseInt(h.slice(1),16);return `rgb(${n>>16} ${n>>8&255} ${n&255})`;};
   document.getElementById('swatches').innerHTML=PALETTE.map(([n,h,t])=>`<div class="swx" data-copy="${h}" data-copy-label="${n}"><div class="c" style="background:${h}"></div><div class="m"><div class="n">${n}</div><div class="h">${h}</div><div class="rgb">${rgb(h)}</div><div class="t">${t}</div></div></div>`).join('');

@@ -6,7 +6,7 @@
 pub const CSS: &str = r"
 :root {
   --bg: #f7f4ef; --bg-soft: #fffdf9; --bg-sink: #efeae1; --text: #1a1a1a; --heading: #111111; --text-strong: #111111; --text-soft: #3f3d3b;
-  --text-faint: #6b6862; --accent: #c53d00; --accent-strong: #b23800; --brand-a: #f74c00; --brand-b: #ffb600;
+  --text-faint: #6b6862; --accent: #a83600; --accent-strong: #8a2c00; --brand-a: #f74c00; --brand-b: #ffb600;
   --gold-fg: #8a6200;
   --border: #e6dfd2; --border-strong: #d8cfbe; --code-bg: #efeae1;
   --terminal-bg: #17140f; --terminal-text: #e7ddcf; --terminal-dim: #8a8175;
