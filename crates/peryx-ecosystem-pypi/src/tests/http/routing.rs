@@ -98,6 +98,18 @@ async fn test_get_route_without_trailing_slash_is_not_found() {
     let (status, ..) = get(&h.state, "/pypi", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+#[rstest]
+#[case::index("/pypi/simple", "/pypi/simple/")]
+#[case::project("/pypi/simple/flask", "/pypi/simple/flask/")]
+#[case::nested_route("/root/pypi/simple/flask", "/root/pypi/simple/flask/")]
+#[case::normalized_with_query("/pypi/simple/Flask.Test?extra=1", "/pypi/simple/flask-test/?extra=1")]
+#[tokio::test]
+async fn test_simple_url_without_trailing_slash_redirects(#[case] requested: &str, #[case] location: &str) {
+    let h = harness().await;
+    let (status, headers, _) = get(&h.state, requested, None).await;
+    assert_eq!(status, StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(headers.get(header::LOCATION).unwrap(), location);
+}
 #[tokio::test]
 async fn test_project_list_html() {
     let h = harness().await;

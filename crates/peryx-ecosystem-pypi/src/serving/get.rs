@@ -78,8 +78,17 @@ async fn pypi_get(
         Ok(None) => {}
         Err(response) => return response,
     }
+    if rest == "simple" {
+        return simple_slash_redirect(uri, rest, "simple/");
+    }
     if rest == "simple/" {
         return index_response(cache::resolve_list(state, index), negotiate(headers), &index.route);
+    }
+    if let Some(project) = rest
+        .strip_prefix("simple/")
+        .filter(|rest| !rest.is_empty() && !rest.contains('/'))
+    {
+        return simple_slash_redirect(uri, rest, &format!("simple/{}/", normalize_name(project)));
     }
     if let Some(project) = rest.strip_prefix("simple/").and_then(|rest| rest.strip_suffix('/')) {
         let normalized = normalize_name(project);
@@ -135,6 +144,19 @@ async fn pypi_get(
         return inspect_route(state.clone(), index.route.clone(), target, uri.query()).await;
     }
     not_found()
+}
+
+/// PEP 503 canonical Simple URLs end in a slash; a request that drops it is redirected rather than
+/// 404'd, matching Warehouse's `301`. `rest` is a suffix of the request path, so stripping it leaves
+/// the index's route prefix to prepend to the canonical tail. The query string is carried across.
+fn simple_slash_redirect(uri: &axum::http::Uri, rest: &str, canonical_tail: &str) -> Response {
+    let path = uri.path();
+    let mut location = format!("{}{canonical_tail}", &path[..path.len() - rest.len()]);
+    if let Some(query) = uri.query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, location)], "").into_response()
 }
 
 async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str) -> Response {
