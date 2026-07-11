@@ -272,6 +272,174 @@ async fn test_two_route_mounted_ecosystems_each_serve_their_own_indexes() {
     }
 }
 
+/// A driver implementing only the three required methods, so every other method takes its trait
+/// default. It exercises the neutral defaults an ecosystem inherits when its format has no concept for
+/// them: an empty browse view, an unsupported operation, the wrong-mount guard.
+struct BareDriver;
+
+#[async_trait::async_trait]
+impl peryx_driver::serving::EcosystemDriver for BareDriver {
+    fn ecosystem(&self) -> peryx_core::Ecosystem {
+        peryx_core::Ecosystem::Pypi
+    }
+
+    fn classify_route(&self, _path: &str) -> peryx_driver::rate_limit::RouteClass {
+        peryx_driver::rate_limit::RouteClass::Listing
+    }
+
+    fn discover_index(
+        &self,
+        index: peryx_driver::state::IndexDescription,
+        _base: Option<&peryx_driver::discovery::BaseUrl>,
+    ) -> serde_json::Value {
+        peryx_driver::discovery::minimal_entry(&index)
+    }
+}
+
+#[tokio::test]
+async fn test_bare_driver_serving_methods_reach_the_wrong_mount_guard() {
+    use axum::extract::{FromRequest as _, Multipart, Request};
+    use axum::http::{HeaderMap, Uri};
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    // A driver's mount serves one half of the method set; the unused half's default is the loud guard,
+    // so every one of these answers 500 rather than silently serving nothing.
+    let (_dir, state) = unwired_state();
+    let driver = BareDriver;
+    let serving = state.serving.clone();
+    let serve = driver
+        .serve(serving.clone(), Request::builder().body(Body::empty()).unwrap())
+        .await;
+    assert_eq!(serve.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let get = driver
+        .get(
+            serving.clone(),
+            0,
+            "rest".to_owned(),
+            Uri::from_static("/x"),
+            HeaderMap::new(),
+        )
+        .await;
+    assert_eq!(get.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let multipart = Multipart::from_request(
+        Request::builder()
+            .header("content-type", "multipart/form-data; boundary=x")
+            .body(Body::from("--x--\r\n"))
+            .unwrap(),
+        &(),
+    )
+    .await
+    .unwrap();
+    let post = driver
+        .post(serving.clone(), "x".to_owned(), HeaderMap::new(), multipart)
+        .await;
+    assert_eq!(post.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let put = driver
+        .put(serving.clone(), Uri::from_static("/x"), HeaderMap::new())
+        .await;
+    assert_eq!(put.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let delete = driver
+        .delete(serving.clone(), Uri::from_static("/x"), HeaderMap::new())
+        .await;
+    assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn test_bare_driver_browse_defaults_are_empty() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    // An ecosystem with no browse format inherits empty views, never an error: the web crate renders a
+    // bare index the same as one whose driver simply has nothing to show.
+    let (_dir, state) = unwired_state();
+    let driver = BareDriver;
+    let serving = state.serving.clone();
+    assert!(driver.project_names(&state.serving, 0).unwrap().is_empty());
+    assert!(
+        driver
+            .project_page(serving.clone(), 0, "p".to_owned())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        driver
+            .browse_project(serving.clone(), 0, "p".to_owned())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        driver
+            .manifest_view(serving.clone(), 0, "p".to_owned(), "latest".to_owned())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        driver
+            .artifact_members(serving.clone(), 0, "p".to_owned(), "sha256:x".to_owned())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        driver
+            .artifact_member_chunk(
+                serving.clone(),
+                0,
+                "p".to_owned(),
+                "sha256:x".to_owned(),
+                "m".to_owned(),
+                0
+            )
+            .await
+            .unwrap(),
+        peryx_core::UiMemberChunk::default(),
+    );
+}
+
+#[tokio::test]
+async fn test_bare_driver_unsupported_operations_report_an_error() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    // The maintenance and import operations a format need not support refuse by default, so a neutral
+    // command over a driver that lacks them fails loudly instead of reporting a silent success.
+    let (dir, state) = unwired_state();
+    let driver = BareDriver;
+    assert!(
+        driver
+            .artifact_path(state.serving.clone(), 0, "hex".to_owned(), "f.whl".to_owned())
+            .await
+            .is_err()
+    );
+    assert!(driver.purge_project(&state.meta, "idx", "proj", false).is_err());
+    let mut out = Vec::new();
+    assert!(
+        driver
+            .import_dir(&state.meta, &state.blobs, "name", "route", dir.path(), &mut out)
+            .is_err()
+    );
+    let mut policy = toml::Table::new();
+    policy.insert("mystery".to_owned(), toml::Value::Boolean(true));
+    assert!(driver.compile_policy(&policy).is_err());
+}
+
+#[test]
+fn test_bare_driver_neutral_defaults() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let (_dir, state) = unwired_state();
+    let driver = BareDriver;
+    assert_eq!(driver.client_endpoint("my-index"), "/my-index/");
+    assert!(driver.referenced_blob_digests(&state.meta).unwrap().is_empty());
+    assert!(
+        driver
+            .summarize_indexes(&state.meta, &["idx".to_owned()], 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn test_unwired_state_search_returns_empty() {
     let (_dir, state) = unwired_state();

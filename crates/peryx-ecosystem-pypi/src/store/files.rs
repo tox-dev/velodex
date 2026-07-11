@@ -42,13 +42,9 @@ pub fn scan_file_urls<E>(
     mut visit: impl FnMut(&str, &str) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(FILE_PREFIX)? {
-        let (Some(digest), Some(raw)) = (key.strip_prefix(FILE_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
-        let Ok(value) = String::from_utf8(raw) else {
-            continue;
-        };
-        visit(digest, &value).map_err(MetaScanError::Visit)?;
+        if let Some(value) = meta.get_driver_value(&key)?.and_then(|raw| String::from_utf8(raw).ok()) {
+            visit(&key[FILE_PREFIX.len()..], &value).map_err(MetaScanError::Visit)?;
+        }
     }
     Ok(())
 }
@@ -121,13 +117,9 @@ pub fn scan_metadata_records<E>(
     mut visit: impl FnMut(&str, &str) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(METADATA_PREFIX)? {
-        let (Some(digest), Some(raw)) = (key.strip_prefix(METADATA_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
-        let Ok(value) = String::from_utf8(raw) else {
-            continue;
-        };
-        visit(digest, &value).map_err(MetaScanError::Visit)?;
+        if let Some(value) = meta.get_driver_value(&key)?.and_then(|raw| String::from_utf8(raw).ok()) {
+            visit(&key[METADATA_PREFIX.len()..], &value).map_err(MetaScanError::Visit)?;
+        }
     }
     Ok(())
 }
@@ -139,4 +131,125 @@ fn split_file_source(value: &str) -> Option<FileSource> {
         source: parts.next()?.to_owned(),
         size: parts.next().and_then(|size| size.parse().ok()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{FileSource, MetaStore, metadata_key};
+    use crate::store::PypiStore as _;
+
+    fn store() -> (tempfile::TempDir, MetaStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        (dir, meta)
+    }
+
+    #[test]
+    fn test_put_and_get_file_url() {
+        let (_dir, meta) = store();
+        assert_eq!(meta.get_file_url("deadbeef").unwrap(), None);
+        meta.put_file_url("deadbeef", "https://files.example/pkg.whl", "pypi")
+            .unwrap();
+        assert_eq!(
+            meta.get_file_url("deadbeef").unwrap(),
+            Some(FileSource {
+                url: "https://files.example/pkg.whl".to_owned(),
+                source: "pypi".to_owned(),
+                size: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_put_and_get_metadata_roundtrips_the_sibling() {
+        let (_dir, meta) = store();
+        assert_eq!(meta.get_metadata("wheelsha").unwrap(), None);
+        meta.put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha", "pypi")
+            .unwrap();
+        assert_eq!(
+            meta.get_metadata("wheelsha").unwrap(),
+            Some((
+                "https://up/pkg.whl.metadata".to_owned(),
+                "metasha".to_owned(),
+                "pypi".to_owned(),
+            ))
+        );
+    }
+
+    #[test]
+    fn test_get_metadata_digests_skips_missing_and_malformed_records() {
+        let (_dir, meta) = store();
+        meta.put_metadata("wheelsha", "https://up/pkg.whl.metadata", "metasha", "pypi")
+            .unwrap();
+        // A record with no newline lacks the sha256 field, so the lookup skips it rather than panicking.
+        meta.put_driver_value(&metadata_key("broken"), b"only-url").unwrap();
+
+        let digests = meta.get_metadata_digests(["missing", "broken", "wheelsha"]).unwrap();
+
+        assert_eq!(digests, HashMap::from([("wheelsha".to_owned(), "metasha".to_owned())]));
+    }
+
+    #[test]
+    fn test_scan_file_urls_visits_each_record() {
+        let (_dir, meta) = store();
+        meta.put_file_url("aa", "https://files/aa.whl", "pypi").unwrap();
+        let mut seen = Vec::new();
+        meta.scan_file_urls(|digest, value| {
+            seen.push((digest.to_owned(), value.to_owned()));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(seen, vec![("aa".to_owned(), "https://files/aa.whl\npypi".to_owned())]);
+    }
+
+    #[test]
+    fn test_scan_file_urls_skips_a_non_utf8_record() {
+        let (_dir, meta) = store();
+        meta.put_file_url("aa", "https://files/aa.whl", "pypi").unwrap();
+        meta.put_driver_value(&super::file_key("bad"), &[0xff, 0xfe]).unwrap();
+        let mut count = 0;
+        meta.scan_file_urls(|_digest, _value| {
+            count += 1;
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(count, 1, "the non-UTF-8 record is skipped, the valid one visited");
+    }
+
+    #[test]
+    fn test_scan_metadata_records_visits_each_record() {
+        let (_dir, meta) = store();
+        meta.put_metadata("wheelsha", "https://up/pkg.metadata", "metasha", "pypi")
+            .unwrap();
+        let mut seen = Vec::new();
+        meta.scan_metadata_records(|digest, value| {
+            seen.push((digest.to_owned(), value.to_owned()));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![(
+                "wheelsha".to_owned(),
+                "https://up/pkg.metadata\nmetasha\npypi".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_scan_metadata_records_skips_a_non_utf8_record() {
+        let (_dir, meta) = store();
+        meta.put_metadata("good", "https://up/pkg.metadata", "metasha", "pypi")
+            .unwrap();
+        meta.put_driver_value(&metadata_key("bad"), &[0xff, 0xfe]).unwrap();
+        let mut seen = Vec::new();
+        meta.scan_metadata_records(|digest, _value| {
+            seen.push(digest.to_owned());
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(seen, vec!["good".to_owned()], "the non-UTF-8 record is skipped");
+    }
 }

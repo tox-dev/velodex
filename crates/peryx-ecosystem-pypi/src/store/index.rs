@@ -99,14 +99,17 @@ pub fn get_index(meta: &MetaStore, key: &str) -> Result<Option<CachedIndex>, Met
 ///
 /// # Errors
 /// Returns a store error if the read fails or a stored record cannot be decoded.
+///
+/// # Panics
+/// Never in practice: a key the prefix scan just returned still has its value.
 pub fn list_index_pages(meta: &MetaStore) -> Result<Vec<(String, i64, Option<i64>)>, MetaError> {
     let mut pages = Vec::new();
     for key in meta.driver_prefix_keys(INDEX_PREFIX)? {
-        let (Some(logical), Some(raw)) = (key.strip_prefix(INDEX_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
+        let raw = meta
+            .get_driver_value(&key)?
+            .expect("a key from the prefix scan still has its value");
         let (fetched_at, fresh_secs) = CachedIndex::decode_freshness(&raw)?;
-        pages.push((logical.to_owned(), fetched_at, fresh_secs));
+        pages.push((key[INDEX_PREFIX.len()..].to_owned(), fetched_at, fresh_secs));
     }
     Ok(pages)
 }
@@ -116,16 +119,19 @@ pub fn list_index_pages(meta: &MetaStore) -> Result<Vec<(String, i64, Option<i64
 /// # Errors
 /// Returns a scan error if the store read fails, a record cannot be decoded, or the visitor
 /// returns an error.
+///
+/// # Panics
+/// Never in practice: a key the prefix scan just returned still has its value.
 pub fn scan_index_pages<E>(
     meta: &MetaStore,
     mut visit: impl FnMut(CachedIndexPage) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(INDEX_PREFIX)? {
-        let (Some(logical), Some(raw)) = (key.strip_prefix(INDEX_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
+        let raw = meta
+            .get_driver_value(&key)?
+            .expect("a key from the prefix scan still has its value");
         visit(CachedIndexPage {
-            key: logical.to_owned(),
+            key: key[INDEX_PREFIX.len()..].to_owned(),
             summary: CachedIndex::summary(&raw).map_err(MetaError::from)?,
         })
         .map_err(MetaScanError::Visit)?;
@@ -137,15 +143,189 @@ pub fn scan_index_pages<E>(
 ///
 /// # Errors
 /// Returns a scan error if the store read fails or the visitor returns an error.
+///
+/// # Panics
+/// Never in practice: a key the prefix scan just returned still has its value.
 pub fn scan_index_records<E>(
     meta: &MetaStore,
     mut visit: impl FnMut(&str, &[u8]) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(INDEX_PREFIX)? {
-        let (Some(logical), Some(raw)) = (key.strip_prefix(INDEX_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
-        visit(logical, &raw).map_err(MetaScanError::Visit)?;
+        let raw = meta
+            .get_driver_value(&key)?
+            .expect("a key from the prefix scan still has its value");
+        visit(&key[INDEX_PREFIX.len()..], &raw).map_err(MetaScanError::Visit)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::{CachedIndex, MetaStore, index_key};
+    use crate::store::PypiStore as _;
+
+    fn store() -> (tempfile::TempDir, MetaStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        (dir, meta)
+    }
+
+    fn record() -> CachedIndex {
+        CachedIndex {
+            etag: Some("\"abc\"".to_owned()),
+            last_serial: Some(42),
+            fetched_at_unix: 1_700_000_000,
+            content_type: None,
+            fresh_secs: None,
+            body: b"<html></html>".to_vec(),
+        }
+    }
+
+    #[test]
+    fn test_put_and_get_index_roundtrip() {
+        let (_dir, meta) = store();
+        assert_eq!(meta.get_index("root/pypi/flask").unwrap(), None);
+        meta.put_index("root/pypi/flask", &record()).unwrap();
+        assert_eq!(meta.get_index("root/pypi/flask").unwrap(), Some(record()));
+    }
+
+    #[test]
+    fn test_put_index_overwrites() {
+        let (_dir, meta) = store();
+        meta.put_index("k", &record()).unwrap();
+        let mut updated = record();
+        updated.last_serial = Some(99);
+        meta.put_index("k", &updated).unwrap();
+        assert_eq!(meta.get_index("k").unwrap().unwrap().last_serial, Some(99));
+    }
+
+    #[test]
+    fn test_put_cached_page_records_file_url_size_and_status() {
+        let (_dir, meta) = store();
+        meta.put_cached_page(
+            "pypi/pkg",
+            &record(),
+            "pypi",
+            "pkg",
+            "Pkg",
+            "pypi",
+            Some("archived"),
+            Some("read only"),
+            &[(
+                "feedface".to_owned(),
+                "https://files.example/pkg-1.0.whl".to_owned(),
+                Some(42),
+            )],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            meta.get_file_url("feedface").unwrap().unwrap().size,
+            Some(42),
+            "the file's size line round-trips"
+        );
+        assert_eq!(
+            meta.get_project_status("pypi", "pkg")
+                .unwrap()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("archived")
+        );
+    }
+
+    #[test]
+    fn test_put_cached_page_clears_status_when_none() {
+        let (_dir, meta) = store();
+        meta.put_cached_page(
+            "pypi/pkg",
+            &record(),
+            "pypi",
+            "pkg",
+            "Pkg",
+            "pypi",
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert!(meta.get_project_status("pypi", "pkg").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_list_index_pages_reports_freshness() {
+        let (_dir, meta) = store();
+        meta.put_index("pypi/flask", &record()).unwrap();
+        meta.put_index(
+            "pypi/numpy",
+            &CachedIndex {
+                fetched_at_unix: 1_800_000_000,
+                fresh_secs: Some(600),
+                ..record()
+            },
+        )
+        .unwrap();
+        let mut pages = meta.list_index_pages().unwrap();
+        pages.sort();
+        assert_eq!(
+            pages,
+            vec![
+                ("pypi/flask".to_owned(), 1_700_000_000, None),
+                ("pypi/numpy".to_owned(), 1_800_000_000, Some(600)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_list_index_pages_reads_a_legacy_plain_json_record() {
+        let (_dir, meta) = store();
+        // A record written by a version that stored the whole struct as plain JSON, not the framed form.
+        let legacy = serde_json::to_vec(&record()).unwrap();
+        meta.put_driver_value(&index_key("pypi/old"), &legacy).unwrap();
+        assert_eq!(
+            meta.list_index_pages().unwrap(),
+            vec![("pypi/old".to_owned(), 1_700_000_000, None)]
+        );
+    }
+
+    #[test]
+    fn test_scan_index_pages_visits_records_without_collecting() {
+        let (_dir, meta) = store();
+        meta.put_index("pypi/flask", &record()).unwrap();
+        let mut pages = Vec::new();
+        meta.scan_index_pages(|page| {
+            pages.push((page.key, page.summary.body_bytes));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(pages, vec![("pypi/flask".to_owned(), 13)]);
+    }
+
+    #[test]
+    fn test_scan_index_pages_reports_the_visitor_error_source() {
+        let (_dir, meta) = store();
+        meta.put_index("pypi/flask", &record()).unwrap();
+        let err = meta
+            .scan_index_pages(|_page| Err(std::io::Error::other("stop")))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "stop");
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn test_scan_index_records_visits_raw_bytes() {
+        let (_dir, meta) = store();
+        meta.put_index("pypi/flask", &record()).unwrap();
+        let mut keys = Vec::new();
+        meta.scan_index_records(|key, raw| {
+            keys.push((key.to_owned(), raw.starts_with(b"peryx1\n")));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(keys, vec![("pypi/flask".to_owned(), true)]);
+    }
 }

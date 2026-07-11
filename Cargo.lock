@@ -3422,7 +3422,6 @@ dependencies = [
  "leptos_router",
  "peryx-core",
  "peryx-driver",
- "peryx-ecosystem-pypi",
  "peryx-http",
  "peryx-search",
  "peryx-storage",

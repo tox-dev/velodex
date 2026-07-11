@@ -642,6 +642,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_serve_error_message_describes_every_fault() {
+        let decode = serde_json::from_str::<u8>("nope").unwrap_err();
+        assert!(
+            ServeError::from(MetaError::Decode(decode))
+                .message()
+                .contains("metadata store error")
+        );
+        assert!(
+            ServeError::Io(std::io::Error::other("disk"))
+                .message()
+                .contains("blob io error")
+        );
+        assert!(
+            ServeError::Transport("reset".to_owned())
+                .message()
+                .contains("upstream transfer failed")
+        );
+    }
+
     #[tokio::test]
     async fn test_serve_error_wraps_a_transport_failure() {
         let _ = rustls::crypto::ring::default_provider().install_default();

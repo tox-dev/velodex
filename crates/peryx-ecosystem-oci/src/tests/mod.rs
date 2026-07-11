@@ -10,6 +10,7 @@ mod push_tests;
 mod search_tests;
 mod serve;
 mod virtual_tests;
+mod web_tests;
 mod webhooks_tests;
 
 use std::sync::Arc;

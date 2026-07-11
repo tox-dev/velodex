@@ -444,3 +444,49 @@ fn valid_upload_key(key: &str) -> bool {
         && parts.next().is_some_and(|part| !part.is_empty())
         && parts.next().is_some_and(|part| !part.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use peryx_index::{Index, IndexKind};
+    use peryx_policy::Policy;
+    use peryx_storage::meta::MetaStore;
+
+    use super::policy_dry_run;
+    use crate::store::PypiStore as _;
+
+    fn hosted_index() -> Index {
+        Index {
+            name: "hosted".to_owned(),
+            route: "hosted".to_owned(),
+            ecosystem: peryx_core::Ecosystem::Pypi,
+            kind: IndexKind::Hosted {
+                upload_token: None,
+                volatile: false,
+            },
+            policy: Policy::default(),
+        }
+    }
+
+    #[test]
+    fn test_policy_dry_run_skips_uploads_it_cannot_attribute() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        // An upload on an index no configured index names: attributed by the fallback split, then
+        // skipped because it matches no index.
+        meta.put_upload("ghost", "proj", "file.whl", br#"{"version":"1.0"}"#)
+            .unwrap();
+        // An upload on a configured index, filtered out by a project filter that does not match it.
+        meta.put_upload("hosted", "flask", "flask-1.0.whl", br#"{"version":"1.0"}"#)
+            .unwrap();
+        // A corrupt upload row whose key carries no project/filename split is skipped entirely. The
+        // `pypi\0u\0` prefix is the on-disk upload namespace.
+        meta.put_driver_value("pypi\u{0}u\u{0}noslashkey", b"x").unwrap();
+
+        let indexes = [hosted_index()];
+        let mut out = Vec::new();
+        policy_dry_run(&meta, &indexes, None, Some("other"), &mut out).unwrap();
+
+        // No configured, unfiltered upload reaches a policy check, so nothing is written.
+        assert_eq!(String::from_utf8(out).unwrap(), "");
+    }
+}

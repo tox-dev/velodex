@@ -150,15 +150,18 @@ pub fn delete_upload(meta: &MetaStore, index: &str, normalized: &str, filename: 
 ///
 /// # Errors
 /// Returns a scan error if the store read fails or the visitor returns an error.
+///
+/// # Panics
+/// Never in practice: a key the prefix scan just returned still has its value.
 pub fn scan_upload_records<E>(
     meta: &MetaStore,
     mut visit: impl FnMut(&str, &[u8]) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(UPLOAD_PREFIX)? {
-        let (Some(logical), Some(record)) = (key.strip_prefix(UPLOAD_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
-        visit(logical, &record).map_err(MetaScanError::Visit)?;
+        let record = meta
+            .get_driver_value(&key)?
+            .expect("a key from the prefix scan still has its value");
+        visit(&key[UPLOAD_PREFIX.len()..], &record).map_err(MetaScanError::Visit)?;
     }
     Ok(())
 }
@@ -213,13 +216,9 @@ pub fn scan_override_records<E>(
     mut visit: impl FnMut(&str, &str) -> Result<(), E>,
 ) -> Result<(), MetaScanError<E>> {
     for key in meta.driver_prefix_keys(OVERRIDE_PREFIX)? {
-        let (Some(logical), Some(raw)) = (key.strip_prefix(OVERRIDE_PREFIX), meta.get_driver_value(&key)?) else {
-            continue;
-        };
-        let Ok(kind) = String::from_utf8(raw) else {
-            continue;
-        };
-        visit(logical, &kind).map_err(MetaScanError::Visit)?;
+        if let Some(kind) = meta.get_driver_value(&key)?.and_then(|raw| String::from_utf8(raw).ok()) {
+            visit(&key[OVERRIDE_PREFIX.len()..], &kind).map_err(MetaScanError::Visit)?;
+        }
     }
     Ok(())
 }
@@ -235,4 +234,50 @@ fn journal_bytes(action: &str, project: &str, version: Option<&str>, filename: O
         filename: filename.map(str::to_owned),
     })
     .expect("journal entry always serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MetaStore, override_key};
+    use crate::store::PypiStore as _;
+
+    fn store() -> (tempfile::TempDir, MetaStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        (dir, meta)
+    }
+
+    #[test]
+    fn test_scan_upload_records_visits_each_row() {
+        let (_dir, meta) = store();
+        meta.put_upload("hosted", "flask", "flask-1.0.whl", b"upload").unwrap();
+        let mut seen = Vec::new();
+        meta.scan_upload_records(|key, value| {
+            seen.push((key.to_owned(), value.to_vec()));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![("hosted/flask/flask-1.0.whl".to_owned(), b"upload".to_vec())]
+        );
+    }
+
+    #[test]
+    fn test_scan_override_records_visits_valid_and_skips_non_utf8() {
+        let (_dir, meta) = store();
+        meta.put_override("hosted", "flask", "flask-1.0.whl", "hidden").unwrap();
+        meta.put_driver_value(&override_key("hosted", "flask", "bad.whl"), &[0xff, 0xfe])
+            .unwrap();
+        let mut seen = Vec::new();
+        meta.scan_override_records(|key, value| {
+            seen.push((key.to_owned(), value.to_owned()));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(
+            seen,
+            vec![("hosted/flask/flask-1.0.whl".to_owned(), "hidden".to_owned())]
+        );
+    }
 }
