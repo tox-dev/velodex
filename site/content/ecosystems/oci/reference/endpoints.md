@@ -156,6 +156,9 @@ repositories as clients address them: each entry is the index route joined to th
 `crane catalog` lists are the same ones a client pulls. The set is sorted, then paginated like `tags/list`: `?n=<count>`
 caps the page and `?last=<repo>` resumes after a repository, and a truncated page adds a
 `Link: </v2/_catalog?n=<n>&last=<marker>>; rel="next"` header. A serve-policy rule omits the repositories it blocks.
+peryx requires a Bearer `registry:catalog:*` grant when the token realm runs and an OCI index is private. It puts that
+scope in a missing token's `401` challenge and returns `401 insufficient_scope` for a repository token. Without a token
+signing, peryx accepts Basic authentication for the private catalog.
 
 ## Referrers
 

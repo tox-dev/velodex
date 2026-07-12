@@ -96,6 +96,28 @@ The token endpoint mints a token whose access to `other/app` is empty, and the r
 `insufficient_scope`. The credential is valid, so docker does not retry; it reports the denial. To push there, widen the
 token's `projects` or add a second token.
 
+## List the registry catalog
+
+Request the registry-wide catalog and inspect the challenge.
+
+```console
+$ curl -sI http://localhost:4433/v2/_catalog | grep -i www-authenticate
+www-authenticate: Bearer realm="http://localhost:4433/v2/token",service="peryx",scope="registry:catalog:*"
+```
+
+Your `team/*` grant is too narrow for that scope. Change `projects` to `["*"]` and restart peryx. Request a catalog
+token and use it.
+
+```console
+$ token=$(curl -sS -u ci:ci-secret \
+    'http://localhost:4433/v2/token?service=peryx&scope=registry%3Acatalog%3A%2A' | jq -r .token)
+$ curl -sS --oauth2-bearer "$token" http://localhost:4433/v2/_catalog
+{"repositories":["team/app"]}
+```
+
+The explicit `*` grant proves the credential may read the whole index. peryx rejects a repository token for `_catalog`,
+including one for `team/app`.
+
 ## What you built
 
 One hosted index that validates logins and scopes a token to a set of repositories. To make its reads private too, set

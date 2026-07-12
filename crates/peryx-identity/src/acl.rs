@@ -35,6 +35,28 @@ pub fn authorize(principal: &Principal, acl: &IndexAcl, project: Option<&str>, a
     }
 }
 
+/// A catalog includes future projects, so current membership cannot prove access; require an explicit `*` grant.
+///
+/// # Errors
+/// Returns the same denial classes as [`authorize`].
+pub fn authorize_all(principal: &Principal, acl: &IndexAcl, action: Action) -> Result<(), Denial> {
+    if action == Action::Read && acl.anonymous_read {
+        return Ok(());
+    }
+    match principal {
+        Principal::Named { subject } => acl.token(subject).ok_or(Denial::Forbidden).and_then(|token| {
+            token
+                .grants
+                .iter()
+                .any(|grant| grant.allows_all(action))
+                .then_some(())
+                .ok_or(Denial::Forbidden)
+        }),
+        Principal::Anonymous if acl.grants_to_anyone(action) => Err(Denial::Unauthenticated),
+        Principal::Anonymous => Err(Denial::Unavailable),
+    }
+}
+
 /// Apply the grants recovered from a verified token without resolving its subject through an index ACL.
 ///
 /// # Errors
@@ -43,6 +65,18 @@ pub fn authorize_grants(grants: &[Grant], project: Option<&str>, action: Action)
     grants
         .iter()
         .any(|grant| grant.allows(project, action))
+        .then_some(())
+        .ok_or(Denial::Forbidden)
+}
+
+/// Registry resources bypass project glob expansion to keep the protocol namespaces separate.
+///
+/// # Errors
+/// Returns [`Denial::Forbidden`] when no exact grant covers the resource and action.
+pub fn authorize_exact_grants(grants: &[Grant], resource: &str, action: Action) -> Result<(), Denial> {
+    grants
+        .iter()
+        .any(|grant| grant.actions.contains(&action) && grant.projects.iter().any(|project| project.0 == resource))
         .then_some(())
         .ok_or(Denial::Forbidden)
 }
@@ -206,6 +240,10 @@ impl Grant {
     fn allows(&self, project: Option<&str>, action: Action) -> bool {
         self.actions.contains(&action)
             && project.is_none_or(|project| self.projects.iter().any(|glob| glob.matches(project)))
+    }
+
+    fn allows_all(&self, action: Action) -> bool {
+        self.actions.contains(&action) && self.projects.iter().any(|glob| glob.0 == "*")
     }
 }
 

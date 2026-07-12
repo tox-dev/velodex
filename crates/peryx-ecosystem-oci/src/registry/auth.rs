@@ -13,7 +13,10 @@ use axum::response::{IntoResponse, Response};
 use peryx_core::Ecosystem;
 use peryx_driver::ServingState;
 use peryx_driver::discovery::BaseUrl;
-use peryx_identity::{Action, Denial, Glob, Grant, Identity, IndexAcl, Principal, Signer, authorize, authorize_grants};
+use peryx_identity::{
+    Action, Denial, Glob, Grant, Identity, IndexAcl, Principal, Signer, authorize, authorize_all,
+    authorize_exact_grants, authorize_grants,
+};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 
@@ -21,6 +24,8 @@ use crate::error::{ErrorCode, error_response};
 
 /// The realm path a challenge points a client at.
 const TOKEN_PATH: &str = "/v2/token";
+const CATALOG_SCOPE: &str = "registry:catalog:*";
+const CATALOG_GRANT: &str = "\0registry\0catalog";
 
 /// Answer `GET /v2/`: `200` with the API-version header for a deployment no ACL restricts or a request
 /// carrying a valid credential, otherwise `401` with the Bearer challenge that starts `docker login`.
@@ -142,35 +147,48 @@ fn approved_grants(state: &ServingState, requester: &TokenRequester<'_>, scopes:
         .basic
         .map(|basic| (basic, HashMap::from([(basic.index, true)])));
     for scope in scopes {
-        let Some((index, repo)) = super::resolve(&state.indexes, &scope.name) else {
-            continue;
-        };
-        if let Some((basic, indexes)) = &mut authenticated_indexes
-            && !*indexes
-                .entry(index.name.as_str())
-                .or_insert_with(|| index.acl.identify(Some(basic.header), basic.now).principal == requester.principal)
-        {
-            continue;
-        }
-        let actions: BTreeSet<Action> = scope
-            .actions
-            .iter()
-            .copied()
-            .filter(|&action| authorize(&requester.principal, &index.acl, Some(repo), action).is_ok())
-            .collect();
-        if !actions.is_empty() {
-            grants.push(Grant {
-                projects: vec![Glob::new(scope.name.clone())],
-                actions,
-            });
+        match &scope.resource {
+            ScopeResource::Repository(name) => {
+                let Some((index, repo)) = super::resolve(&state.indexes, name) else {
+                    continue;
+                };
+                if let Some((basic, indexes)) = &mut authenticated_indexes
+                    && !*indexes.entry(index.name.as_str()).or_insert_with(|| {
+                        index.acl.identify(Some(basic.header), basic.now).principal == requester.principal
+                    })
+                {
+                    continue;
+                }
+                let actions: BTreeSet<Action> = scope
+                    .actions
+                    .iter()
+                    .copied()
+                    .filter(|&action| authorize(&requester.principal, &index.acl, Some(repo), action).is_ok())
+                    .collect();
+                if !actions.is_empty() {
+                    grants.push(Grant {
+                        projects: vec![Glob::new(name.clone())],
+                        actions,
+                    });
+                }
+            }
+            ScopeResource::Catalog if authorize_catalog_requester(state, requester).is_ok() => grants.push(Grant {
+                projects: vec![Glob::new(CATALOG_GRANT)],
+                actions: BTreeSet::from([Action::Read]),
+            }),
+            ScopeResource::Catalog => {}
         }
     }
     grants
 }
 
-/// One requested access scope: the repository `<name>` and the neutral actions its OCI verbs map to.
+enum ScopeResource {
+    Repository(String),
+    Catalog,
+}
+
 struct RequestedScope {
-    name: String,
+    resource: ScopeResource,
     actions: BTreeSet<Action>,
 }
 
@@ -189,24 +207,25 @@ fn parse_token_request(query: &str, audience: &str) -> Option<Vec<RequestedScope
     requested_service?.then_some(scopes)
 }
 
-/// One `repository:<name>:<actions>` scope into its repository and the neutral actions it requests; any
-/// other resource type, or an empty name, is not a repository scope and yields nothing.
 fn parse_scope(scope: &str) -> Option<RequestedScope> {
     let fields: Vec<&str> = scope.splitn(3, ':').collect();
     let [kind, name, actions] = fields[..] else {
         return None;
     };
-    if kind != "repository" || name.is_empty() {
-        return None;
+    match kind {
+        "repository" if !name.is_empty() => Some(RequestedScope {
+            resource: ScopeResource::Repository(name.to_owned()),
+            actions: actions
+                .split(',')
+                .flat_map(|verb| scope_actions(verb).iter().copied())
+                .collect(),
+        }),
+        "registry" if name == "catalog" && actions.split(',').any(|action| action == "*") => Some(RequestedScope {
+            resource: ScopeResource::Catalog,
+            actions: BTreeSet::from([Action::Read]),
+        }),
+        _ => None,
     }
-    let actions: BTreeSet<Action> = actions
-        .split(',')
-        .flat_map(|verb| scope_actions(verb).iter().copied())
-        .collect();
-    Some(RequestedScope {
-        name: name.to_owned(),
-        actions,
-    })
 }
 
 /// The neutral actions one OCI scope verb requests: `pull` reads, `push` writes, `delete` deletes, and
@@ -233,6 +252,46 @@ pub(super) fn authorize_read(state: &ServingState, headers: &HeaderMap, name: &s
     presented
         .authorize(&index.acl, repo, name, Action::Read)
         .map_err(|denial| resource_challenge(state, headers, name, Action::Read, denial, presented.bad_token()))
+}
+
+pub(super) fn authorize_catalog(state: &ServingState, headers: &HeaderMap) -> Result<(), Response> {
+    if let Some(token) = authorization(headers).and_then(|header| header.strip_prefix("Bearer "))
+        && let Some(signer) = &state.signer
+    {
+        return match signer.verify(token) {
+            Ok((_, grants)) => authorize_exact_grants(&grants, CATALOG_GRANT, Action::Read)
+                .map_err(|denial| access_challenge(state, headers, CATALOG_SCOPE, denial, false)),
+            Err(_) => Err(access_challenge(state, headers, CATALOG_SCOPE, Denial::Forbidden, true)),
+        };
+    }
+    let requester = authorization(headers)
+        .filter(|header| header.starts_with("Basic "))
+        .and_then(|header| named_requester(state, header))
+        .unwrap_or(TokenRequester {
+            principal: Principal::Anonymous,
+            basic: None,
+        });
+    authorize_catalog_requester(state, &requester)
+        .map_err(|denial| access_challenge(state, headers, CATALOG_SCOPE, denial, false))
+}
+
+fn authorize_catalog_requester(state: &ServingState, requester: &TokenRequester<'_>) -> Result<(), Denial> {
+    for index in state.indexes.iter().filter(|index| index.ecosystem == Ecosystem::Oci) {
+        if index.acl.anonymous_read {
+            continue;
+        }
+        let principal = if let Some(basic) = requester.basic {
+            let principal = index.acl.identify(Some(basic.header), basic.now).principal;
+            if principal != requester.principal {
+                return Err(Denial::Forbidden);
+            }
+            principal
+        } else {
+            Principal::Anonymous
+        };
+        authorize_all(&principal, &index.acl, Action::Read)?;
+    }
+    Ok(())
 }
 
 /// Resolve a resource credential, retaining a verified bearer's embedded grants for authorization.
@@ -309,6 +368,16 @@ pub(super) fn resource_challenge(
     denial: Denial,
     bad_token: bool,
 ) -> Response {
+    access_challenge(state, headers, &resource_scope(name, action), denial, bad_token)
+}
+
+fn access_challenge(
+    state: &ServingState,
+    headers: &HeaderMap,
+    scope: &str,
+    denial: Denial,
+    bad_token: bool,
+) -> Response {
     let Some(signer) = &state.signer else {
         return if matches!(denial, Denial::Forbidden) {
             error_response(ErrorCode::Denied, "token does not grant this action")
@@ -323,7 +392,7 @@ pub(super) fn resource_challenge(
     } else {
         None
     };
-    challenge(signer.audience(), headers, Some(&resource_scope(name, action)), error)
+    challenge(signer.audience(), headers, Some(scope), error)
 }
 
 /// The `repository:<name>:<verbs>` scope a challenge advertises for an action, so a client knows the
@@ -382,38 +451,7 @@ fn authorization(headers: &HeaderMap) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, RequestedScope, parse_token_request, resource_scope, scope_actions};
-    use std::collections::BTreeSet;
-
-    fn scope_named<'a>(scopes: &'a [RequestedScope], name: &str) -> &'a BTreeSet<Action> {
-        &scopes
-            .iter()
-            .find(|scope| scope.name == name)
-            .expect("scope present")
-            .actions
-    }
-
-    #[test]
-    fn test_parse_scopes_maps_verbs_and_drops_unusable_scopes() {
-        // `+` is a query-encoded space, so one parameter can carry several scopes; a second parameter
-        // adds another. A non-repository resource, an empty name, and a two-field scope are all dropped.
-        let scopes = parse_token_request(
-            "service=peryx&scope=repository:team/app:pull,push+repository:lib/x:delete,bogus&\
-             scope=repository:all/y:*+registry:catalog:*+repository::pull+repository:onlytwo",
-            "peryx",
-        )
-        .unwrap();
-        assert_eq!(scopes.len(), 3);
-        assert_eq!(
-            scope_named(&scopes, "team/app"),
-            &BTreeSet::from([Action::Read, Action::Write])
-        );
-        assert_eq!(scope_named(&scopes, "lib/x"), &BTreeSet::from([Action::Delete]));
-        assert_eq!(
-            scope_named(&scopes, "all/y"),
-            &BTreeSet::from([Action::Read, Action::Write, Action::Delete])
-        );
-    }
+    use super::{Action, resource_scope, scope_actions};
 
     #[test]
     fn test_scope_actions_maps_each_verb() {

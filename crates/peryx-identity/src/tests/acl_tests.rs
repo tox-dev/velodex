@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use rstest::rstest;
 
-use crate::{Action, Denial, Glob, Grant, IndexAcl, NamedToken, Principal, authorize};
+use crate::{
+    Action, Denial, Glob, Grant, IndexAcl, NamedToken, Principal, authorize, authorize_all, authorize_exact_grants,
+};
 
 use super::basic;
 
@@ -93,6 +95,57 @@ fn test_authorize_without_a_project_asks_whether_any_project_is_open() {
         authorize(&subject("ci"), &acl, None, Action::Delete),
         Err(Denial::Forbidden)
     );
+}
+
+#[rstest]
+#[case::all_projects("ci", "*", Action::Read, Ok(()))]
+#[case::narrow_grant("ci", "team/*", Action::Read, Err(Denial::Forbidden))]
+#[case::wrong_action("ci", "*", Action::Write, Err(Denial::Forbidden))]
+#[case::unknown_subject("other", "*", Action::Read, Err(Denial::Forbidden))]
+fn test_authorize_all_requires_a_matching_wildcard_grant(
+    #[case] principal: &str,
+    #[case] projects: &str,
+    #[case] action: Action,
+    #[case] expected: Result<(), Denial>,
+) {
+    let acl = IndexAcl {
+        anonymous_read: false,
+        tokens: vec![token("ci", "s3cret", grant(&[projects], &[Action::Read]))],
+    };
+
+    assert_eq!(authorize_all(&subject(principal), &acl, action), expected);
+}
+
+#[rstest]
+#[case::public(true, true, Ok(()))]
+#[case::credential_required(false, true, Err(Denial::Unauthenticated))]
+#[case::unavailable(false, false, Err(Denial::Unavailable))]
+fn test_authorize_all_classifies_anonymous_reads(
+    #[case] anonymous_read: bool,
+    #[case] token_can_read: bool,
+    #[case] expected: Result<(), Denial>,
+) {
+    let tokens = token_can_read.then(|| token("ci", "s3cret", grant(&["*"], &[Action::Read])));
+    let acl = IndexAcl {
+        anonymous_read,
+        tokens: tokens.into_iter().collect(),
+    };
+
+    assert_eq!(authorize_all(&Principal::Anonymous, &acl, Action::Read), expected);
+}
+
+#[rstest]
+#[case::exact("registry:catalog", Action::Read, Ok(()))]
+#[case::glob_does_not_expand("other", Action::Read, Err(Denial::Forbidden))]
+#[case::wrong_action("registry:catalog", Action::Write, Err(Denial::Forbidden))]
+fn test_authorize_exact_grants_does_not_expand_globs(
+    #[case] resource: &str,
+    #[case] action: Action,
+    #[case] expected: Result<(), Denial>,
+) {
+    let grants = [grant(&["registry:catalog", "*"], &[Action::Read])];
+
+    assert_eq!(authorize_exact_grants(&grants, resource, action), expected);
 }
 
 #[test]

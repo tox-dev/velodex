@@ -82,6 +82,23 @@ actions = ["read", "write"]
 expires_at = "2027-01-01T00:00:00Z"
 ```
 
+## Allow registry catalog listing
+
+`GET /v2/_catalog` spans the configured OCI indexes, so it uses `registry:catalog:*` instead of a repository pull scope.
+Give the same named credential an explicit `projects = ["*"]` read grant on each private OCI index in the catalog. A
+`team/*` grant authorizes matching pulls but cannot list the catalog.
+
+Test the scope with these requests.
+
+```shell
+token=$(curl -sS -u ci:<ci-token> \
+  'http://127.0.0.1:4433/v2/token?service=peryx&scope=registry%3Acatalog%3A%2A' | jq -r .token)
+curl -sS --oauth2-bearer "$token" http://127.0.0.1:4433/v2/_catalog
+```
+
+peryx names `registry:catalog:*` in the `401` challenge for a missing credential. It returns `401 insufficient_scope`
+for a valid token without that exact grant.
+
 ## Close a whole server
 
 To make every index private with one knob, set the server-wide default instead of touching each index:

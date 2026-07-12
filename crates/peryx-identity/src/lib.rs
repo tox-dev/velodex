@@ -23,7 +23,7 @@ use base64::engine::general_purpose::STANDARD;
 
 pub use acl::{
     Action, Denial, Glob, Grant, Identity, IndexAcl, NamedToken, Principal, UPLOAD_TOKEN_NAME, authorize,
-    authorize_grants,
+    authorize_all, authorize_exact_grants, authorize_grants,
 };
 pub use token::{Signer, TokenError};
 

@@ -72,6 +72,145 @@ async fn test_v2_accepts_a_valid_basic_credential() {
     assert_eq!(status, StatusCode::OK);
 }
 
+#[rstest]
+#[case::anonymous(None, "Bearer realm=\"/v2/token\",service=\"peryx\",scope=\"registry:catalog:*\"")]
+#[case::invalid_bearer(
+    Some("Bearer forged"),
+    "Bearer realm=\"/v2/token\",service=\"peryx\",scope=\"registry:catalog:*\",error=\"invalid_token\""
+)]
+#[tokio::test]
+async fn test_catalog_rejects_unverified_credentials(
+    #[case] authorization: Option<&str>,
+    #[case] expected_challenge: &str,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = catalog_registry(&dir);
+    publish_tag(&app, "store/team/app").await;
+    let headers = authorization.map_or_else(Vec::new, |value| vec![("authorization", value)]);
+    let (status, headers, body) = send_with(&app, Method::GET, "/v2/_catalog", &headers).await;
+
+    assert_eq!(
+        (
+            status,
+            headers[header::WWW_AUTHENTICATE].to_str().unwrap(),
+            String::from_utf8_lossy(&body).contains("store/team/app"),
+        ),
+        (StatusCode::UNAUTHORIZED, expected_challenge, false)
+    );
+}
+
+#[rstest]
+#[case::repository("repository:store/team/app:pull")]
+#[case::catalog_action("registry:catalog:pull")]
+#[tokio::test]
+async fn test_catalog_rejects_a_token_without_catalog_scope(#[case] requested_scope: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = catalog_registry(&dir);
+    publish_tag(&app, "store/team/app").await;
+    let (_, token) = request_token(
+        &app,
+        &format!("service=peryx&scope={requested_scope}"),
+        Some(&auth(SECRET)),
+    )
+    .await;
+
+    let (status, headers, _) = send_with(
+        &app,
+        Method::GET,
+        "/v2/_catalog",
+        &[("authorization", &format!("Bearer {token}"))],
+    )
+    .await;
+
+    assert_eq!(
+        (status, headers[header::WWW_AUTHENTICATE].to_str().unwrap()),
+        (
+            StatusCode::UNAUTHORIZED,
+            "Bearer realm=\"/v2/token\",service=\"peryx\",scope=\"registry:catalog:*\",error=\"insufficient_scope\"",
+        )
+    );
+}
+
+#[rstest]
+#[case::basic(false)]
+#[case::bearer(true)]
+#[tokio::test]
+async fn test_catalog_accepts_authorized_credentials(#[case] bearer: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = catalog_registry(&dir);
+    publish_tag(&app, "store/team/app").await;
+    let (token_status, authorization) = if bearer {
+        let (status, token) = request_token(&app, "service=peryx&scope=registry:catalog:*", Some(&auth(SECRET))).await;
+        (status, format!("Bearer {token}"))
+    } else {
+        (StatusCode::OK, auth(SECRET))
+    };
+
+    let (status, _, body) = send_with(&app, Method::GET, "/v2/_catalog", &[("authorization", &authorization)]).await;
+
+    assert_eq!(
+        (
+            token_status,
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["repositories"].clone(),
+        ),
+        (StatusCode::OK, StatusCode::OK, serde_json::json!(["store/team/app"]),)
+    );
+}
+
+#[rstest]
+#[case::narrow_grant(false)]
+#[case::different_subjects(true)]
+#[tokio::test]
+async fn test_catalog_scope_requires_access_to_each_private_index(#[case] different_subjects: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = catalog_denied_registry(&dir, different_subjects);
+    let (token_status, token) =
+        request_token(&app, "service=peryx&scope=registry:catalog:*", Some(&auth(SECRET))).await;
+
+    let (status, _, _) = send_with(
+        &app,
+        Method::GET,
+        "/v2/_catalog",
+        &[("authorization", &format!("Bearer {token}"))],
+    )
+    .await;
+
+    assert_eq!((token_status, status), (StatusCode::OK, StatusCode::UNAUTHORIZED));
+}
+
+fn catalog_registry(dir: &tempfile::TempDir) -> axum::Router {
+    let index = scoped_index("store", "store", "ci", SECRET, "*", &[Action::Read, Action::Write]);
+    realm_app(dir, vec![index]).1
+}
+
+async fn publish_tag(app: &axum::Router, name: &str) {
+    let (status, _, response) = send_body(
+        app,
+        Method::PUT,
+        &format!("/v2/{name}/manifests/latest"),
+        &[("authorization", &auth(SECRET)), ("content-type", MANIFEST_TYPE)],
+        br#"{"schemaVersion":2}"#.to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{response:?}");
+}
+
+fn catalog_denied_registry(dir: &tempfile::TempDir, different_subjects: bool) -> axum::Router {
+    if !different_subjects {
+        return team_registry(dir);
+    }
+    let actions = &[Action::Read, Action::Write];
+    realm_app(
+        dir,
+        vec![
+            scoped_index("source", "source", "ci", SECRET, "*", actions),
+            scoped_index("target", "target", "ci", "other", "*", actions),
+        ],
+    )
+    .1
+}
+
 #[tokio::test]
 async fn test_token_endpoint_issues_an_anonymous_token_that_pulls_a_public_repo() {
     let dir = tempfile::tempdir().unwrap();
@@ -302,17 +441,14 @@ async fn test_token_endpoint_rejects_an_invalid_service(#[case] query: &str) {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+#[rstest]
+#[case::unresolvable("repository:ghost/app:pull")]
+#[case::malformed("invalid")]
 #[tokio::test]
-async fn test_token_endpoint_ignores_an_unresolvable_scope() {
+async fn test_token_endpoint_ignores_an_ungrantable_scope(#[case] scope: &str) {
     let dir = tempfile::tempdir().unwrap();
     let app = team_registry(&dir);
-    // A scope naming no configured index resolves to nothing; the token is still issued, just empty.
-    let (status, _) = request_token(
-        &app,
-        "service=peryx&scope=repository:ghost/app:pull",
-        Some(&auth(SECRET)),
-    )
-    .await;
+    let (status, _) = request_token(&app, &format!("service=peryx&scope={scope}"), Some(&auth(SECRET))).await;
     assert_eq!(status, StatusCode::OK);
 }
 

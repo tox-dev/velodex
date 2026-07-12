@@ -194,8 +194,10 @@ impl EcosystemDriver for OciRegistry {
             return error_response(ErrorCode::NameUnknown, "repository name unknown");
         };
         if read
-            && let Some(name) = read_name(&route)
-            && let Err(response) = auth::authorize_read(&state, &parts.headers, name)
+            && let Err(response) = match &route {
+                OciRoute::Catalog => auth::authorize_catalog(&state, &parts.headers),
+                route => read_name(route).map_or(Ok(()), |name| auth::authorize_read(&state, &parts.headers, name)),
+            }
         {
             return response;
         }

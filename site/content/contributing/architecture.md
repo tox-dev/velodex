@@ -470,16 +470,17 @@ named tokens, each with a secret, grants, and an optional expiry. Two calls do t
 `authorize(principal, acl, project, action)` answers the one access question and returns a typed `Denial` (unavailable,
 unauthenticated, or forbidden) an ecosystem maps to its own status. The crate also mints and verifies peryx's
 audience-bound JWTs through `Signer`, so the signing key and audience check remain identity state rather than protocol
-state.
+state. Registry-wide decisions call `authorize_all`. It requires an explicit `*` grant because existing projects cannot
+prove access to future projects. Exact token grants keep registry resources separate from project glob matching.
 
 **Extension.** The neutral core knows `(Principal, IndexAcl, project, Action)` and nothing about how a client presented
 itself. Each ecosystem reduces its wire protocol to those four before it calls in. PyPI reads a Basic
 `__token__:<token>` header on its upload path and calls `authorize` with `Write` or `Delete`; OCI resource routes do the
 same for a push or delete, and the Bearer realm parses an OCI `scope=repository:<name>:pull,push` string into a project
-and action there, never in the core. The grant grammar is deliberately glob-over-project so it maps onto a PyPI project
-name and an OCI repository name alike without the core learning either. A contributor keeps the boundary by asking one
-question: does this name a wire format? If so it belongs in the ecosystem crate; if it is a principal, an action, or a
-grant, it belongs here.
+and action in the OCI crate. The registry catalog scope maps to an exact internal grant after the core confirms
+all-project access on each index. Project globs cover both PyPI project names and OCI repository names without teaching
+the core either wire format. Contributors keep wire formats in ecosystem crates; principals and grants belong in the
+identity crate.
 
 {% mermaid() %}
 flowchart TD
