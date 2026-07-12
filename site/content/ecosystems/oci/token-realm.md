@@ -49,6 +49,15 @@ Public versus private is therefore a decision the token endpoint makes per scope
 resource route. This is what the distribution spec means when it says an unauthenticated client still gets a token, and
 that a client with access to only a subset of the requested scope is not an error.
 
+## Why the catalog has a registry scope
+
+Repository reads use a boundary such as `repository:team/app:pull`, but `GET /v2/_catalog` names no repository. It
+returns names from the configured OCI indexes, so a repository grant cannot authorize it without exposing private names.
+
+Distribution reserves `registry` for lookups. Its reference implementation asks for `registry:catalog:*`, which peryx
+grants after the subject proves access to each private OCI index with an explicit all-repository grant. Adding a
+repository does not widen an existing catalog credential.
+
 ## Why the challenge does not break anonymous pulls
 
 The worry is that a blanket `401` on `/v2/` forces every client, logged in or not, to authenticate. For Bearer it does

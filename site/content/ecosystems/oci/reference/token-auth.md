@@ -46,7 +46,7 @@ validation prevents another service that shares the key from presenting its toke
 | Parameter | Meaning                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------- |
 | `service` | Required. The client echoes the challenge's service name, `peryx`.                       |
-| `scope`   | An access request, `repository:<name>:<actions>`. Repeatable, or space-separated in one. |
+| `scope`   | A repository or registry catalog access request. Repeat it or separate scopes by space.  |
 | `account` | The username the client logged in as. Recorded for audit; not an input to authorization. |
 
 Authentication:
@@ -74,9 +74,9 @@ public repository still gets a `pull` token, and one for a private repository ge
 
 ## Scope grammar
 
-A scope is `repository:<name>:<actions>`. `<name>` is the full `/v2/` repository name, index route prefix included
-(`team/app`, `dockerhub/library/alpine`). `<actions>` is a comma-separated list; peryx maps each verb to a neutral
-[action](@/core/authentication.md):
+A repository scope is `repository:<name>:<actions>`. Include the index route prefix in the full `/v2/` repository name,
+such as `team/app` or `dockerhub/library/alpine`. `<actions>` is a comma-separated list; peryx maps each verb to a
+neutral [action](@/core/authentication.md):
 
 | Scope verb | Neutral action      | Granted for                |
 | ---------- | ------------------- | -------------------------- |
@@ -85,8 +85,12 @@ A scope is `repository:<name>:<actions>`. `<name>` is the full `/v2/` repository
 | `delete`   | delete              | `DELETE`                   |
 | `*`        | read, write, delete | any of the above           |
 
-An unknown verb requests nothing. A scope whose resource type is not `repository`, whose name is empty, or that resolves
-to no configured index is dropped from the request.
+An unknown verb requests nothing; peryx drops a repository scope with an empty name or no configured index.
+
+Distribution assigns `registry:catalog:*` to the repository catalog. peryx grants it when the requester may read each
+OCI index. A public index needs no credential; a private index requires an explicit `projects = ["*"]` read grant. The
+same subject must authenticate on each private index. A `team/*` grant cannot list the catalog. Unknown resource types
+and registry names request nothing; catalog actions other than `*` behave the same way.
 
 ## Resource routes
 
@@ -111,6 +115,9 @@ The `error` follows [RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750#sec
 
 The `scope` names what the request needed, so a client can request the right token and retry. When no signing key is
 configured, resource routes fall back to the Basic challenge (`WWW-Authenticate: Basic realm="peryx"`) instead.
+
+`GET /v2/_catalog` uses the same refusal shape with `scope="registry:catalog:*"`. peryx returns `insufficient_scope` for
+a repository token and checks the catalog grant before returning private repository names.
 
 ## See also
 
