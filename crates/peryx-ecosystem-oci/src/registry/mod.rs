@@ -236,6 +236,9 @@ impl EcosystemDriver for OciRegistry {
             OciRoute::UploadSession { name, session } if method == Method::PUT => {
                 self.finish_upload(&state, headers, query, &name, &session, body).await
             }
+            OciRoute::UploadSession { name, session } if method == Method::DELETE => {
+                self.cancel_upload(&state, headers, &name, &session).await
+            }
             _ => Ok(error_response(ErrorCode::Unsupported, "operation not supported")),
         };
         result.unwrap_or_else(ServeError::into_response)

@@ -178,6 +178,12 @@ impl OciRegistry {
         if policy_blocks(index, PolicyAction::Serve, repo) {
             return Ok(error_response(ErrorCode::NameUnknown, "repository name unknown"));
         }
+        if !crate::name::valid_content_digest(digest) {
+            return Ok(error_response(
+                ErrorCode::DigestInvalid,
+                "referrers digest is malformed",
+            ));
+        }
         let mut seen = std::collections::HashSet::new();
         let mut manifests = Vec::new();
         let mut add = |descriptor: serde_json::Value| {

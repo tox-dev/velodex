@@ -85,6 +85,26 @@ impl OciRegistry {
         }
     }
 
+    /// Cancel an open upload session (spec end-14): drop its staged bytes and answer `204`, or `404`
+    /// when the id names no session this index opened. Dropping the session unlinks its temp file, so a
+    /// client that aborts a push releases the server resources it held.
+    pub(super) async fn cancel_upload(
+        &self,
+        state: &ServingState,
+        headers: &HeaderMap,
+        name: &str,
+        session: &str,
+    ) -> Result<Response, ServeError> {
+        let (index, _, _) = match resolve_writable(state, name, headers, Action::Write) {
+            Ok(target) => target,
+            Err(response) => return Ok(response),
+        };
+        Ok(match self.take_session(&index.name, session).await {
+            Some(_) => StatusCode::NO_CONTENT.into_response(),
+            None => error_response(ErrorCode::BlobUploadUnknown, "upload unknown"),
+        })
+    }
+
     /// Report an open upload session's progress: `204` with the bytes received so far.
     pub(super) async fn upload_status(
         &self,
@@ -137,7 +157,7 @@ impl OciRegistry {
         if !chunk_start(headers).continues_at(entry.offset) {
             let offset = entry.offset;
             self.uploads.lock().await.insert(session.to_owned(), entry);
-            return Ok(range_not_satisfiable(offset));
+            return Ok(range_not_satisfiable(name, session, offset));
         }
         let entry = self.append_or_restore(session, entry, body).await?;
         let offset = entry.offset;
@@ -166,7 +186,7 @@ impl OciRegistry {
         if !chunk_start(headers).continues_at(entry.offset) {
             let offset = entry.offset;
             self.uploads.lock().await.insert(session.to_owned(), entry);
-            return Ok(range_not_satisfiable(offset));
+            return Ok(range_not_satisfiable(name, session, offset));
         }
         let entry = self.append_or_restore(session, entry, body).await?;
         // A `PUT` without a digest cannot commit, but the staged bytes are still good: keep the
@@ -276,10 +296,14 @@ fn chunk_start(headers: &HeaderMap) -> ChunkStart {
     start.trim().parse().map_or(ChunkStart::Malformed, ChunkStart::At)
 }
 
-/// `416 Range Not Satisfiable` for an out-of-order chunk, reporting the bytes already received.
-fn range_not_satisfiable(offset: u64) -> Response {
+/// `416 Range Not Satisfiable` for an out-of-order chunk, reporting the bytes already received. It
+/// carries the session's `Location` and `Docker-Upload-UUID` alongside `Range` so a client that sent
+/// the chunk out of order has the URL and id to resume against instead of restarting the upload.
+fn range_not_satisfiable(name: &str, session: &str, offset: u64) -> Response {
     Response::builder()
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::LOCATION, format!("/v2/{name}/blobs/uploads/{session}"))
+        .header(DOCKER_UPLOAD_UUID, session)
         .header(header::RANGE, format!("0-{}", offset.saturating_sub(1)))
         .body(Body::empty())
         .expect("range response builds from validated parts")
