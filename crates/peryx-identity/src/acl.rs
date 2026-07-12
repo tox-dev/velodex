@@ -261,6 +261,45 @@ impl Glob {
         Self(pattern.into())
     }
 
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether some value beginning with `prefix` can match this pattern.
+    #[must_use]
+    pub fn matches_prefix(&self, prefix: &str) -> bool {
+        self.remainders_after(prefix).next().is_some()
+    }
+
+    /// Pattern suffixes that can still match after `prefix` has been consumed.
+    pub fn remainders_after<'a>(&'a self, prefix: &str) -> impl Iterator<Item = &'a str> {
+        let pattern = self.0.as_bytes();
+        let mut reachable = vec![false; pattern.len() + 1];
+        let mut next = vec![false; pattern.len() + 1];
+        reachable[0] = true;
+        close_stars(pattern, &mut reachable);
+        for byte in prefix.bytes() {
+            next.fill(false);
+            for (position, &active) in reachable[..pattern.len()].iter().enumerate() {
+                if active {
+                    if pattern[position] == b'*' {
+                        next[position] = true;
+                    } else if pattern[position] == byte {
+                        next[position + 1] = true;
+                    }
+                }
+            }
+            close_stars(pattern, &mut next);
+            std::mem::swap(&mut reachable, &mut next);
+        }
+        reachable
+            .into_iter()
+            .enumerate()
+            .filter(|(_, active)| *active)
+            .map(|(position, _)| &self.0[position..])
+    }
+
     /// Whether `project` matches this pattern, by the usual backtracking wildcard walk: on a mismatch,
     /// return to the last `*` and let it swallow one more character.
     #[must_use]
@@ -285,5 +324,13 @@ impl Glob {
             }
         }
         pattern[at..].iter().all(|byte| *byte == b'*')
+    }
+}
+
+fn close_stars(pattern: &[u8], reachable: &mut [bool]) {
+    for position in 0..pattern.len() {
+        if reachable[position] && pattern[position] == b'*' {
+            reachable[position + 1] = true;
+        }
     }
 }

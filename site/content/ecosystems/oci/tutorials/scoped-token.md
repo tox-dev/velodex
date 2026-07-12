@@ -81,6 +81,10 @@ The push succeeds. Pull it back to confirm the round trip:
 $ docker pull localhost:4433/team/app:1.0
 ```
 
+The same credential governs browse and search. If you later set `anonymous_read = false`, server rendering limits the
+repository page to readable data. Hydrated `/+ui` requests and `/+search` enforce the same boundary, so an anonymous
+browser cannot disclose the repository through another route.
+
 ## Watch a push outside the scope get refused
 
 Now tag the same image under a repository the glob does not cover and push it.

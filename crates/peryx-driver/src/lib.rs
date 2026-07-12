@@ -9,6 +9,7 @@
 //! The router that dispatches to a driver sits *above* this crate, in `peryx-http`. An ecosystem
 //! therefore never depends on the serving layer that hosts it, only on the seam it fills.
 
+pub mod access;
 pub mod body;
 pub mod discovery;
 pub mod download;

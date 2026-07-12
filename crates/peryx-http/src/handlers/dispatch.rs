@@ -67,7 +67,7 @@ pub async fn dispatch_get(
     };
     match rest {
         "+api" | "+api/" => index_api(&state, position, &uri, &headers),
-        "+search" | "+search/" => index_search(state, position, &uri).await,
+        "+search" | "+search/" => index_search(state, position, &uri, &headers).await,
         _ => {
             let serving = match driver_at(&state, position) {
                 Ok(serving) => serving.clone(),

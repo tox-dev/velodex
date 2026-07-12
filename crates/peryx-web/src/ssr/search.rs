@@ -10,7 +10,7 @@ use crate::model::UiSearchPage;
 ///
 /// # Errors
 /// Returns a user-visible message when search fails.
-pub fn search(query: &str, source_type: &str, page: usize, page_size: usize) -> Result<UiSearchPage, String> {
+pub async fn search(query: &str, source_type: &str, page: usize, page_size: usize) -> Result<UiSearchPage, String> {
     let app = expect_context::<Arc<AppState>>();
     let params = SearchParams {
         query: query.to_owned(),
@@ -22,10 +22,17 @@ pub fn search(query: &str, source_type: &str, page: usize, page_size: usize) -> 
             _ => 25,
         },
     };
-    let response = app
-        .search
-        .search(&app.search_ctx(), params)
-        .map_err(|err| format!("package search: {err}"))?;
+    let access = if app.indexes.iter().all(|index| index.acl.anonymous_read) {
+        None
+    } else {
+        Some(super::read_access(&app).await?.search_access(&app.indexes))
+    };
+    let response = if let Some(access) = access {
+        app.search.search_authorized(&app.search_ctx(), params, &access)
+    } else {
+        app.search.search(&app.search_ctx(), params)
+    }
+    .map_err(|err| format!("package search: {err}"))?;
     let value = serde_json::to_value(response).map_err(|err| format!("search result: {err}"))?;
     Ok(UiSearchPage::from_search(&value))
 }

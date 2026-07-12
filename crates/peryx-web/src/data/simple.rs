@@ -15,7 +15,7 @@ pub async fn load_projects(route: String) -> Result<Vec<String>, String> {
     }
     #[cfg(feature = "ssr")]
     {
-        crate::ssr::projects(&route)
+        crate::ssr::projects(&route).await
     }
     #[cfg(all(not(feature = "ssr"), feature = "hydrate"))]
     {

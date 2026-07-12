@@ -9,10 +9,18 @@ use peryx_driver::AppState;
 /// # Errors
 /// Returns a user-visible message when the index is unknown, its ecosystem is not wired in, or its
 /// project list cannot be read.
-pub fn projects(route: &str) -> Result<Vec<String>, String> {
+pub async fn projects(route: &str) -> Result<Vec<String>, String> {
     let app = expect_context::<Arc<AppState>>();
     let (position, driver) = resolve(&app, route)?;
-    driver.project_names(&app.serving, position)
+    if app.index_at(position).acl.anonymous_read {
+        return driver.project_names(&app.serving, position);
+    }
+    let access = super::read_access(&app).await?;
+    let access = access.for_index(app.index_at(position));
+    access.authorize_any_project().map_err(super::access_error)?;
+    let mut names = driver.project_names(&app.serving, position)?;
+    names.retain(|project| access.authorize_project(project).is_ok());
+    Ok(names)
 }
 
 /// One project's browse view: a file listing with metadata or a list of references, produced by the
@@ -23,6 +31,7 @@ pub fn projects(route: &str) -> Result<Vec<String>, String> {
 pub async fn project_view(route: &str, project: &str) -> Result<Option<UiProjectView>, String> {
     let app = expect_context::<Arc<AppState>>();
     let (position, driver) = resolve(&app, route)?;
+    authorize_project(&app, position, project).await?;
     driver
         .browse_project(app.serving.clone(), position, project.to_owned())
         .await
@@ -35,6 +44,7 @@ pub async fn project_view(route: &str, project: &str) -> Result<Option<UiProject
 pub async fn manifest(route: &str, repo: &str, reference: &str) -> Result<Option<UiManifest>, String> {
     let app = expect_context::<Arc<AppState>>();
     let (position, driver) = resolve(&app, route)?;
+    authorize_project(&app, position, repo).await?;
     driver
         .manifest_view(app.serving.clone(), position, repo.to_owned(), reference.to_owned())
         .await
@@ -47,6 +57,7 @@ pub async fn manifest(route: &str, repo: &str, reference: &str) -> Result<Option
 pub async fn layer_members(route: &str, repo: &str, digest: &str) -> Result<Vec<UiMember>, String> {
     let app = expect_context::<Arc<AppState>>();
     let (position, driver) = resolve(&app, route)?;
+    authorize_project(&app, position, repo).await?;
     driver
         .artifact_members(app.serving.clone(), position, repo.to_owned(), digest.to_owned())
         .await
@@ -65,6 +76,7 @@ pub async fn layer_chunk(
 ) -> Result<UiMemberChunk, String> {
     let app = expect_context::<Arc<AppState>>();
     let (position, driver) = resolve(&app, route)?;
+    authorize_project(&app, position, repo).await?;
     driver
         .artifact_member_chunk(
             app.serving.clone(),
@@ -91,4 +103,15 @@ fn resolve<'a>(
         .driver_for(app.index_at(position).ecosystem)
         .ok_or_else(|| format!("index {route:?} has no ecosystem driver"))?;
     Ok((position, driver))
+}
+
+async fn authorize_project(app: &AppState, position: usize, project: &str) -> Result<(), String> {
+    if app.index_at(position).acl.anonymous_read {
+        return Ok(());
+    }
+    super::read_access(app)
+        .await?
+        .for_index(app.index_at(position))
+        .authorize_project(project)
+        .map_err(super::access_error)
 }

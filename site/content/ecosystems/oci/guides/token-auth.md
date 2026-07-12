@@ -45,6 +45,10 @@ actions = ["read", "write"]
 A client pulls after `docker login localhost:4433 --username ci --password <ci-token>`. A pull of a repository the token
 does not cover, or an anonymous pull, gets `401 insufficient_scope`.
 
+The gate covers every web UI read; server rendering uses the incoming credential. After hydration, same-origin `/+ui`
+and `/+search` requests apply the same ACL. Put the UI behind an authenticating proxy or send an `Authorization` header
+to browse a private index. Search omits inaccessible repositories before calculating totals and pages.
+
 ## Scope a token to some repositories
 
 `projects` is a list of globs. `*` matches any run of characters, `/` included, so `team/*` covers every repository

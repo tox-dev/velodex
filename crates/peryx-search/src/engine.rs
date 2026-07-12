@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 
 use tantivy::collector::{Count, TopDocs};
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{AllQuery, BooleanQuery, Query, RegexQuery, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, EmptyQuery, Query, RegexQuery, TermQuery};
 use tantivy::schema::document::{TantivyDocument, Value as _};
 use tantivy::schema::{FAST, Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions};
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer, TokenizerManager};
 use tantivy::{Index as TantivyIndex, IndexReader, Order, Term};
 
+use crate::access::{SearchAccess, SearchAccessPattern};
 use crate::context::SearchCtx;
 use crate::error::SearchError;
 use crate::indexer::{CompositeIndexer, PackageDocument, PackageIndexer, default_indexer};
@@ -104,8 +105,30 @@ impl PackageSearch {
     /// # Errors
     /// Returns an error if the derived index cannot refresh or the query is invalid.
     pub fn search(&self, ctx: &SearchCtx<'_>, params: SearchParams) -> Result<SearchResponse, SearchError> {
+        self.search_with_access(ctx, params, None)
+    }
+
+    /// Apply access inside the query so totals and pages contain only readable resources.
+    ///
+    /// # Errors
+    /// Returns an error if the derived index cannot refresh or the query is invalid.
+    pub fn search_authorized(
+        &self,
+        ctx: &SearchCtx<'_>,
+        params: SearchParams,
+        access: &SearchAccess,
+    ) -> Result<SearchResponse, SearchError> {
+        self.search_with_access(ctx, params, Some(access))
+    }
+
+    fn search_with_access(
+        &self,
+        ctx: &SearchCtx<'_>,
+        params: SearchParams,
+        access: Option<&SearchAccess>,
+    ) -> Result<SearchResponse, SearchError> {
         self.ensure_current(ctx)?;
-        let query = self.query(&params)?;
+        let query = self.query(&params, access)?;
         let searcher = self.reader.searcher();
         let offset = params.offset();
         let top_docs = TopDocs::with_limit(params.page_size)
@@ -164,7 +187,7 @@ impl PackageSearch {
         Ok(())
     }
 
-    fn query(&self, params: &SearchParams) -> Result<Box<dyn Query>, SearchError> {
+    fn query(&self, params: &SearchParams, access: Option<&SearchAccess>) -> Result<Box<dyn Query>, SearchError> {
         let mut queries = vec![self.text_query(params.query.trim())?];
         if let Some(source) = params.source.package_source() {
             queries.push(Box::new(TermQuery::new(
@@ -178,10 +201,36 @@ impl PackageSearch {
                 IndexRecordOption::Basic,
             )));
         }
+        if let Some(access) = access {
+            queries.push(self.access_query(access)?);
+        }
         Ok(if queries.len() == 1 {
             queries.pop().expect("query exists")
         } else {
             Box::new(BooleanQuery::intersection(queries))
+        })
+    }
+
+    fn access_query(&self, access: &SearchAccess) -> Result<Box<dyn Query>, SearchError> {
+        let mut queries = access
+            .patterns
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|SearchAccessPattern { route, glob }| {
+                let route_query = Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.route, route),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>;
+                RegexQuery::from_pattern(&glob_regex(glob), self.fields.normalized).map(|project_query| {
+                    Box::new(BooleanQuery::intersection(vec![route_query, Box::new(project_query)])) as Box<dyn Query>
+                })
+            })
+            .collect::<tantivy::Result<Vec<Box<dyn Query>>>>()?;
+        Ok(match queries.len() {
+            0 => Box::new(EmptyQuery),
+            1 => queries.pop().expect("query exists"),
+            _ => Box::new(BooleanQuery::union(queries)),
         })
     }
 
@@ -364,11 +413,26 @@ pub fn truncate_to_chars(value: &str, max_bytes: usize) -> &str {
 
 fn escape_regex(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
+    push_escaped_regex(&mut escaped, value);
+    escaped
+}
+
+fn glob_regex(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len());
+    let mut parts = value.split('*');
+    push_escaped_regex(&mut pattern, parts.next().unwrap_or_default());
+    for part in parts {
+        pattern.push_str(".*");
+        push_escaped_regex(&mut pattern, part);
+    }
+    pattern
+}
+
+fn push_escaped_regex(pattern: &mut String, value: &str) {
     for char in value.chars() {
         if REGEX_SPECIALS.contains(char) {
-            escaped.push('\\');
+            pattern.push('\\');
         }
-        escaped.push(char);
+        pattern.push(char);
     }
-    escaped
 }

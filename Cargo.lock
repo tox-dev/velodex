@@ -3704,6 +3704,7 @@ dependencies = [
  "peryx-core",
  "peryx-driver",
  "peryx-http",
+ "peryx-identity",
  "peryx-search",
  "peryx-storage",
  "pulldown-cmark",

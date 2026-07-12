@@ -58,6 +58,11 @@ Distribution reserves `registry` for lookups. Its reference implementation asks 
 grants after the subject proves access to each private OCI index with an explicit all-repository grant. Adding a
 repository does not widen an existing catalog credential.
 
+The registry protocol is not the only path to stored data. Both server rendering and hydrated browse requests resolve
+the request credential before reaching an ecosystem driver. Search folds readable resource globs into its Tantivy query,
+so an inaccessible repository contributes neither a row nor a total. This shared boundary keeps private manifests and
+layers out of presentation routes beyond `/v2/`.
+
 ## Why the challenge does not break anonymous pulls
 
 The worry is that a blanket `401` on `/v2/` forces every client, logged in or not, to authenticate. For Bearer it does

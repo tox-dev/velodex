@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Write as _;
 
@@ -10,12 +11,13 @@ use peryx_core::path::local_file_url;
 use peryx_ecosystem_pypi::store::PypiStore as _;
 use peryx_ecosystem_pypi::upload::Uploaded;
 use peryx_ecosystem_pypi::{CoreMetadata, File, Provenance, Yanked, to_json};
+use peryx_identity::{Action, Glob, Grant, Principal, Signer};
 use peryx_storage::blob::Digest;
 use rstest::{fixture, rstest};
 use sha2::{Digest as _, Sha256};
 use tower::ServiceExt as _;
 
-use crate::config::{Config, IndexConfig, IndexKind, SecretSource};
+use crate::config::{Config, IndexConfig, IndexKind, SecretSource, TokenConfig};
 use crate::server::{build_router, build_state, router_for};
 
 #[fixture]
@@ -31,6 +33,13 @@ fn filter_router() -> (tempfile::TempDir, axum::Router) {
     let state = build_state(&ui_config(&dir)).unwrap();
     put_filter_files(&state);
     (dir, router_for(state))
+}
+
+#[fixture]
+fn private_oci_ui_router() -> (tempfile::TempDir, axum::Router) {
+    let dir = tempfile::tempdir().unwrap();
+    let router = build_router(&private_oci_ui_config(&dir)).unwrap();
+    (dir, router)
 }
 
 fn ui_config(dir: &tempfile::TempDir) -> Config {
@@ -302,10 +311,197 @@ async fn test_ui_oci_manifest_shows_config_and_layers() {
     assert!(body.contains("Layers"), "layer heading missing: {body}");
 }
 
+#[rstest]
+#[case::anonymous(String::new(), false)]
+#[case::reader(reader_authorization(), true)]
+#[tokio::test]
+async fn test_ui_private_oci_repository_rendering_follows_read_acl(
+    #[case] authorization: String,
+    #[case] expected: bool,
+    private_oci_ui_router: (tempfile::TempDir, axum::Router),
+) {
+    let (_dir, router) = private_oci_ui_router;
+    push_oci_image(&router).await;
+
+    let (status, body) = get_authorized(&router, "/browse?index=images&project=app", &authorization).await;
+    assert_eq!((status, body.contains("ref=1.0")), (StatusCode::OK, expected), "{body}");
+}
+
+#[rstest]
+#[case::projects("/+ui/projects?index=images")]
+#[case::project("/+ui/project?index=images&project=app")]
+#[case::manifest("/+ui/manifest?index=images&project=app&ref=1.0")]
+#[case::members("/+ui/members?index=images&project=app&digest=sha256:a")]
+#[case::member("/+ui/member?index=images&project=app&digest=sha256:a&member=f")]
+#[tokio::test]
+async fn test_ui_private_oci_data_routes_reject_anonymous_reads(
+    #[case] uri: &str,
+    private_oci_ui_router: (tempfile::TempDir, axum::Router),
+) {
+    let (_dir, router) = private_oci_ui_router;
+
+    let (status, _) = get(&router, uri).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_ui_private_oci_data_route_challenges_for_basic_credentials(
+    private_oci_ui_router: (tempfile::TempDir, axum::Router),
+) {
+    let (_dir, router) = private_oci_ui_router;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/+ui/project?index=images&project=app")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[header::WWW_AUTHENTICATE].to_str().unwrap(),
+        ),
+        (StatusCode::UNAUTHORIZED, "Basic realm=\"peryx\"")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_ui_private_oci_data_api_accepts_its_bearer(private_oci_ui_router: (tempfile::TempDir, axum::Router)) {
+    let (_dir, router) = private_oci_ui_router;
+    push_oci_image(&router).await;
+    let bearer = reader_bearer(&router).await;
+
+    let (status, body) = get_authorized(&router, "/+ui/manifest?index=images&project=app&ref=1.0", &bearer).await;
+    assert_eq!(
+        (status, body.contains("application/vnd.oci.image.manifest.v1+json")),
+        (StatusCode::OK, true),
+        "{body}"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_ui_private_oci_project_list_accepts_its_bearer(private_oci_ui_router: (tempfile::TempDir, axum::Router)) {
+    let (_dir, router) = private_oci_ui_router;
+    push_oci_image(&router).await;
+    let bearer = reader_bearer(&router).await;
+
+    let (status, body) = get_authorized(&router, "/+ui/projects?index=images", &bearer).await;
+
+    assert_eq!(
+        (status, serde_json::from_str::<serde_json::Value>(&body).unwrap()),
+        (StatusCode::OK, serde_json::json!(["app"]))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_ui_private_oci_project_list_rejects_bearer_for_another_index(
+    private_oci_ui_router: (tempfile::TempDir, axum::Router),
+) {
+    let (_dir, router) = private_oci_ui_router;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .cast_signed();
+    let token = Signer::new(b"signing-secret", peryx_ecosystem_oci::TOKEN_SERVICE).mint(
+        &Principal::Named {
+            subject: "reader".to_owned(),
+        },
+        &[Grant {
+            projects: vec![Glob::new("other/app")],
+            actions: BTreeSet::from([Action::Read]),
+        }],
+        now,
+        300,
+    );
+
+    let (status, _) = get_authorized(&router, "/+ui/projects?index=images", &format!("Bearer {token}")).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_ui_private_oci_search_follows_read_acl(private_oci_ui_router: (tempfile::TempDir, axum::Router)) {
+    let (_dir, router) = private_oci_ui_router;
+    push_oci_image(&router).await;
+    for (case, authorization, expected) in [
+        ("anonymous", String::new(), (0, serde_json::Value::Null)),
+        ("basic", reader_authorization(), (1, serde_json::json!("app"))),
+        ("bearer", reader_bearer(&router).await, (1, serde_json::json!("app"))),
+    ] {
+        let (status, body) = get_authorized(&router, "/+search?q=app", &authorization).await;
+        let document = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        assert_eq!(
+            (
+                status,
+                document["total"].clone(),
+                document["results"][0]["normalized_name"].clone()
+            ),
+            (StatusCode::OK, serde_json::json!(expected.0), expected.1),
+            "{case}"
+        );
+    }
+}
+
+fn private_oci_ui_config(dir: &tempfile::TempDir) -> Config {
+    let mut config = oci_ui_config(dir);
+    config.indexes[0].anonymous_read = Some(false);
+    config.indexes[0].tokens.push(TokenConfig {
+        name: "reader".to_owned(),
+        secret: SecretSource::Literal("read-secret".to_owned()),
+        projects: vec!["app".to_owned()],
+        actions: BTreeSet::from([Action::Read]),
+        expires_at: None,
+    });
+    let mut public = config.indexes[0].clone();
+    public.name = "public".to_owned();
+    public.route = "public".to_owned();
+    public.anonymous_read = None;
+    public.tokens.clear();
+    config.indexes.push(public);
+    config.auth.signing_key = Some(SecretSource::Literal("signing-secret".to_owned()));
+    config
+}
+
+fn reader_authorization() -> String {
+    format!("Basic {}", STANDARD.encode("_:read-secret"))
+}
+
+async fn reader_bearer(router: &axum::Router) -> String {
+    let (status, body) = get_authorized(
+        router,
+        "/v2/token?service=peryx&scope=repository:images/app:pull",
+        &reader_authorization(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = serde_json::from_str::<serde_json::Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    format!("Bearer {token}")
+}
+
 async fn get(router: &axum::Router, uri: &str) -> (StatusCode, String) {
+    get_authorized(router, uri, "").await
+}
+
+async fn get_authorized(router: &axum::Router, uri: &str, authorization: &str) -> (StatusCode, String) {
+    let mut request = Request::builder().uri(uri);
+    if !authorization.is_empty() {
+        request = request.header(header::AUTHORIZATION, authorization);
+    }
     let response = router
         .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(request.body(Body::empty()).unwrap())
         .await
         .unwrap();
     let status = response.status();

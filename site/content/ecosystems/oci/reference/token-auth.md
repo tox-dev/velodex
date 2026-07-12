@@ -119,6 +119,22 @@ configured, resource routes fall back to the Basic challenge (`WWW-Authenticate:
 `GET /v2/_catalog` uses the same refusal shape with `scope="registry:catalog:*"`. peryx returns `insufficient_scope` for
 a repository token and checks the catalog grant before returning private repository names.
 
+## Web and search routes
+
+The ecosystem-neutral read surfaces accept the same `Authorization` header.
+
+| Route                                             | ACL resource                                     | Refusal                                                |
+| ------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
+| `/+ui/projects?index=<route>`                     | Every returned repository                        | No read grant yields `401` or `403` before enumeration |
+| `/+ui/project?index=<route>&project=<repository>` | The named repository                             | Missing credentials yield `401`; narrow grants `403`   |
+| `/+ui/manifest`, `/+ui/members`, `/+ui/member`    | Their `project=<repository>`                     | Missing credentials yield `401`; narrow grants `403`   |
+| `/+search`, `/<route>/+search`                    | Full `<route>/<repository>` name for each result | The query omits inaccessible results                   |
+
+Server-rendered `/browse` and `/search` pages enforce these rules before their data builders run. peryx matches a
+verified Bearer token against its full repository scope and resolves Basic credentials against the selected index ACL.
+Search inserts the resource globs into its query before counting and pagination. A `401` from `/+ui` includes
+`WWW-Authenticate: Basic realm="peryx"`; these neutral endpoints accept Basic credentials without an OCI token exchange.
+
 ## See also
 
 - [Authentication and access control](@/core/authentication.md): the neutral model these routes enforce.

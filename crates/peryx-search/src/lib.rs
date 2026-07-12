@@ -4,6 +4,7 @@
 //! turning an index's stored records into searchable documents is ecosystem-specific, and that sits
 //! behind the [`PackageIndexer`] seam, which each `peryx-ecosystem-*` crate implements.
 
+mod access;
 mod context;
 mod engine;
 mod error;
@@ -11,6 +12,7 @@ mod indexer;
 mod params;
 mod response;
 
+pub use access::{SearchAccess, SearchAccessPattern};
 pub use context::{IndexerCtx, SearchCtx};
 pub use engine::{PackageSearch, truncate_to_chars};
 pub use error::SearchError;

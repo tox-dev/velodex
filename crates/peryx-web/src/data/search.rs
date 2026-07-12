@@ -17,7 +17,7 @@ pub async fn load_search(
 ) -> Result<UiSearchPage, String> {
     #[cfg(feature = "ssr")]
     {
-        crate::ssr::search(&query, &source_type, page, page_size)
+        crate::ssr::search(&query, &source_type, page, page_size).await
     }
     #[cfg(all(not(feature = "ssr"), feature = "hydrate"))]
     {

@@ -54,6 +54,29 @@ fn test_glob_matches(#[case] pattern: &str, #[case] project: &str, #[case] expec
     assert_eq!(Glob::new(pattern).matches(project), expected);
 }
 
+#[rstest]
+#[case::literal_extension("images/app", "images/", true)]
+#[case::literal_exhausted("images", "images/", false)]
+#[case::wildcard_extension("images/team/*", "images/", true)]
+#[case::wildcard_consumes_prefix("*/app", "images/", true)]
+#[case::different_prefix("other/*", "images/", false)]
+fn test_glob_matches_prefix(#[case] pattern: &str, #[case] prefix: &str, #[case] expected: bool) {
+    assert_eq!(Glob::new(pattern).matches_prefix(prefix), expected);
+}
+
+#[rstest]
+#[case::literal("images/app", "images/", &["app"])]
+#[case::wildcard("images/team/*", "images/", &["team/*"])]
+#[case::wildcard_prefix("*/app", "images/", &["*/app", "/app", "app"])]
+#[case::root("app", "", &["app"])]
+#[case::miss("other/*", "images/", &[])]
+fn test_glob_remainders_after(#[case] pattern: &str, #[case] prefix: &str, #[case] expected: &[&str]) {
+    assert_eq!(
+        Glob::new(pattern).remainders_after(prefix).collect::<Vec<_>>(),
+        expected
+    );
+}
+
 #[test]
 fn test_authorize_grants_a_named_token_its_projects() {
     let acl = acl(vec![token("ci", "s3cret", grant(&["team/*"], &[Action::Write]))]);

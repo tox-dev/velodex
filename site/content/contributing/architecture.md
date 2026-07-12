@@ -394,6 +394,9 @@ and returns results ordered alphabetically by a composite sort key — not by
 [relevance score](https://en.wikipedia.org/wiki/Okapi_BM25), a deliberate choice for a package index where the exact
 name is what a user wants.
 
+An authenticated search passes readable resource globs into the Tantivy query. Access applies before `Count` and
+`TopDocs`, which prevents inaccessible totals and short pages. Public search stays unchanged.
+
 **Extension.** Each ecosystem registers an indexer that maps its records into the neutral search document; a composite
 indexer concatenates every ecosystem's documents into the one index. PyPI turns its projects into documents, OCI its
 repositories. The schema and the query path never name a format; a driver owns only the record-to-document mapping.
@@ -478,6 +481,11 @@ unauthenticated, or forbidden) an ecosystem maps to its own status. The crate al
 audience-bound JWTs through `Signer`, so the signing key and audience check remain identity state rather than protocol
 state. Registry-wide decisions call `authorize_all`. It requires an explicit `*` grant because existing projects cannot
 prove access to future projects. Exact token grants keep registry resources separate from project glob matching.
+
+`peryx-driver::access::ReadAccess` resolves credentials for neutral presentation paths; hydrated `/+ui` handlers and
+Leptos server rendering prepare one per-index decision before calling a browse driver. That decision also filters each
+project name the driver returns. Search converts the credential into native access patterns. New presentation reads must
+cross this seam.
 
 **Extension.** The neutral core knows `(Principal, IndexAcl, project, Action)` and nothing about how a client presented
 itself. Each ecosystem reduces its wire protocol to those four before it calls in. PyPI reads a Basic

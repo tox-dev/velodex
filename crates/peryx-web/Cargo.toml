@@ -20,6 +20,7 @@ ssr = [
     "dep:leptos_axum",
     "dep:peryx-driver",
     "dep:peryx-http",
+    "dep:peryx-identity",
     "dep:peryx-search",
     "dep:peryx-storage",
     "dep:axum",
@@ -36,6 +37,7 @@ leptos_router.workspace = true
 leptos_axum = { workspace = true, optional = true }
 peryx-driver = { workspace = true, optional = true }
 peryx-http = { workspace = true, optional = true }
+peryx-identity = { workspace = true, optional = true }
 peryx-search = { workspace = true, optional = true }
 peryx-storage = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
