@@ -40,7 +40,9 @@ Simple-API responses honor the `Accept` header: `application/vnd.pypi.simple.v1+
 ([PEP 691](https://peps.python.org/pep-0691/)) when the client asks for JSON, `text/html`
 ([PEP 503](https://peps.python.org/pep-0503/)) otherwise. Responses carry `Vary: Accept` and advertise
 `meta.api-version` 1.4. peryx preserves upstream Simple API fields it understands, including `versions`, `size`,
-`upload-time`, `project-status`, `provenance`, `gpg-sig`, and both `core-metadata` and `dist-info-metadata`.
+`upload-time`, `project-status`, `provenance`, `gpg-sig`, and both `core-metadata` and `dist-info-metadata`. The
+`gpg-sig` marker is dropped for a file peryx content-addresses onto its own route, since no `.asc` is served there; see
+[the gpg-sig marker](@/ecosystems/pypi/reference/gpg-sig.md).
 
 Legacy PyPI JSON API responses use `application/json`. Peryx builds `/pypi/<project>/json`-style responses from the
 resolved Simple detail page for the requested index route, so `releases`, `urls`, hashes, yanked markers, upload time,
