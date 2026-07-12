@@ -90,9 +90,11 @@ pub fn classify(path: &str) -> Option<OciRoute> {
         "tags" if tail == "list" => Some(OciRoute::TagsList {
             name: join_name(&segments[..len - 2])?,
         }),
+        // The referrers digest is validated in the handler, not here: a malformed one must draw a
+        // `400 DIGEST_INVALID` per the spec, which a route that returns `None` (a `404`) cannot.
         "referrers" => Some(OciRoute::Referrers {
             name: join_name(&segments[..len - 2])?,
-            digest: parse_digest(tail)?,
+            digest: tail.to_owned(),
         }),
         _ => None,
     }
@@ -173,6 +175,44 @@ fn parse_digest(digest: &str) -> Option<String> {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'=' | b'_' | b'-'));
     (algorithm_ok && encoded_ok).then(|| digest.to_owned())
+}
+
+/// Whether `digest` is a syntactically valid content digest per the image-spec grammar, enforcing the
+/// fixed lowercase-hex length of the registered `sha256`/`sha512` algorithms. The referrers API must
+/// answer `400 DIGEST_INVALID` for a malformed `<digest>`, so it validates here rather than routing a
+/// bad digest into the store as an empty lookup that would answer `200`.
+#[must_use]
+pub fn valid_content_digest(digest: &str) -> bool {
+    let Some((algorithm, encoded)) = digest.split_once(':') else {
+        return false;
+    };
+    let component = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    let algorithm_ok = algorithm.split(['+', '.', '_', '-']).all(component);
+    let encoded_ok = !encoded.is_empty()
+        && encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'=' | b'_' | b'-'));
+    if !algorithm_ok || !encoded_ok {
+        return false;
+    }
+    // A registered algorithm has a fixed lowercase-hex encoding, so an off-length or non-hex one is
+    // malformed; an unregistered algorithm keeps only the general grammar peryx cannot second-guess.
+    let lower_hex = |len: usize| {
+        encoded.len() == len
+            && encoded
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    };
+    match algorithm {
+        "sha256" => lower_hex(64),
+        "sha512" => lower_hex(128),
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -261,7 +301,39 @@ mod tests {
                 digest: digest.to_owned(),
             })
         );
-        assert_eq!(classify("/v2/app/referrers/not-a-digest"), None);
+        // A malformed digest still routes; the handler answers `400`, so classify keeps the raw tail.
+        assert_eq!(
+            classify("/v2/app/referrers/not-a-digest"),
+            Some(OciRoute::Referrers {
+                name: "app".to_owned(),
+                digest: "not-a-digest".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_valid_content_digest_enforces_the_registered_length() {
+        for ok in [
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha512:{}", "0".repeat(128)),
+            // An unregistered algorithm keeps only the general grammar; its encoding may carry `=_-`.
+            "multihash+base58:Qm-x_y=".to_owned(),
+        ] {
+            assert!(valid_content_digest(&ok), "{ok} should be valid");
+        }
+        for bad in [
+            "sha256:bad",
+            "sha256:",
+            "not-a-digest",
+            ":abc",
+            "sha256:ABCDEF",
+            "custom:ab$cd",
+            &format!("sha256:{}", "a".repeat(63)),
+            &format!("sha256:{}", "g".repeat(64)),
+            &format!("sha512:{}", "f".repeat(64)),
+        ] {
+            assert!(!valid_content_digest(bad), "{bad} should be rejected");
+        }
     }
 
     #[test]

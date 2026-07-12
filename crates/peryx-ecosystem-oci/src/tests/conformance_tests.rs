@@ -219,6 +219,9 @@ async fn test_out_of_order_chunk_on_patch_is_range_not_satisfiable() {
     .await;
     assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
     assert!(headers.contains_key(header::RANGE));
+    // The 416 hands back the session URL and id so the client can resume rather than restart.
+    assert_eq!(headers[header::LOCATION].to_str().unwrap(), location);
+    assert!(headers.contains_key("docker-upload-uuid"));
 }
 
 #[tokio::test]
@@ -261,7 +264,7 @@ async fn test_out_of_order_chunk_on_put_is_range_not_satisfiable() {
     )
     .await;
     let location = headers[header::LOCATION].to_str().unwrap().to_owned();
-    let (status, _, _) = send_body(
+    let (status, headers, _) = send_body(
         &app,
         Method::PUT,
         &format!("{location}?digest=sha256:x"),
@@ -270,6 +273,66 @@ async fn test_out_of_order_chunk_on_put_is_range_not_satisfiable() {
     )
     .await;
     assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(headers[header::LOCATION].to_str().unwrap(), location);
+    assert!(headers.contains_key("docker-upload-uuid"));
+}
+
+#[tokio::test]
+async fn test_referrers_with_a_malformed_digest_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    // A registered algorithm at the wrong length and a tail with no algorithm are both malformed; the
+    // spec mandates `400 DIGEST_INVALID` rather than the `200` empty index a bad digest used to draw.
+    for reference in ["sha256:bad", "not-a-digest"] {
+        let (status, _, body) = send(&app, Method::GET, &format!("/v2/store/app/referrers/{reference}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{reference}");
+        assert!(super::body_has_code(&body, "DIGEST_INVALID"), "{body:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_cancel_upload_session_returns_no_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let (_status, headers, _) = send_body(
+        &app,
+        Method::POST,
+        "/v2/store/app/blobs/uploads/",
+        &[("authorization", &auth(TOKEN))],
+        Vec::new(),
+    )
+    .await;
+    let location = headers[header::LOCATION].to_str().unwrap().to_owned();
+
+    let (status, _, _) = send_with(&app, Method::DELETE, &location, &[("authorization", &auth(TOKEN))]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The session is gone, so a follow-up status read no longer finds it.
+    let (status, _, _) = send_with(&app, Method::GET, &location, &[("authorization", &auth(TOKEN))]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_cancel_unknown_upload_session_is_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let (status, _, body) = send_with(
+        &app,
+        Method::DELETE,
+        "/v2/store/app/blobs/uploads/deadbeef",
+        &[("authorization", &auth(TOKEN))],
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(super::body_has_code(&body, "BLOB_UPLOAD_UNKNOWN"), "{body:?}");
+}
+
+#[tokio::test]
+async fn test_cancel_upload_on_a_read_only_proxy_is_denied() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = proxy(&dir, "http://127.0.0.1:1/", false);
+    let (status, _, _) = send(&app, Method::DELETE, "/v2/hub/app/blobs/uploads/whatever").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
