@@ -2,10 +2,7 @@
 title = "Why peryx serves the registry the way it does"
 description = "Why peryx accepts an upstream manifest digest in a non-sha256 algorithm, why it validates a referrers subject up front, and why cancelling an upload reclaims its bytes while a 416 hands back the coordinates to resume."
 weight = 5
-aliases = [
-    "/ecosystems/oci/content-digest-algorithms/",
-    "/ecosystems/oci/upload-conformance/",
-]
+aliases = [ "/ecosystems/oci/content-digest-algorithms/", "/ecosystems/oci/upload-conformance/"]
 +++
 
 peryx content-addresses everything it stores under its own sha256, yet it has to interoperate with registries and
@@ -63,8 +60,7 @@ spec explicitly allows. Accepting the broader grammar is what lets peryx sit in 
 The relaxation is narrow. It applies to the online manifest pull-through path. Blobs are still sha256 only, an offline
 mirror still pins a by-digest reference to sha256, and a malformed digest is still rejected. The exact rules are in
 [the registry-behavior reference](@/ecosystems/oci/reference/registry-behavior.md#content-digest-algorithms); the
-surrounding read path is in
-[how peryx scopes and serves manifest reads](@/ecosystems/oci/manifest-serving.md).
+surrounding read path is in [how peryx scopes and serves manifest reads](@/ecosystems/oci/manifest-serving.md).
 
 ## Upload sessions and the 416 resume
 
@@ -134,5 +130,4 @@ that fails in a way it can understand and act on.
   [work with registry behavior](@/ecosystems/oci/guides/registry-behavior.md)
 - Drive the upload state machine and a sha512 pull by hand:
   [push a blob chunk by chunk](@/ecosystems/oci/tutorials/chunked-upload.md)
-- The OCI specifications peryx implements: [standards](@/ecosystems/oci/reference/standards.md)
-</content>
+- The OCI specifications peryx implements: [standards](@/ecosystems/oci/reference/standards.md) </content>

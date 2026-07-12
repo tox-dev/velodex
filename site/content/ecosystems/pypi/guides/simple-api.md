@@ -2,11 +2,7 @@
 title = "Diagnose Simple API serving"
 description = "Work out why a mirror reports api-version 1.0, move a client off the gpg-sig marker to the sha256 the index serves, and follow or skip the trailing-slash redirect."
 weight = 7
-aliases = [
-    "/ecosystems/pypi/guides/api-version/",
-    "/ecosystems/pypi/guides/gpg-sig/",
-    "/ecosystems/pypi/guides/trailing-slash/",
-]
+aliases = [ "/ecosystems/pypi/guides/api-version/", "/ecosystems/pypi/guides/gpg-sig/", "/ecosystems/pypi/guides/trailing-slash/"]
 +++
 
 Three things a client reads off a Simple page can surprise it: an api-version lower than expected, a missing GPG
@@ -214,5 +210,5 @@ bites a malformed URL. Build the path from a normalized name and one trailing sl
 
 - The exact rules across JSON, HTML, and legacy JSON: [Simple API serving](@/ecosystems/pypi/reference/simple-api.md)
 - Why peryx serves this way: [what peryx serves on the Simple API](@/ecosystems/pypi/serving.md)
-- Watch all three behaviors end to end: [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md)
-</content>
+- Watch all three behaviors end to end:
+  [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md) </content>

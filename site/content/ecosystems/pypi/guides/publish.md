@@ -2,10 +2,7 @@
 title = "Publish packages"
 description = "Upload distributions with twine or uv publish, authenticated by a shared token, including wheels from older tooling and clients that declare a single digest."
 weight = 5
-aliases = [
-    "/ecosystems/pypi/guides/legacy-wheel/",
-    "/ecosystems/pypi/guides/md5-upload/",
-]
+aliases = [ "/ecosystems/pypi/guides/legacy-wheel/", "/ecosystems/pypi/guides/md5-upload/"]
 +++
 
 peryx accepts the [legacy upload API](https://docs.pypi.org/api/upload/), the wire protocol both
@@ -47,10 +44,10 @@ computes and verifies it too, the way [Warehouse](https://pypi.org/) does, so a 
 Before publishing the staged blob, peryx validates the project name, [PEP 440](https://peps.python.org/pep-0440/)
 version, safe filename shape, `filetype`, archive readability, and metadata identity. Wheel uploads must contain one
 `{name}-{version}.dist-info/` directory that
-[matches the filename by normalized name and version](@/ecosystems/pypi/reference/dist-info.md), with `METADATA`,
-`WHEEL`, and `RECORD`. The `WHEEL` tags and optional build field must match the filename, and `RECORD` must cover each
-archive file except `RECORD` and deprecated RECORD signatures with sha256-or-better hashes. When `RECORD` includes a
-size, the size must match the archive member.
+[matches the filename by normalized name and version](@/ecosystems/pypi/reference/uploads.md#wheel-dist-info-matching),
+with `METADATA`, `WHEEL`, and `RECORD`. The `WHEEL` tags and optional build field must match the filename, and `RECORD`
+must cover each archive file except `RECORD` and deprecated RECORD signatures with sha256-or-better hashes. When
+`RECORD` includes a size, the size must match the archive member.
 
 A source distribution is a `.tar.gz` or a `.zip`, and peryx holds both to the same
 [PEP 625](https://peps.python.org/pep-0625/) strictness. The filename splits its name from its version at the last `-`,

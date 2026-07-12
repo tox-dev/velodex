@@ -2,18 +2,14 @@
 title = "What peryx serves on the Simple API"
 description = "Why peryx advertises only what its bytes back up: an api-version derived from the upstream, a gpg-sig marker dropped when it rewrites a file URL, and a 301 to the canonical slashed URL."
 weight = 6
-aliases = [
-    "/ecosystems/pypi/api-version/",
-    "/ecosystems/pypi/gpg-sig/",
-    "/ecosystems/pypi/trailing-slashes/",
-]
+aliases = [ "/ecosystems/pypi/api-version/", "/ecosystems/pypi/gpg-sig/", "/ecosystems/pypi/trailing-slashes/"]
 +++
 
-A Simple API response makes promises: a version number says which fields the page is allowed to carry, a `gpg-sig` marker
-says a signature sits next to a file, a URL says where a resource lives. peryx serves a cache and a merge of upstreams,
-so every one of those promises has to hold for the bytes peryx actually hands back, not for the protocol peryx happens
-to implement. This page covers three places where peryx trims what it advertises down to what it can back up: the
-derived api-version, the dropped signature marker, and the redirect to the canonical URL.
+A Simple API response makes promises: a version number says which fields the page is allowed to carry, a `gpg-sig`
+marker says a signature sits next to a file, a URL says where a resource lives. peryx serves a cache and a merge of
+upstreams, so every one of those promises has to hold for the bytes peryx actually hands back, not for the protocol
+peryx happens to implement. This page covers three places where peryx trims what it advertises down to what it can back
+up: the derived api-version, the dropped signature marker, and the redirect to the canonical URL.
 
 ## An honest Simple API version
 
@@ -154,5 +150,4 @@ path with a slash tacked on.
 - Diagnose a mirror stuck at api-version `1.0`, move a tool off the gpg-sig marker, or follow the trailing-slash
   redirect: [diagnose Simple API serving](@/ecosystems/pypi/guides/simple-api.md)
 - Watch the derived version, the dropped signature, and the slashless redirect happen:
-  [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md)
-</content>
+  [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md) </content>

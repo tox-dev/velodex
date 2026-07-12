@@ -2,10 +2,7 @@
 title = "Registry behavior"
 description = "The exact rules for content digest algorithms, upload-session cancel and the 416 resume response, and referrers subject-digest validation, with every status, header, and digest table."
 weight = 5
-aliases = [
-    "/ecosystems/oci/reference/content-digests/",
-    "/ecosystems/oci/reference/upload-sessions/",
-]
+aliases = [ "/ecosystems/oci/reference/content-digests/", "/ecosystems/oci/reference/upload-sessions/"]
 +++
 
 This page states the wire behavior of the OCI conformance points peryx implements on the `/v2/` surface: which digest
@@ -147,5 +144,4 @@ The lenient referrers-subject grammar covers `sha512` and unregistered algorithm
 key. Stored content is stricter: peryx addresses and serves **`sha256` blobs and manifests only**. A blob or manifest
 `GET`/`PUT`/`DELETE` whose `<digest>` is not `sha256:<64 hex>` is `400 DIGEST_INVALID`, and a `PUT` whose bytes do not
 hash to the claimed `sha256` digest is rejected on commit. peryx does not persist a `sha512` object; the algorithm is
-accepted on the referrers path as a syntactically valid subject, nothing more.
-</content>
+accepted on the referrers path as a syntactically valid subject, nothing more. </content>

@@ -2,12 +2,7 @@
 title = "Publish and manage a release"
 description = "Upload a historical wheel and an MD5-only wheel, yank a release by an equivalent PEP 440 version, and delete a project named after a mutation verb, watching peryx take the same inputs pypi.org does."
 weight = 4
-aliases = [
-    "/ecosystems/pypi/tutorials/md5-upload/",
-    "/ecosystems/pypi/tutorials/legacy-wheel/",
-    "/ecosystems/pypi/tutorials/version-match/",
-    "/ecosystems/pypi/tutorials/reserved-name/",
-]
+aliases = [ "/ecosystems/pypi/tutorials/md5-upload/", "/ecosystems/pypi/tutorials/legacy-wheel/", "/ecosystems/pypi/tutorials/version-match/", "/ecosystems/pypi/tutorials/reserved-name/"]
 +++
 
 In this tutorial you drive four uploads that peryx once refused and now accepts, in one sitting against one running
@@ -273,5 +268,4 @@ every file addressed by SHA-256 regardless of what the uploader declared.
 - Do this in your own upload flow: [publish packages](@/ecosystems/pypi/guides/publish.md) and
   [yank and delete packages](@/ecosystems/pypi/guides/remove.md)
 - The exact rules, tables, and error strings: [upload rules](@/ecosystems/pypi/reference/uploads.md)
-- Why peryx accepts these inputs: [what peryx accepts on upload](@/ecosystems/pypi/uploads.md)
-</content>
+- Why peryx accepts these inputs: [what peryx accepts on upload](@/ecosystems/pypi/uploads.md) </content>

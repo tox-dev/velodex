@@ -2,11 +2,7 @@
 title = "Simple API serving"
 description = "The exact serving rules on the Simple API: how peryx derives the advertised api-version, when it keeps or drops the gpg-sig marker, and the 301 it returns for a slashless index or project URL."
 weight = 4
-aliases = [
-    "/ecosystems/pypi/reference/api-version/",
-    "/ecosystems/pypi/reference/gpg-sig/",
-    "/ecosystems/pypi/reference/trailing-slash/",
-]
+aliases = [ "/ecosystems/pypi/reference/api-version/", "/ecosystems/pypi/reference/gpg-sig/", "/ecosystems/pypi/reference/trailing-slash/"]
 +++
 
 peryx serves a Simple page that advertises only what the bytes behind it guarantee: a version derived from the upstream,
@@ -157,6 +153,6 @@ The status is `301 Moved Permanently`, the same status pypi.org (Warehouse) retu
 - Why peryx serves this way: [what peryx serves on the Simple API](@/ecosystems/pypi/serving.md)
 - Diagnose a mirror stuck at `1.0`, move a tool off the marker, or follow the redirect:
   [diagnose Simple API serving](@/ecosystems/pypi/guides/simple-api.md)
-- Watch all three behaviors end to end: [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md)
-- The standards these implement: [standards](@/ecosystems/pypi/reference/standards.md)
-</content>
+- Watch all three behaviors end to end:
+  [observe Simple API behavior](@/ecosystems/pypi/tutorials/simple-api-behavior.md)
+- The standards these implement: [standards](@/ecosystems/pypi/reference/standards.md) </content>

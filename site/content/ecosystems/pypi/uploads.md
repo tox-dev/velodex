@@ -2,26 +2,22 @@
 title = "What peryx accepts on upload"
 description = "Why peryx takes the uploads pip and Warehouse take: un-normalized wheels, MD5-only digests, equivalent version spellings, and projects named after a mutation verb, all managed by normalized identity."
 weight = 5
-aliases = [
-    "/ecosystems/pypi/dist-info/",
-    "/ecosystems/pypi/upload-digests/",
-    "/ecosystems/pypi/version-match/",
-    "/ecosystems/pypi/reserved-names/",
-]
+aliases = [ "/ecosystems/pypi/dist-info/", "/ecosystems/pypi/upload-digests/", "/ecosystems/pypi/version-match/", "/ecosystems/pypi/reserved-names/"]
 +++
 
 peryx stands in front of PyPI as a drop-in, and the promise that carries is simple: an upload that succeeds against
-[Warehouse](https://pypi.org/) (the software pypi.org runs) should succeed against peryx. Warehouse and pip do not demand
-a canonical spelling of every field; they resolve a project and a release by normalized identity, [PEP 503](https://peps.python.org/pep-0503/)
-on the name and [PEP 440](https://peps.python.org/pep-0440/) on the version, and take whatever spelling names the right
-thing. peryx does the same across four upload surfaces, each a place it once was stricter than the index it fronts. This
-page explains what it accepts and why, and where accepting a broader input still stops short of accepting the wrong one.
+[Warehouse](https://pypi.org/) (the software pypi.org runs) should succeed against peryx. Warehouse and pip do not
+demand a canonical spelling of every field; they resolve a project and a release by normalized identity,
+[PEP 503](https://peps.python.org/pep-0503/) on the name and [PEP 440](https://peps.python.org/pep-0440/) on the
+version, and take whatever spelling names the right thing. peryx does the same across four upload surfaces, each a place
+it once was stricter than the index it fronts. This page explains what it accepts and why, and where accepting a broader
+input still stops short of accepting the wrong one.
 
 ## Un-normalized wheels
 
 peryx accepts a wheel whose internal `.dist-info` directory is not spelled the modern, normalized way, as long as it
-names the same project and version as the filename. The check compares normalized identity rather than exact bytes, which
-is what lets historical artifacts through.
+names the same project and version as the filename. The check compares normalized identity rather than exact bytes,
+which is what lets historical artifacts through.
 
 ### The rule changed under wheels
 
@@ -214,5 +210,4 @@ suffixed verb as one.
   spelling: [publish packages](@/ecosystems/pypi/guides/publish.md) and
   [yank and delete packages](@/ecosystems/pypi/guides/remove.md)
 - Walk an upload of a historical wheel, an MD5-only client, an equivalent-version yank, and a verb-named project end to
-  end: [publish and manage a release](@/ecosystems/pypi/tutorials/publish-and-manage.md)
-</content>
+  end: [publish and manage a release](@/ecosystems/pypi/tutorials/publish-and-manage.md) </content>

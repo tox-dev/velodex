@@ -2,10 +2,7 @@
 title = "Yank and delete packages"
 description = "Yank an uploaded release per PEP 592 or delete it outright, address a release by any equivalent version spelling, and manage a project named after a mutation verb."
 weight = 6
-aliases = [
-    "/ecosystems/pypi/guides/version-match/",
-    "/ecosystems/pypi/guides/reserved-name/",
-]
+aliases = [ "/ecosystems/pypi/guides/version-match/", "/ecosystems/pypi/guides/reserved-name/"]
 +++
 
 Both operations take the same Basic-auth token as uploads, and both work on upstream files too: a cached index is
@@ -107,8 +104,8 @@ version that exists will match, but `1.0` never reaches `1.0.1`, and a version c
 
 A project whose normalized name is `yank`, `restore`, or `promote` collides with the verbs peryx puts in its mutation
 URLs. It uploads and installs like any other package; the one place to get right is the mutation path, where the project
-name and the action word are the same. The examples below use a project whose normalized name is `yank`; names
-normalize first, so `Yank` and `YANK` route the same as `yank`.
+name and the action word are the same. The examples below use a project whose normalized name is `yank`; names normalize
+first, so `Yank` and `YANK` route the same as `yank`.
 
 ### The rule
 
@@ -164,7 +161,8 @@ A promote without a version answers `400` with `promotion requires a version`, t
 - The same actions from the browser: [the web UI](@/core/web-ui.md)
 - The exact matching rule, and every path for a verb-named project:
   [version matching for admin operations](@/ecosystems/pypi/reference/uploads.md#version-matching-for-admin-operations)
-  and [mutation paths for verb-named projects](@/ecosystems/pypi/reference/uploads.md#mutation-paths-for-verb-named-projects)
+  and
+  [mutation paths for verb-named projects](@/ecosystems/pypi/reference/uploads.md#mutation-paths-for-verb-named-projects)
 - Why the match agrees with the served page, and why peryx addresses these names:
   [equivalent version spellings](@/ecosystems/pypi/uploads.md#equivalent-version-spellings) and
   [verb-named projects](@/ecosystems/pypi/uploads.md#verb-named-projects)

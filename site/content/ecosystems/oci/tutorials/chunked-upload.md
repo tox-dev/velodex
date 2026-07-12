@@ -2,7 +2,7 @@
 title = "Push a blob chunk by chunk"
 description = "Drive an OCI chunked blob upload by hand with curl: start a session, PATCH chunks with Content-Range, recover from a 416, cancel with DELETE, and finish with PUT, then pull a manifest an upstream advertises under sha512."
 weight = 5
-aliases = ["/ecosystems/oci/tutorials/non-sha256-digest/"]
+aliases = [ "/ecosystems/oci/tutorials/non-sha256-digest/"]
 +++
 
 `docker push` and `crane push` upload a blob for you in one call, so you never see the steps underneath. This tutorial

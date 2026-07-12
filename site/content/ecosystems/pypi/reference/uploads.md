@@ -2,12 +2,7 @@
 title = "Upload rules"
 description = "The exact upload checks peryx runs: wheel .dist-info matching, the digest fields it verifies, PEP 440 version matching for admin operations, and the mutation paths for verb-named projects, with every accept/reject table and error string."
 weight = 3
-aliases = [
-    "/ecosystems/pypi/reference/dist-info/",
-    "/ecosystems/pypi/reference/upload-digests/",
-    "/ecosystems/pypi/reference/version-match/",
-    "/ecosystems/pypi/reference/reserved-names/",
-]
+aliases = [ "/ecosystems/pypi/reference/dist-info/", "/ecosystems/pypi/reference/upload-digests/", "/ecosystems/pypi/reference/version-match/", "/ecosystems/pypi/reference/reserved-names/"]
 +++
 
 peryx validates an upload by normalized identity, verifies whatever digest a client declares, and matches a
@@ -244,5 +239,4 @@ mutation, and a `200` carries the number of files affected, a `404` means nothin
   [yank and delete packages](@/ecosystems/pypi/guides/remove.md)
 - Walk a legacy wheel, an MD5-only client, an equivalent-version yank, and a verb-named delete end to end:
   [publish and manage a release](@/ecosystems/pypi/tutorials/publish-and-manage.md)
-- Why peryx accepts these inputs: [what peryx accepts on upload](@/ecosystems/pypi/uploads.md)
-</content>
+- Why peryx accepts these inputs: [what peryx accepts on upload](@/ecosystems/pypi/uploads.md) </content>

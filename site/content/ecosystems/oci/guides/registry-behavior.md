@@ -2,10 +2,7 @@
 title = "Work with registry behavior"
 description = "Proxy an upstream that advertises manifest digests in sha512 or another algorithm and pin images by the digest peryx reports, and cancel or resume a blob upload when a push is abandoned or gets a 416."
 weight = 5
-aliases = [
-    "/ecosystems/oci/guides/non-sha256-registry/",
-    "/ecosystems/oci/guides/cancel-and-resume-push/",
-]
+aliases = [ "/ecosystems/oci/guides/non-sha256-registry/", "/ecosystems/oci/guides/cancel-and-resume-push/"]
 +++
 
 Two recurring registry tasks: fronting an upstream whose content digests are not sha256, and cleaning up a blob upload
@@ -154,5 +151,4 @@ this recovery for you; you only drive it by hand when you are scripting an uploa
   [registry behavior](@/ecosystems/oci/reference/registry-behavior.md)
 - Why peryx serves the registry this way:
   [why peryx serves the registry the way it does](@/ecosystems/oci/registry-behavior.md)
-- Every `/v2/` upload verb and its success code: [HTTP endpoints](@/ecosystems/oci/reference/endpoints.md)
-</content>
+- Every `/v2/` upload verb and its success code: [HTTP endpoints](@/ecosystems/oci/reference/endpoints.md) </content>

@@ -2,11 +2,7 @@
 title = "Observe Simple API behavior"
 description = "Watch peryx derive the advertised api-version from two upstreams, drop the gpg-sig marker on a file it content-addresses while keeping it on a pass-through, and redirect a slashless Simple URL to its canonical form."
 weight = 5
-aliases = [
-    "/ecosystems/pypi/tutorials/api-version/",
-    "/ecosystems/pypi/tutorials/gpg-sig/",
-    "/ecosystems/pypi/tutorials/slashless-url/",
-]
+aliases = [ "/ecosystems/pypi/tutorials/api-version/", "/ecosystems/pypi/tutorials/gpg-sig/", "/ecosystems/pypi/tutorials/slashless-url/"]
 +++
 
 In this tutorial you make three of peryx's Simple API serving decisions visible with nothing but `curl`. You watch the
@@ -262,6 +258,6 @@ URL for a project.
 ## Where next
 
 - The exact rules across JSON, HTML, and legacy JSON: [Simple API serving](@/ecosystems/pypi/reference/simple-api.md)
-- Diagnose a real mirror or move a tool off the marker: [diagnose Simple API serving](@/ecosystems/pypi/guides/simple-api.md)
-- Why peryx serves this way: [what peryx serves on the Simple API](@/ecosystems/pypi/serving.md)
-</content>
+- Diagnose a real mirror or move a tool off the marker:
+  [diagnose Simple API serving](@/ecosystems/pypi/guides/simple-api.md)
+- Why peryx serves this way: [what peryx serves on the Simple API](@/ecosystems/pypi/serving.md) </content>
