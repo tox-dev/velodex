@@ -53,3 +53,7 @@ uploads" panel in the [web UI](@/core/web-ui.md) drives these same endpoints.
 
 - Yank vs delete vs hide, and why all three exist: [the index model](@/core/indexes.md)
 - The same actions from the browser: [the web UI](@/core/web-ui.md)
+- Reach a release by any equivalent version spelling:
+  [target a release by version](@/ecosystems/pypi/guides/version-match.md)
+- Yank or delete a project named after a verb like `yank`:
+  [host a verb-named project](@/ecosystems/pypi/guides/reserved-name.md)

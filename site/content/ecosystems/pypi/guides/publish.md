@@ -36,7 +36,8 @@ uv publish --publish-url http://127.0.0.1:4433/root/pypi/ -u __token__ -p <secre
 peryx accepts wheels and both source-distribution forms [PEP 527](https://peps.python.org/pep-0527/) defines, a
 `.tar.gz` and a `.zip`. It rejects `.egg` and the older compressed-tar formats such as `.tar.bz2` on upload; those files
 can still be mirrored if an upstream index lists them. During upload, peryx checks the declared sha256 and blake2b-256
-digests while streaming the artifact into a staged blob. A lone md5 digest is rejected.
+digests while streaming the artifact into a staged blob, and verifies a lone `md5_digest` on its own when that is the
+only digest a client sends.
 
 Before publishing the staged blob, peryx validates the project name, [PEP 440](https://peps.python.org/pep-0440/)
 version, safe filename shape, `filetype`, archive readability, and metadata identity. Wheel uploads must contain one
@@ -123,4 +124,7 @@ Validation failures return `400` with the field or archive check that failed. Co
 
 - What shadowing an upstream name buys you: [the index model](@/core/indexes.md)
 - Undo a bad release: [yank and delete](@/ecosystems/pypi/guides/remove.md)
+- Publish when your client sends only one digest: [upload with one digest](@/ecosystems/pypi/guides/md5-upload.md)
+- Publish a wheel whose `.dist-info` casing or version differs from the filename:
+  [publish from older tooling](@/ecosystems/pypi/guides/legacy-wheel.md)
 - The upload protocol itself: [HTTP endpoints](@/ecosystems/pypi/reference/endpoints.md)

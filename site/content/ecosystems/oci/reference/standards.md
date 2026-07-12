@@ -64,3 +64,7 @@ index's `upload_token`, which is why `docker login` against peryx uses the token
 
 - The machinery that serves these: [architecture](@/core/architecture.md)
 - The routes they map to: [HTTP endpoints](@/ecosystems/oci/reference/endpoints.md)
+- The upload-session lifecycle and how the referrers API validates its subject digest:
+  [upload sessions and referrers digests](@/ecosystems/oci/reference/upload-sessions.md)
+- The Bearer token realm peryx serves, its scopes and challenges:
+  [token authentication](@/ecosystems/oci/reference/token-auth.md)

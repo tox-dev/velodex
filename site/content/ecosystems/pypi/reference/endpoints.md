@@ -8,7 +8,9 @@ Every configured index route serves the same surface; `{route}` below is the ind
 peryx resolves a request to the index with the longest matching route prefix. The [API explorer](@/core/api.md) breaks
 each endpoint down with copyable example requests and responses.
 
-- `GET /{route}/simple/`: project list, JSON or HTML by `Accept`.
+- `GET /{route}/simple/`: project list, JSON or HTML by `Accept`. A request that drops the trailing slash here or on a
+  project `301`-redirects to the slashed form; see
+  [trailing-slash redirects](@/ecosystems/pypi/reference/trailing-slash.md).
 - `GET /{route}/simple/{project}/`: project detail, merged across virtual-index layers.
 - `GET /{route}/{project}/json`: legacy PyPI project JSON: `info`, `releases`, and latest-release `urls`.
 - `GET /{route}/{project}/{version}/json`: legacy PyPI release JSON for one version.
@@ -29,6 +31,10 @@ each endpoint down with copyable example requests and responses.
 - `GET /+status`: JSON health, version, counters, index descriptions.
 - `GET /+stats`: usage counters, drillable to project and file level.
 - `GET /metrics`: [Prometheus](https://prometheus.io/docs/instrumenting/exposition_formats/) text exposition.
+
+The version-scoped `yank`, `delete`, and `promote` forms address a release by
+[PEP 440](https://peps.python.org/pep-0440/) equality of the version, not an exact string; see
+[version matching for admin operations](@/ecosystems/pypi/reference/version-match.md).
 
 The web UI lives outside the index namespace: `GET /` (dashboard), `GET /admin/status` (read-only operational status),
 `GET /browse` (package browser), `GET /stats` (usage drill-down), and `GET /pkg/*` (the wasm bundle that hydrates the
