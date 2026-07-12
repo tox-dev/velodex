@@ -60,8 +60,9 @@ Container clients speak the **distribution spec** over a `/v2/` API. peryx serve
 - **Manifests**: `GET|HEAD|PUT|DELETE /v2/<name>/manifests/<tag-or-digest>`. peryx keeps a manifest byte-for-byte and
   addresses it by the sha256 of those exact bytes, so the `Docker-Content-Digest` a client verifies matches.
 - **Blobs**: `GET|HEAD|DELETE /v2/<name>/blobs/<digest>`, plus the upload dance
-  (`POST`/`PATCH`/`PUT /v2/<name>/blobs/uploads/…`) for push. Blobs are content-addressed and deduplicate across every
-  index, so a cross-repo mount is a digest check. Concurrent pulls of one uncached layer share a single upstream fetch.
+  (`POST`/`PATCH`/`PUT /v2/<name>/blobs/uploads/…`) for push. peryx deduplicates blob bytes across indexes and requires
+  a repository link before serving them. For a cross-repo mount, peryx verifies the source link and pull access before
+  it adds the target link. Concurrent pulls of one uncached layer share a single upstream fetch.
 - **Tags**: `GET /v2/<name>/tags/list`.
 - **Token auth**: peryx serves its own [Bearer token realm](@/ecosystems/oci/token-realm.md). `GET /v2/` challenges when
   an index restricts access, `GET /v2/token` mints a repository-scoped JWT, and resource routes enforce it, so

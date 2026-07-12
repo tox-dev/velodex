@@ -105,9 +105,40 @@ async fn test_virtual_blob_from_proxy_member() {
         .await;
     let dir = tempfile::tempdir().unwrap();
     let (_state, app) = virtual_stack(&dir, &format!("{}/", server.uri()));
-    let (status, _, got) = send(&app, Method::GET, &format!("/v2/reg/app/blobs/{digest}")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(got, &blob[..]);
+    let (first_status, _, first) = send(&app, Method::GET, &format!("/v2/reg/app/blobs/{digest}")).await;
+    let (second_status, _, second) = send(&app, Method::GET, &format!("/v2/reg/app/blobs/{digest}")).await;
+    assert_eq!(
+        (first_status, first.as_ref(), second_status, second.as_ref()),
+        (StatusCode::OK, blob.as_slice(), StatusCode::OK, blob.as_slice())
+    );
+}
+
+#[tokio::test]
+async fn test_virtual_blob_does_not_reuse_another_repository_link() {
+    let server = MockServer::start().await;
+    let blob = b"repository-layer";
+    let digest = oci_digest(blob);
+    Mock::given(method("GET"))
+        .and(path(format!("/v2/app/blobs/{digest}")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(blob.to_vec(), "application/octet-stream"))
+        .mount(&server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/v2/other/blobs/{digest}")))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = virtual_stack(&dir, &format!("{}/", server.uri()));
+
+    let first_status = send(&app, Method::GET, &format!("/v2/reg/app/blobs/{digest}")).await.0;
+    let (second_status, _, body) = send(&app, Method::GET, &format!("/v2/reg/other/blobs/{digest}")).await;
+
+    assert_eq!(
+        (first_status, second_status, super::body_has_code(&body, "BLOB_UNKNOWN")),
+        (StatusCode::OK, StatusCode::NOT_FOUND, true),
+        "{body:?}"
+    );
 }
 
 #[tokio::test]

@@ -157,7 +157,7 @@ async fn test_policy_refuses_a_blocked_cross_repo_mount() {
     let (status, _, body) = send_body(
         &app,
         Method::POST,
-        &format!("/v2/store/blocked/app/blobs/uploads/?mount={digest}&from=public/app"),
+        &format!("/v2/store/blocked/app/blobs/uploads/?mount={digest}&from=store/public/app"),
         &[("authorization", &auth(TOKEN))],
         Vec::new(),
     )

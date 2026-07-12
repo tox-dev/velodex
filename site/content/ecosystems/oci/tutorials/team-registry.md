@@ -68,8 +68,9 @@ The dashboard at [http://127.0.0.1:4433/](http://127.0.0.1:4433/) draws the topo
 ## A teammate pushes an image
 
 Pushing needs the hosted store's `upload_token`; peryx accepts any username, and the token is the Basic-auth password. A
-teammate logs in, tags an image for the `root/oci` route, and pushes it. Blobs stream into the content-addressed store
-and are verified on commit:
+teammate logs in, tags an image for the `root/oci` route, and pushes it. peryx streams blobs into the content-addressed
+store and verifies each digest on commit. When the client finds the same layer in another repository, it can mount the
+layer instead of uploading its bytes; peryx checks source pull access before it links the target:
 
 {% tabs(names="docker, podman, crane") %}
 

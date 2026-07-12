@@ -77,6 +77,21 @@ peryx declined. The exact rules are in
 [content digest algorithms](@/ecosystems/oci/reference/registry-behavior.md#content-digest-algorithms), and the
 reasoning in [why peryx accepts a non-sha256 content digest](@/ecosystems/oci/registry-behavior.md#content-digests).
 
+## Mount a blob from another repository
+
+Use a cross-repository mount when you reuse a layer from another repository. Include the peryx index route in both
+names. Read the digest from the source manifest, then request the mount with that full source name:
+
+```shell
+curl -sS -i -u _:<token> -X POST \
+  "http://127.0.0.1:4433/v2/images/target/app/blobs/uploads/?mount=sha256:<hex>&from=images/source/app"
+```
+
+peryx returns `201 Created` after it links the target without transferring a layer body. peryx opens the upload session
+in `Location` with `202 Accepted` when the source lacks the digest or the bytes. It takes the same path without `from`.
+You need pull access for a private source; peryx returns the source repository's `401` challenge when the credential may
+push the target but cannot pull `images/source/app`.
+
 ## Cancel an in-progress upload
 
 A container push is a series of blob uploads, and an upload can be left half-done: a client crashes mid-layer, or a
