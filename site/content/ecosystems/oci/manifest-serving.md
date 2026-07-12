@@ -40,6 +40,20 @@ The membership record is written wherever peryx stores a manifest: its own diges
 manifest list names. A by-digest delete drops the record unless an index the repository still serves names the digest as
 a child, so deleting an image and re-pushing it under another repository cannot revive a stale grant.
 
+## Blob bytes and repository links stay separate
+
+peryx stores one copy of each blob in the content-addressed store and writes an `(index, repository, digest)` link for
+each repository that serves it. peryx records the link after an upload or proxy fetch. A manifest write records links
+for its config and layers, so a mirrored or cached manifest can serve its descriptors without copying bytes.
+
+peryx checks the repository link before it uses cached bytes. If the cache contains the digest through another
+repository, peryx sends a repository-scoped upstream `HEAD`, records the link after a `2xx` response, and reuses the
+bytes. peryx returns `404 BLOB_UNKNOWN` when the target repository lacks the digest.
+
+peryx requires the source repository name and pull authorization for a cross-repository mount, then copies the source
+link to the target. A delete removes the target link. peryx reclaims the payload after the last repository link and
+manifest reference disappear.
+
 ## Why an index tag can serve a single-platform image
 
 A tag often points at an image index (an OCI index or a Docker manifest list), the small document that maps each

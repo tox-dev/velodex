@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use peryx_storage::blob::Digest;
 use peryx_storage::meta::{MetaError, MetaStore};
 
-use super::MANIFEST_PREFIX;
 use super::Manifest;
+use super::{BLOB_MEMBERSHIP_PREFIX, MANIFEST_PREFIX};
 
 /// Map an OCI `sha256:<hex>` digest onto the blob store's digest, or `None` for another algorithm the
 /// content-addressed store cannot key on.
@@ -69,6 +69,11 @@ pub fn linux_amd64_child(bytes: &[u8]) -> Option<String> {
 /// Returns a store error if the scan fails.
 pub fn referenced_blob_digests(meta: &MetaStore) -> Result<BTreeSet<String>, MetaError> {
     let mut digests = BTreeSet::new();
+    for key in meta.driver_prefix_keys(BLOB_MEMBERSHIP_PREFIX)? {
+        if let Some(storage) = key.rsplit_once('\u{0}').and_then(|(_, digest)| blob_digest(digest)) {
+            digests.insert(storage.as_str().to_owned());
+        }
+    }
     for key in meta.driver_prefix_keys(MANIFEST_PREFIX)? {
         let Some(manifest) = meta.get_driver_value(&key)?.as_deref().and_then(Manifest::decode) else {
             continue;
@@ -126,6 +131,18 @@ mod tests {
         assert_eq!(
             referenced_blob_digests(&meta).unwrap(),
             BTreeSet::from([hex('a'), hex('b')])
+        );
+    }
+
+    #[test]
+    fn test_referenced_blob_digests_keeps_repository_members() {
+        let (_dir, meta) = store();
+        let digest = format!("sha256:{}", "f".repeat(64));
+        super::super::record_blob_membership(&meta, "store", "app", &digest).unwrap();
+
+        assert_eq!(
+            referenced_blob_digests(&meta).unwrap(),
+            BTreeSet::from(["f".repeat(64)])
         );
     }
 

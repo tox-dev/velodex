@@ -3474,6 +3474,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
+ "moka",
  "peryx-core",
  "peryx-driver",
  "peryx-events",

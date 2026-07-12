@@ -17,6 +17,7 @@ const MANIFEST_PREFIX: &str = "oci\u{0}m\u{0}";
 const TAG_PREFIX: &str = "oci\u{0}t\u{0}";
 const REFERRER_PREFIX: &str = "oci\u{0}r\u{0}";
 const MEMBERSHIP_PREFIX: &str = "oci\u{0}mm\u{0}";
+const BLOB_MEMBERSHIP_PREFIX: &str = "oci\u{0}bm\u{0}";
 
 /// A stored manifest: its media type and the exact bytes whose digest addresses it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,8 +89,12 @@ pub fn record_manifest(
 ) -> Result<(), MetaError> {
     put_manifest(meta, digest, manifest)?;
     record_membership(meta, index, repo, digest)?;
-    for child in manifest_descriptors(&manifest.bytes).0 {
+    let (children, blobs) = manifest_descriptors(&manifest.bytes);
+    for child in children {
         record_membership(meta, index, repo, &child)?;
+    }
+    for blob in blobs {
+        record_blob_membership(meta, index, repo, &blob)?;
     }
     Ok(())
 }
@@ -126,6 +131,30 @@ pub fn get_manifest(meta: &MetaStore, digest: &str) -> Result<Option<Manifest>, 
 /// Returns a store error if the read fails.
 pub fn manifest_is_member(meta: &MetaStore, index: &str, repo: &str, digest: &str) -> Result<bool, MetaError> {
     Ok(meta.get_driver_value(&membership_key(index, repo, digest))?.is_some())
+}
+
+/// # Errors
+/// Returns a store error if the write fails.
+pub fn record_blob_membership(meta: &MetaStore, index: &str, repo: &str, digest: &str) -> Result<(), MetaError> {
+    meta.put_driver_value(&blob_membership_key(index, repo, digest), &[])
+}
+
+/// # Errors
+/// Returns a store error if the read fails.
+pub fn blob_is_member(meta: &MetaStore, index: &str, repo: &str, digest: &str) -> Result<bool, MetaError> {
+    Ok(meta
+        .get_driver_value(&blob_membership_key(index, repo, digest))?
+        .is_some())
+}
+
+/// # Errors
+/// Returns a store error if the write fails.
+pub fn delete_blob_membership(meta: &MetaStore, index: &str, repo: &str, digest: &str) -> Result<bool, MetaError> {
+    meta.delete_driver_value(&blob_membership_key(index, repo, digest))
+}
+
+pub fn blob_membership_key(index: &str, repo: &str, digest: &str) -> String {
+    format!("{BLOB_MEMBERSHIP_PREFIX}{index}\u{0}{repo}\u{0}{digest}")
 }
 
 /// Point a tag at a manifest digest.
@@ -645,6 +674,61 @@ mod tests {
         assert!(manifest_is_member(&meta, "store", "app", &child).unwrap());
         assert!(!manifest_is_member(&meta, "store", "other", "sha256:idx").unwrap());
         assert!(!manifest_is_member(&meta, "store", "app", "sha256:absent").unwrap());
+    }
+
+    #[test]
+    fn test_blob_membership_is_repository_scoped() {
+        let (_dir, meta, digest) = blob_member();
+
+        assert_eq!(
+            (
+                blob_is_member(&meta, "store", "app", &digest).unwrap(),
+                blob_is_member(&meta, "store", "other", &digest).unwrap(),
+            ),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn test_blob_membership_delete_reports_presence() {
+        let (_dir, meta, digest) = blob_member();
+
+        assert_eq!(
+            (
+                delete_blob_membership(&meta, "store", "app", &digest).unwrap(),
+                delete_blob_membership(&meta, "store", "app", &digest).unwrap(),
+            ),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn test_record_manifest_marks_its_blob_descriptors() {
+        let (_dir, meta) = store();
+        let config = format!("sha256:{}", "a".repeat(64));
+        let layer = format!("sha256:{}", "b".repeat(64));
+        let manifest = Manifest {
+            media_type: "application/vnd.oci.image.manifest.v1+json".to_owned(),
+            bytes: format!(r#"{{"config":{{"digest":"{config}"}},"layers":[{{"digest":"{layer}"}}]}}"#).into_bytes(),
+        };
+
+        record_manifest(&meta, "store", "app", "sha256:manifest", &manifest).unwrap();
+
+        assert_eq!(
+            (
+                blob_is_member(&meta, "store", "app", &config).unwrap(),
+                blob_is_member(&meta, "store", "app", &layer).unwrap(),
+                blob_is_member(&meta, "store", "other", &config).unwrap(),
+            ),
+            (true, true, false)
+        );
+    }
+
+    fn blob_member() -> (tempfile::TempDir, MetaStore, String) {
+        let (dir, meta) = store();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        record_blob_membership(&meta, "store", "app", &digest).unwrap();
+        (dir, meta, digest)
     }
 
     #[test]

@@ -8,6 +8,7 @@ use http_body_util::BodyExt as _;
 use peryx_identity::{Action, Glob, Grant, IndexAcl, NamedToken};
 use peryx_index::{Index, IndexKind};
 use peryx_storage::blob::Digest;
+use rstest::rstest;
 use tower::ServiceExt as _;
 
 use super::{
@@ -127,37 +128,70 @@ async fn test_monolithic_upload_non_sha256_digest() {
 #[tokio::test]
 async fn test_cross_repo_mount_of_an_existing_blob() {
     let dir = tempfile::tempdir().unwrap();
-    let (state, app) = hosted_writable(&dir, TOKEN);
+    let (_state, app) = hosted_writable(&dir, TOKEN);
     let blob = b"already-here";
-    let stored = state.blobs.write(blob).unwrap();
-    let digest = format!("sha256:{}", stored.as_str());
+    let digest = upload_blob(&app, "store/other/repo", blob).await;
     let (status, headers, _) = send_body(
         &app,
         Method::POST,
-        &format!("/v2/store/app/blobs/uploads/?mount={digest}&from=other/repo"),
+        &format!("/v2/store/app/blobs/uploads/?mount={digest}&from=store/other/repo"),
         &[("authorization", &auth(TOKEN))],
         Vec::new(),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(headers["docker-content-digest"], digest);
+    let (get_status, _, got) = send(&app, Method::GET, &format!("/v2/store/app/blobs/{digest}")).await;
+    assert_eq!(
+        (
+            status,
+            headers["docker-content-digest"].to_str().unwrap(),
+            get_status,
+            got.as_ref(),
+        ),
+        (StatusCode::CREATED, digest.as_str(), StatusCode::OK, blob.as_slice())
+    );
 }
 
+#[rstest]
+#[case::get(Method::GET, "")]
+#[case::head(Method::HEAD, "")]
+#[case::contents(Method::GET, "/contents")]
 #[tokio::test]
-async fn test_mount_miss_falls_back_to_a_session() {
+async fn test_blob_bytes_do_not_grant_another_repository_access(#[case] method: Method, #[case] suffix: &str) {
     let dir = tempfile::tempdir().unwrap();
     let (_state, app) = hosted_writable(&dir, TOKEN);
-    let absent = format!("sha256:{}", "1".repeat(64));
+    let digest = upload_blob(&app, "store/private/app", b"private-layer").await;
+
+    let (status, _, _) = send(&app, method, &format!("/v2/store/public/app/blobs/{digest}{suffix}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[rstest]
+#[case::missing_from(true, None)]
+#[case::absent_source(false, Some("other/repo"))]
+#[tokio::test]
+async fn test_mount_falls_back_to_a_session(#[case] present: bool, #[case] source: Option<&str>) {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let existing = upload_blob(&app, "store/source/app", b"source-layer").await;
+    let digest = if present {
+        existing
+    } else {
+        format!("sha256:{}", "1".repeat(64))
+    };
+    let from = source.map_or_else(String::new, |source| format!("&from={source}"));
     let (status, headers, _) = send_body(
         &app,
         Method::POST,
-        &format!("/v2/store/app/blobs/uploads/?mount={absent}&from=other/repo"),
+        &format!("/v2/store/target/app/blobs/uploads/?mount={digest}{from}"),
         &[("authorization", &auth(TOKEN))],
         Vec::new(),
     )
     .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert!(headers.contains_key(header::LOCATION));
+
+    assert_eq!(
+        (status, headers.contains_key(header::LOCATION)),
+        (StatusCode::ACCEPTED, true)
+    );
 }
 
 #[tokio::test]
@@ -419,9 +453,8 @@ async fn test_manifest_delete_by_digest_clears_a_dangling_tag() {
 #[tokio::test]
 async fn test_blob_delete_and_missing_and_bad_digest() {
     let dir = tempfile::tempdir().unwrap();
-    let (state, app) = hosted_writable(&dir, TOKEN);
-    let stored = state.blobs.write(b"gc-me").unwrap();
-    let digest = format!("sha256:{}", stored.as_str());
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let digest = upload_blob(&app, "store/app", b"gc-me").await;
 
     let (status, _, _) = send_body(
         &app,
@@ -454,6 +487,39 @@ async fn test_blob_delete_and_missing_and_bad_digest() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(super::body_has_code(&body, "DIGEST_INVALID"), "{body:?}");
+}
+
+#[tokio::test]
+async fn test_blob_delete_clears_a_link_whose_bytes_are_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, app) = hosted_writable(&dir, TOKEN);
+    let digest = upload_blob(&app, "store/app", b"lost-bytes").await;
+    state
+        .blobs
+        .remove(&Digest::from_hex(digest.strip_prefix("sha256:").unwrap()).unwrap())
+        .unwrap();
+
+    let (first_status, _, _) = send_body(
+        &app,
+        Method::DELETE,
+        &format!("/v2/store/app/blobs/{digest}"),
+        &[("authorization", &auth(TOKEN))],
+        Vec::new(),
+    )
+    .await;
+    let (second_status, _, body) = send_body(
+        &app,
+        Method::DELETE,
+        &format!("/v2/store/app/blobs/{digest}"),
+        &[("authorization", &auth(TOKEN))],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        (first_status, second_status, body_has_code(&body, "BLOB_UNKNOWN")),
+        (StatusCode::ACCEPTED, StatusCode::NOT_FOUND, true),
+        "{body:?}"
+    );
 }
 
 /// A hosted store whose one credential is a `ci` token that may push under `team/`.
@@ -760,16 +826,20 @@ async fn test_manifest_push_rejects_missing_referenced_blob() {
     assert!(body_has_code(&body, "MANIFEST_BLOB_UNKNOWN"), "{body:?}");
 }
 
+#[rstest]
+#[case::same_repository("store/app", StatusCode::CREATED, None)]
+#[case::other_repository("store/other", StatusCode::BAD_REQUEST, Some("MANIFEST_BLOB_UNKNOWN"))]
 #[tokio::test]
-async fn test_manifest_push_accepts_present_referenced_blob() {
+async fn test_manifest_push_checks_referenced_blob_membership(
+    #[case] blob_repository: &str,
+    #[case] expected_status: StatusCode,
+    #[case] expected_error: Option<&str>,
+) {
     let dir = tempfile::tempdir().unwrap();
-    let (state, app) = hosted_writable(&dir, TOKEN);
-    let config = state.blobs.write(b"config-bytes").unwrap();
-    let manifest = format!(
-        r#"{{"schemaVersion":2,"config":{{"digest":"sha256:{}"}},"layers":[]}}"#,
-        config.as_str()
-    );
-    let (status, _, _) = send_body(
+    let (_state, app) = hosted_writable(&dir, TOKEN);
+    let config = upload_blob(&app, blob_repository, b"config-bytes").await;
+    let manifest = format!(r#"{{"schemaVersion":2,"config":{{"digest":"{config}"}},"layers":[]}}"#);
+    let (status, _, body) = send_body(
         &app,
         Method::PUT,
         "/v2/store/app/manifests/v1",
@@ -777,7 +847,12 @@ async fn test_manifest_push_accepts_present_referenced_blob() {
         manifest.into_bytes(),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED);
+
+    assert_eq!(
+        (status, expected_error.map(|code| body_has_code(&body, code))),
+        (expected_status, expected_error.map(|_| true)),
+        "{body:?}"
+    );
 }
 
 #[tokio::test]
@@ -895,8 +970,8 @@ async fn test_upload_session_is_scoped_to_its_index() {
 async fn test_blob_delete_retains_a_referenced_blob() {
     let dir = tempfile::tempdir().unwrap();
     let (state, app) = hosted_writable(&dir, TOKEN);
-    let layer = state.blobs.write(b"referenced-layer").unwrap();
-    let digest = format!("sha256:{}", layer.as_str());
+    let digest = upload_blob(&app, "store/app", b"referenced-layer").await;
+    let layer = Digest::from_hex(digest.strip_prefix("sha256:").unwrap()).unwrap();
     let manifest = format!(
         r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{{"digest":"{digest}"}},"layers":[]}}"#
     );
@@ -920,6 +995,63 @@ async fn test_blob_delete_retains_a_referenced_blob() {
     assert_eq!(status, StatusCode::ACCEPTED);
     // Retained: a manifest still references it, so the shared blob is not unlinked.
     assert!(state.blobs.exists(&layer));
+}
+
+#[tokio::test]
+async fn test_blob_delete_removes_only_the_target_repository_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, app) = hosted_writable(&dir, TOKEN);
+    let blob = b"shared-layer";
+    let digest = upload_blob(&app, "store/source", blob).await;
+    let target_digest = upload_blob(&app, "store/target", blob).await;
+    let (warm_status, _, _) = send(&app, Method::GET, &format!("/v2/store/target/blobs/{digest}")).await;
+
+    let (status, _, _) = send_body(
+        &app,
+        Method::DELETE,
+        &format!("/v2/store/target/blobs/{digest}"),
+        &[("authorization", &auth(TOKEN))],
+        Vec::new(),
+    )
+    .await;
+    let (target_status, _, _) = send(&app, Method::GET, &format!("/v2/store/target/blobs/{digest}")).await;
+    let (source_status, _, got) = send(&app, Method::GET, &format!("/v2/store/source/blobs/{digest}")).await;
+    assert_eq!(
+        (
+            warm_status,
+            status,
+            target_digest,
+            target_status,
+            source_status,
+            got.as_ref(),
+            state
+                .blobs
+                .exists(&Digest::from_hex(digest.strip_prefix("sha256:").unwrap()).unwrap()),
+        ),
+        (
+            StatusCode::OK,
+            StatusCode::ACCEPTED,
+            digest,
+            StatusCode::NOT_FOUND,
+            StatusCode::OK,
+            blob.as_slice(),
+            true,
+        )
+    );
+}
+
+async fn upload_blob(app: &axum::Router, name: &str, blob: &[u8]) -> String {
+    let digest = oci_digest(blob);
+    let (status, _, _) = send_body(
+        app,
+        Method::POST,
+        &format!("/v2/{name}/blobs/uploads/?digest={digest}"),
+        &[("authorization", &auth(TOKEN))],
+        blob.to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    digest
 }
 
 #[tokio::test]

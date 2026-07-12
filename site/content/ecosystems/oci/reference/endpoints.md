@@ -77,29 +77,30 @@ containerd, and oras send full `Accept` lists that name the index types, so they
 type (defaulting to `application/vnd.oci.image.manifest.v1+json`); peryx ignores any `Content-Type` parameters, so
 `application/vnd.oci.image.manifest.v1+json; charset=utf-8` matches and stores as the bare base type rather than failing
 with `400 MANIFEST_INVALID`. A media type peryx does not accept as a manifest is `400 MANIFEST_INVALID`. A body over 4
-MiB is rejected with `413 Payload Too Large`, distinct from the `502` a broken transfer returns. When `<reference>` is a
-digest, the body must hash to it or the response is `400 DIGEST_INVALID`. A manifest whose body references a config
-blob, layer blob, or child manifest the store does not hold is `400 MANIFEST_BLOB_UNKNOWN`; peryx rejects it up front
-rather than store a manifest that would `404` on the missing piece when a client later resolves it. Success is `201`
-with `Location`, `Docker-Content-Digest`, and (when the manifest declares a `subject`) an `OCI-Subject` header echoing
-that subject's digest. A declared subject is also recorded for the referrers API.
+MiB produces `413 Payload Too Large`, distinct from the `502` a broken transfer returns. For a digest reference, peryx
+returns `400 DIGEST_INVALID` unless the body hashes to that digest. peryx returns `400 MANIFEST_BLOB_UNKNOWN` when the
+manifest names a config or layer that this repository cannot serve. A missing child manifest produces the same error. On
+success, peryx returns `201` with `Location` and `Docker-Content-Digest`. When the manifest declares a `subject`, peryx
+sends its digest in `OCI-Subject` and records it for the referrers API.
 
 `DELETE /v2/<name>/manifests/<reference>` removes the manifest by digest, or drops the tag mapping when `<reference>` is
 a tag. Success is `202`; a reference that was not present is `404 MANIFEST_UNKNOWN`.
 
 ## Blobs
 
-Blobs are content-addressed and shared across every index, so a store hit serves all of them and a delete removes the
-bytes globally.
+peryx deduplicates content-addressed blob bytes across indexes. A separate repository link controls access, so knowledge
+of a digest under another repository does not make it readable under `<name>`.
 
-`GET`/`HEAD /v2/<name>/blobs/<digest>` serves the blob from the store, pulling it through the index's online proxy
-members on a miss; concurrent misses for one digest share a single upstream fetch. The response carries
-`Content-Type: application/octet-stream`, `Accept-Ranges: bytes`, `Docker-Content-Digest`, and `Content-Length`. A
-single `Range: bytes=…` request answers `206` with `Content-Range`; an unsatisfiable or malformed `bytes` range is `416`
-with `Content-Range: bytes */<size>`; a range in any other unit is ignored and the full blob served. A digest no proxy
-member has is `404 BLOB_UNKNOWN`; a non-`sha256` digest is `400 DIGEST_INVALID`.
+peryx serves `GET` and `HEAD /v2/<name>/blobs/<digest>` from the store. Without a cached repository link, peryx pulls
+through an online proxy; concurrent misses for one digest share one upstream fetch. If the cache contains bytes through
+another repository, peryx sends `HEAD` to this repository's upstream before it adds the link, avoiding a second body
+download. peryx sends `Content-Type: application/octet-stream` and `Accept-Ranges: bytes`, plus the digest and length
+headers. A `Range: bytes=…` request produces `206` with `Content-Range`. peryx returns `416` with
+`Content-Range: bytes */<size>` for an unsatisfiable or malformed `bytes` range, and it ignores other range units. A
+missing digest produces `404 BLOB_UNKNOWN`; a non-`sha256` digest produces `400 DIGEST_INVALID`.
 
-`DELETE /v2/<name>/blobs/<digest>` removes the bytes and answers `202`, or `404 BLOB_UNKNOWN` when they were absent.
+peryx removes this repository's link for `DELETE /v2/<name>/blobs/<digest>` and returns `202`. A missing link produces
+`404 BLOB_UNKNOWN`. peryx retains shared bytes while another repository or manifest references them.
 
 ### Layer contents
 
@@ -116,9 +117,11 @@ to show a layer's contents.
 
 A push writes blobs through an upload session started with `POST /v2/<name>/blobs/uploads/`. Three shapes:
 
-- **Cross-repo mount**: `POST …/uploads/?mount=<digest>[&from=<repo>]`. When `<digest>` is already stored, peryx answers
-  `201` immediately with `Location: /v2/<name>/blobs/<digest>` and `Docker-Content-Digest`; no bytes transfer. When it
-  is not stored, the mount is ignored and an ordinary session opens.
+- **Cross-repo mount**: `POST …/uploads/?mount=<digest>&from=<source-name>`. Use the full repository name, including its
+  peryx index route. If the source links `<digest>` and stores its bytes, peryx checks pull permission before it links
+  the target. peryx returns `201` with the blob location and digest headers. If the source lacks the link or bytes,
+  peryx opens a `202` upload session. peryx takes the same path without `from`; missing pull permission produces the
+  source's `401` challenge.
 - **Monolithic**: `POST …/uploads/?digest=<digest>` with the blob as the body. peryx streams it in, verifies the digest
   on commit, and answers `201`.
 - **Chunked**: a bare `POST …/uploads/` opens a session and answers `202` with

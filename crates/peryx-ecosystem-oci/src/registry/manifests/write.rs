@@ -66,7 +66,7 @@ pub(in crate::registry) async fn put_manifest(
             "manifest bytes do not match the digest",
         ));
     }
-    if let Some(response) = missing_manifest_reference(state, &bytes)? {
+    if let Some(response) = missing_manifest_reference(state, &index.name, &repo, &bytes)? {
         return Ok(response);
     }
     let manifest = Manifest {
@@ -234,11 +234,18 @@ fn is_length_limit(err: &axum::Error) -> bool {
 /// push "succeeded", so the push is rejected up front with `MANIFEST_BLOB_UNKNOWN`.
 ///
 /// # Errors
-/// Returns a store error if a child-manifest lookup fails.
-fn missing_manifest_reference(state: &ServingState, bytes: &[u8]) -> Result<Option<Response>, ServeError> {
+/// Returns a store error if a membership lookup fails.
+fn missing_manifest_reference(
+    state: &ServingState,
+    index: &str,
+    repo: &str,
+    bytes: &[u8],
+) -> Result<Option<Response>, ServeError> {
     let (children, blobs) = store::manifest_descriptors(bytes);
     for blob in blobs {
-        if !store::blob_digest(&blob).is_some_and(|storage| state.blobs.exists(&storage)) {
+        if !store::blob_digest(&blob).is_some_and(|storage| state.blobs.exists(&storage))
+            || !store::blob_is_member(&state.meta, index, repo, &blob)?
+        {
             return Ok(Some(error_response(
                 ErrorCode::ManifestBlobUnknown,
                 &format!("referenced blob {blob} is not present"),

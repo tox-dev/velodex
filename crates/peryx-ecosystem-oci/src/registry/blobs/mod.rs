@@ -1,7 +1,6 @@
 //! Blob serving: local and proxied reads, HEAD, ingest and delete.
 //!
-//! Blobs are content-addressed and immutable, so a cache hit never asks upstream. Range parsing and
-//! the layer-contents browser each have a grammar of their own and sit beside this unit.
+//! Global blob deduplication requires repository-scoped links before reads.
 
 mod contents;
 mod range;
@@ -29,8 +28,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 impl OciRegistry {
-    /// Serve a blob from the store, pulling it through the members' online proxies on a miss. Blobs
-    /// are content-addressed and shared, so the store hit covers every member at once.
     pub(super) async fn serve_blob(
         &self,
         state: &ServingState,
@@ -82,7 +79,7 @@ impl OciRegistry {
         storage: &Digest,
         range: Option<&str>,
     ) -> Result<Response, ServeError> {
-        if state.blobs.exists(storage) {
+        if state.blobs.exists(storage) && self.blob_authorized(state, index, repo, digest)? {
             return serve_stored_blob(&state.blobs, storage, digest, true, range).await;
         }
         for member in serving_members(state, index) {
@@ -99,7 +96,10 @@ impl OciRegistry {
                 )
                 .await
             {
-                Ok(size) => return Ok(blob_head_response(digest, size, range)),
+                Ok(size) => {
+                    store::record_blob_membership(&state.meta, &member.name, repo, digest)?;
+                    return Ok(blob_head_response(digest, size, range));
+                }
                 Err(UpstreamError::Status(status)) if absent_upstream(status) => {}
                 Err(err) => return Ok(upstream_error_response(&err, "blob")),
             }
@@ -118,16 +118,17 @@ impl OciRegistry {
         digest: &str,
         storage: &Digest,
     ) -> Result<BlobFetch, ServeError> {
-        if state.blobs.exists(storage) {
+        if state.blobs.exists(storage) && self.blob_authorized(state, index, repo, digest)? {
             return Ok(BlobFetch::Stored);
         }
         let gate_key = format!("oci\0blob\0{digest}");
         let gate = flight_gate(state, &gate_key);
         let _guard = gate.lock().await;
-        if state.blobs.exists(storage) {
+        if state.blobs.exists(storage) && self.blob_authorized(state, index, repo, digest)? {
             return Ok(BlobFetch::Stored);
         }
-        let fetched = self.fetch_blob(state, index, repo, digest, storage).await;
+        let members = serving_members(state, index);
+        let fetched = self.fetch_blob(state, &members, repo, digest, storage).await;
         state.cache.forget_flight(&gate_key);
         fetched
     }
@@ -174,15 +175,35 @@ impl OciRegistry {
     async fn fetch_blob(
         &self,
         state: &ServingState,
-        index: &Index,
+        members: &[&Index],
         repo: &str,
         digest: &str,
         storage: &Digest,
     ) -> Result<BlobFetch, ServeError> {
-        for member in serving_members(state, index) {
+        let stored = state.blobs.exists(storage);
+        for member in members {
             let Some(client) = member.proxy_client() else {
                 continue;
             };
+            if stored {
+                match self
+                    .upstream
+                    .blob_head(
+                        client.base_url(),
+                        client.auth(),
+                        &self.upstream_repo(&member.name, client, repo),
+                        digest,
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        store::record_blob_membership(&state.meta, &member.name, repo, digest)?;
+                        return Ok(BlobFetch::Stored);
+                    }
+                    Err(UpstreamError::Status(status)) if absent_upstream(status) => continue,
+                    Err(err) => return Ok(BlobFetch::Gateway(upstream_error_response(&err, "blob"))),
+                }
+            }
             match self
                 .upstream
                 .blob(
@@ -197,6 +218,7 @@ impl OciRegistry {
                     if let Err(response) = download_blob(&state.blobs, storage, response).await {
                         return Ok(BlobFetch::Gateway(response));
                     }
+                    store::record_blob_membership(&state.meta, &member.name, repo, digest)?;
                     return Ok(BlobFetch::Stored);
                 }
                 Err(UpstreamError::Status(status)) if absent_upstream(status) => {}
@@ -207,47 +229,85 @@ impl OciRegistry {
         }
         Ok(BlobFetch::Absent)
     }
-}
 
-/// Delete a blob from the content-addressed store. Blobs are shared across indexes, so this removes
-/// the bytes globally.
-pub(super) fn delete_blob(
-    state: &Arc<ServingState>,
-    headers: &HeaderMap,
-    name: &str,
-    digest: &str,
-) -> Result<Response, ServeError> {
-    let (index, repo, identity) = match resolve_writable(state, name, headers, Action::Delete) {
-        Ok(target) => target,
-        Err(response) => return Ok(response),
-    };
-    let Some(storage) = store::blob_digest(digest) else {
-        return Ok(error_response(
-            ErrorCode::DigestInvalid,
-            "only sha256 blob digests are supported",
-        ));
-    };
-    Ok(
-        match reclaim_unreferenced_blob(&state.blobs, &storage, || store::referenced_blob_digests(&state.meta))? {
-            BlobReclaim::Retained => accepted(),
-            BlobReclaim::Missing => error_response(ErrorCode::BlobUnknown, "blob unknown"),
-            BlobReclaim::Removed => {
-                emit_webhook(
-                    state,
-                    &Requester {
-                        headers,
-                        identity: &identity,
-                    },
-                    WebhookEventKind::Delete,
-                    index,
-                    &repo,
-                    None,
-                    Some(digest.to_owned()),
-                );
-                accepted()
+    pub(super) fn delete_blob(
+        &self,
+        state: &Arc<ServingState>,
+        headers: &HeaderMap,
+        name: &str,
+        digest: &str,
+    ) -> Result<Response, ServeError> {
+        let (index, repo, identity) = match resolve_writable(state, name, headers, Action::Delete) {
+            Ok(target) => target,
+            Err(response) => return Ok(response),
+        };
+        let Some(storage) = store::blob_digest(digest) else {
+            return Ok(error_response(
+                ErrorCode::DigestInvalid,
+                "only sha256 blob digests are supported",
+            ));
+        };
+        let membership = store::blob_membership_key(&index.name, &repo, digest);
+        let deleted = {
+            let _guard = self
+                .blob_membership_gate
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.blob_memberships.invalidate(&membership);
+            store::delete_blob_membership(&state.meta, &index.name, &repo, digest)?
+        };
+        if !deleted {
+            return Ok(error_response(ErrorCode::BlobUnknown, "blob unknown"));
+        }
+        reclaim_unreferenced_blob(&state.blobs, &storage, || store::referenced_blob_digests(&state.meta))?;
+        emit_webhook(
+            state,
+            &Requester {
+                headers,
+                identity: &identity,
+            },
+            WebhookEventKind::Delete,
+            index,
+            &repo,
+            None,
+            Some(digest.to_owned()),
+        );
+        Ok(accepted())
+    }
+
+    pub(super) fn blob_authorized(
+        &self,
+        state: &ServingState,
+        index: &Index,
+        repo: &str,
+        digest: &str,
+    ) -> Result<bool, ServeError> {
+        let _guard = self
+            .blob_membership_gate
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !matches!(index.kind, IndexKind::Virtual { .. }) {
+            return self.blob_is_member(state, &index.name, repo, digest);
+        }
+        for member in serving_members(state, index) {
+            if self.blob_is_member(state, &member.name, repo, digest)? {
+                return Ok(true);
             }
-        },
-    )
+        }
+        Ok(false)
+    }
+
+    fn blob_is_member(&self, state: &ServingState, index: &str, repo: &str, digest: &str) -> Result<bool, ServeError> {
+        let key = store::blob_membership_key(index, repo, digest);
+        if self.blob_memberships.get(&key).is_some() {
+            return Ok(true);
+        }
+        let present = store::blob_is_member(&state.meta, index, repo, digest)?;
+        if present {
+            self.blob_memberships.insert(key, ());
+        }
+        Ok(present)
+    }
 }
 
 /// What happened to a blob a `DELETE` targeted.
@@ -367,14 +427,26 @@ pub(super) async fn stream_into(pending: &mut PendingBlob, body: Body) -> Result
     Ok(written)
 }
 
-/// Commit a staged blob under `digest`, verifying its bytes. A mismatch is the client's fault.
-pub(super) fn commit_blob(blobs: &BlobStore, pending: PendingBlob, name: &str, digest: &str) -> Response {
+pub(super) fn commit_blob(
+    state: &ServingState,
+    pending: PendingBlob,
+    index: &str,
+    repo: &str,
+    name: &str,
+    digest: &str,
+) -> Result<Response, ServeError> {
     let Some(storage) = store::blob_digest(digest) else {
-        return error_response(ErrorCode::DigestInvalid, "only sha256 blob digests are supported");
+        return Ok(error_response(
+            ErrorCode::DigestInvalid,
+            "only sha256 blob digests are supported",
+        ));
     };
-    match blobs.commit(pending, &storage) {
-        Ok(()) => blob_created(name, digest),
-        Err(err) => download_error_response(DownloadError::Blob(err)),
+    match state.blobs.commit(pending, &storage) {
+        Ok(()) => {
+            store::record_blob_membership(&state.meta, index, repo, digest)?;
+            Ok(blob_created(name, digest))
+        }
+        Err(err) => Ok(download_error_response(DownloadError::Blob(err))),
     }
 }
 

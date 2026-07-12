@@ -277,6 +277,48 @@ async fn test_named_token_pushes_within_its_glob_and_is_refused_outside_it() {
     );
 }
 
+#[tokio::test]
+async fn test_cross_repo_mount_requires_source_pull_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = team_registry(&dir);
+    let blob = b"source-layer";
+    let digest = oci_digest(blob);
+    let (status, _, _) = send_body(
+        &app,
+        Method::POST,
+        &format!("/v2/store/team/source/blobs/uploads/?digest={digest}"),
+        &[("authorization", &auth(SECRET))],
+        blob.to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, token) = request_token(
+        &app,
+        "service=peryx&scope=repository:store/team/target:push",
+        Some(&auth(SECRET)),
+    )
+    .await;
+
+    let (status, headers, _) = send_body(
+        &app,
+        Method::POST,
+        &format!("/v2/store/team/target/blobs/uploads/?mount={digest}&from=store/team/source"),
+        &[("authorization", &format!("Bearer {token}"))],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        (
+            status,
+            headers[header::WWW_AUTHENTICATE]
+                .to_str()
+                .unwrap()
+                .contains("scope=\"repository:store/team/source:pull\""),
+        ),
+        (StatusCode::UNAUTHORIZED, true)
+    );
+}
+
 #[rstest]
 #[case::repository("repository:store/team/app:pull,push", "store/team/other")]
 #[case::action("repository:store/team/app:pull", "store/team/app")]

@@ -60,6 +60,12 @@ A blob digest on a pull, a mount, or the `PUT` that commits an upload must be `s
 `400 DIGEST_INVALID` with `only sha256 blob digests are supported`. peryx streams a blob into a content-addressed store
 and verifies it against its sha256 on commit, so it has no store keyed by another algorithm to serve one from.
 
+### Repository membership
+
+peryx stores one copy of a blob and grants access through separate `(index, repository, digest)` links. Reads and
+deletes use the repository link. A mount checks the source link and pull permission before peryx copies it to the
+target.
+
 ### What content-addressing does not do
 
 - It never stores or keys an object under a non-sha256 digest. Everything on disk is addressed by sha256; a non-sha256

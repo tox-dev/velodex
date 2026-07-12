@@ -150,6 +150,59 @@ async fn test_blob_pulls_through_then_serves_a_range() {
     assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 0-3/{}", blob.len()));
     assert_eq!(got, &blob[..4]);
 }
+
+#[rstest]
+#[case::absent(404, StatusCode::NOT_FOUND, Some("BLOB_UNKNOWN"))]
+#[case::present(200, StatusCode::OK, None)]
+#[case::failure(500, StatusCode::BAD_GATEWAY, None)]
+#[tokio::test]
+async fn test_cached_blob_checks_the_target_upstream_repository(
+    #[case] upstream_status: u16,
+    #[case] expected_status: StatusCode,
+    #[case] expected_error: Option<&str>,
+) {
+    let server = MockServer::start().await;
+    let blob = b"cached-upstream-layer";
+    let digest = oci_digest(blob);
+    Mock::given(method("GET"))
+        .and(path(format!("/v2/first/app/blobs/{digest}")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(blob.to_vec(), "application/octet-stream"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(format!("/v2/second/app/blobs/{digest}")))
+        .respond_with(
+            ResponseTemplate::new(upstream_status).insert_header("content-length", blob.len().to_string().as_str()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, app) = proxy(&dir, &format!("{}/", server.uri()), false);
+
+    let first = send(&app, Method::GET, &format!("/v2/hub/first/app/blobs/{digest}"))
+        .await
+        .0;
+    let (second, _, body) = send(&app, Method::GET, &format!("/v2/hub/second/app/blobs/{digest}")).await;
+
+    assert_eq!(
+        (
+            first,
+            second,
+            body.as_ref() == blob,
+            expected_error.map(|code| body_has_code(&body, code)),
+        ),
+        (
+            StatusCode::OK,
+            expected_status,
+            expected_status == StatusCode::OK,
+            expected_error.map(|_| true),
+        ),
+        "{body:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_concurrent_blob_misses_share_one_upstream_fetch() {
     let server = MockServer::start().await;
@@ -184,6 +237,7 @@ async fn test_blob_head_and_unsatisfiable_range() {
     let blob = b"0123456789";
     let stored = state.blobs.write(blob).unwrap();
     let digest = format!("sha256:{}", stored.as_str());
+    crate::store::record_blob_membership(&state.meta, "store", "app", &digest).unwrap();
     let uri = format!("/v2/store/app/blobs/{digest}");
 
     let (status, headers, got) = send(&app, Method::HEAD, &uri).await;
@@ -337,6 +391,7 @@ async fn test_blob_suffix_and_open_ended_ranges() {
     let blob = b"0123456789";
     let stored = state.blobs.write(blob).unwrap();
     let digest = format!("sha256:{}", stored.as_str());
+    crate::store::record_blob_membership(&state.meta, "store", "app", &digest).unwrap();
     let uri = format!("/v2/store/app/blobs/{digest}");
 
     let (status, headers, got) = send_with(&app, Method::GET, &uri, &[("range", "bytes=-3")]).await;
@@ -410,7 +465,9 @@ async fn test_blob_range_that_is_not_a_range_serves_the_whole_blob() {
     let (state, app) = hosted(&dir);
     let blob = b"0123456789";
     let stored = state.blobs.write(blob).unwrap();
-    let uri = format!("/v2/store/app/blobs/sha256:{}", stored.as_str());
+    let digest = format!("sha256:{}", stored.as_str());
+    crate::store::record_blob_membership(&state.meta, "store", "app", &digest).unwrap();
+    let uri = format!("/v2/store/app/blobs/{digest}");
 
     // RFC 9110 s14.2: an unparseable `Range` is ignored, never refused.
     for header in ["bytes=abc-", "bytes=-", "bytes=5-2"] {

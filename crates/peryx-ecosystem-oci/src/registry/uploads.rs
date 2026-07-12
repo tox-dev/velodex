@@ -25,13 +25,23 @@ impl OciRegistry {
             Err(response) => return Ok(response),
         };
         let params = query_params(query);
-        if let Some(mount) = params.get("mount")
-            && store::blob_digest(mount).is_some_and(|storage| state.blobs.exists(&storage))
+        if let (Some(mount), Some(source)) = (params.get("mount"), params.get("from"))
+            && let Some(storage) = store::blob_digest(mount)
         {
-            if policy_blocks(index, PolicyAction::Upload, &repo) {
-                return Ok(error_response(ErrorCode::Denied, "image name is blocked by policy"));
+            if let Err(response) = auth::authorize_read(state, headers, source) {
+                return Ok(response);
             }
-            return Ok(blob_created(name, mount));
+            if let Some((source_index, source_repo)) = resolve(&state.indexes, source)
+                && !policy_blocks(source_index, PolicyAction::Serve, source_repo)
+                && state.blobs.exists(&storage)
+                && self.blob_authorized(state, source_index, source_repo, mount)?
+            {
+                if policy_blocks(index, PolicyAction::Upload, &repo) {
+                    return Ok(error_response(ErrorCode::Denied, "image name is blocked by policy"));
+                }
+                store::record_blob_membership(&state.meta, &index.name, &repo, mount)?;
+                return Ok(blob_created(name, mount));
+            }
         }
         if let Some(digest) = params.get("digest") {
             let mut pending = state.blobs.begin().map_err(blob_fault)?;
@@ -39,7 +49,7 @@ impl OciRegistry {
             if let Some(response) = policy_size_denial(index, &repo, size) {
                 return Ok(response);
             }
-            return Ok(commit_blob(&state.blobs, pending, name, digest));
+            return commit_blob(state, pending, &index.name, &repo, name, digest);
         }
         let pending = state.blobs.begin().map_err(blob_fault)?;
         let session = self.new_session();
@@ -201,7 +211,7 @@ impl OciRegistry {
         if let Some(response) = policy_size_denial(index, &repo, entry.offset) {
             return Ok(response);
         }
-        Ok(commit_blob(&state.blobs, entry.pending, name, &digest))
+        commit_blob(state, entry.pending, &index.name, &repo, name, &digest)
     }
 }
 

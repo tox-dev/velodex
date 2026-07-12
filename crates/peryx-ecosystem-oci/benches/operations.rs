@@ -61,8 +61,17 @@ fn seeded(runtime: &Runtime) -> (Router, String, String) {
     peryx_ecosystem_oci::install(&mut state, std::collections::HashMap::new());
     let state = Arc::new(state);
     let blob = vec![0x7fu8; 4096];
-    let blob_digest = format!("sha256:{}", state.blobs.write(&blob).unwrap().as_str());
+    let blob_digest = format!("sha256:{}", Digest::of(&blob).as_str());
     let app = router(state);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/v2/store/app/blobs/uploads/?digest={blob_digest}"))
+        .header("authorization", auth())
+        .body(Body::from(blob))
+        .unwrap();
+    let response = runtime.block_on(app.clone().oneshot(request)).unwrap();
+    assert_eq!(response.status(), 201);
 
     let manifest = br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#;
     let manifest_digest = format!("sha256:{}", Digest::of(manifest).as_str());

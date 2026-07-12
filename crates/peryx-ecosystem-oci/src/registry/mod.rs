@@ -26,6 +26,7 @@ use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt as _;
+use moka::sync::Cache;
 use peryx_core::Ecosystem;
 use peryx_driver::ServingState;
 use peryx_driver::serving::{EcosystemDriver, RouteMount};
@@ -37,14 +38,13 @@ use peryx_storage::blob::PendingBlob;
 use peryx_storage::meta::MetaError;
 use peryx_upstream::UpstreamClient;
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 mod auth;
 mod blobs;
 mod discovery;
 mod manifests;
 mod uploads;
-use blobs::delete_blob;
 pub use blobs::download_blob;
 use discovery::serve_catalog;
 use manifests::{delete_manifest, put_manifest};
@@ -118,14 +118,31 @@ impl From<ServeError> for String {
 /// The OCI/Docker registry driver.
 ///
 /// Holds one shared upstream fetcher over the process's stores, the per-index settings the
-/// composition root compiled, and the in-progress blob uploads a hosted push accumulates across its
-/// `POST`/`PATCH`/`PUT` requests.
-#[derive(Default)]
+/// composition root compiled, the in-progress blob uploads a hosted push accumulates across its
+/// `POST`/`PATCH`/`PUT` requests, and a bounded cache of verified repository blob links.
 pub struct OciRegistry {
     upstream: Upstream,
     settings: std::collections::HashMap<String, IndexSettings>,
     uploads: tokio::sync::Mutex<std::collections::HashMap<String, UploadSession>>,
     next_upload: std::sync::atomic::AtomicU64,
+    blob_memberships: Cache<String, ()>,
+    // Prevent a completed deletion from leaving a positive authorization cached.
+    blob_membership_gate: RwLock<()>,
+}
+impl Default for OciRegistry {
+    fn default() -> Self {
+        Self {
+            upstream: Upstream::default(),
+            settings: std::collections::HashMap::new(),
+            uploads: tokio::sync::Mutex::default(),
+            next_upload: std::sync::atomic::AtomicU64::new(0),
+            blob_memberships: Cache::builder()
+                .weigher(|key: &String, &()| u32::try_from(key.len()).unwrap_or(u32::MAX))
+                .max_capacity(8 << 20)
+                .build(),
+            blob_membership_gate: RwLock::default(),
+        }
+    }
 }
 /// A blob upload between its `POST` (start) and `PUT` (finish): the staged bytes, how many landed, and
 /// the index that opened it. The session map is process-global, so the owning index is checked on
@@ -219,7 +236,9 @@ impl EcosystemDriver for OciRegistry {
                 let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
                 self.serve_blob(&state, &name, &digest, head, range).await
             }
-            OciRoute::Blob { name, digest } if method == Method::DELETE => delete_blob(&state, headers, &name, &digest),
+            OciRoute::Blob { name, digest } if method == Method::DELETE => {
+                self.delete_blob(&state, headers, &name, &digest)
+            }
             OciRoute::BlobContents { name, digest } if method == Method::GET => {
                 self.serve_layer_contents(&state, &name, &digest, query).await
             }

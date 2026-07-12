@@ -239,10 +239,11 @@ their [PEP 700](https://peps.python.org/pep-0700/) yank/hide status, hosted uplo
 committing a freshly fetched page in one batch, and a publish's entries, serial, and
 [replication](https://en.wikipedia.org/wiki/Replication_%28computing%29) journal entry atomically. OCI keeps manifests
 (byte-for-byte, so their digest stays stable), tags, cached tag-list pages, tag freshness, and the
-[referrers](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers) graph. Both keep
-only artifact bytes in the shared blob store, where an OCI layer and a Python wheel dedupe against the same
-content-addressed tree. The value encodings and key layout are the driver's own; the store never reads them, so a third
-ecosystem adds its model without a storage change.
+[referrers](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers) graph. peryx keeps
+repository membership for OCI manifests and blobs in metadata. The shared content store tracks byte presence; the
+membership map controls which `(index, repository)` may serve those bytes. peryx keeps artifact bytes in the shared blob
+store, where an OCI layer and a Python wheel dedupe against the same content-addressed tree. Contributors can add a
+third ecosystem without changing storage because each driver owns its value encodings and key layout.
 
 {% mermaid() %}
 flowchart TD
@@ -252,7 +253,7 @@ blob["content-addressed blob store<br/>shared · deduplicated"]
 kv["shared key-value store<br/>opaque to the store · each driver owns its entries"]
 pypi -->|"index pages · projects<br/>uploads · metadata"| kv
 pypi -->|"artifact bytes"| blob
-oci -->|"manifests · tags<br/>referrers · tag pages"| kv
+oci -->|"manifests · tags<br/>membership · referrers<br/>tag pages"| kv
 oci -->|"layer bytes"| blob
 
 class blob,kv accent

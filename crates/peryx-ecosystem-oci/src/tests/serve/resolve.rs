@@ -306,6 +306,7 @@ async fn test_unreadable_blob_is_a_gateway_error() {
     let path = state.blobs.path_for(&stored);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     let digest = format!("sha256:{}", stored.as_str());
+    store::record_blob_membership(&state.meta, "store", "app", &digest).unwrap();
     let (status, _, _) = send(&app, Method::GET, &format!("/v2/store/app/blobs/{digest}")).await;
     // Restore permissions so the temp dir can be cleaned up.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
