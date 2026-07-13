@@ -1,7 +1,77 @@
 //! Resolving a `/v2/` request to an index, and the proxy read-through and offline paths.
 
 use super::support::*;
+use crate::tests::search_total;
 use peryx_identity::IndexAcl;
+
+#[tokio::test]
+async fn test_upstream_tag_removal_refreshes_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_server, app) = proxy_after_upstream_tag_removal(&dir).await;
+
+    assert_eq!(search_total(&app, "nginx").await, 0);
+}
+
+#[tokio::test]
+async fn test_upstream_tag_removal_disables_stale_serve() {
+    let dir = tempfile::tempdir().unwrap();
+    let (server, app) = proxy_after_upstream_tag_removal(&dir).await;
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/library/nginx/manifests/latest"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert_eq!(
+        send(&app, Method::GET, "/v2/hub/library/nginx/manifests/latest")
+            .await
+            .0,
+        StatusCode::BAD_GATEWAY
+    );
+}
+
+async fn proxy_after_upstream_tag_removal(dir: &tempfile::TempDir) -> (MockServer, axum::Router) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    let server = MockServer::start().await;
+    let manifest = br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#;
+    Mock::given(method("GET"))
+        .and(path("/v2/library/nginx/manifests/latest"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(manifest.to_vec(), MANIFEST_TYPE))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let now = Arc::new(AtomicI64::new(1000));
+    let ticking = now.clone();
+    let (_state, app) = crate::tests::proxy_with_clock(
+        dir,
+        &format!("{}/", server.uri()),
+        Arc::new(move || ticking.load(Ordering::Relaxed)),
+    );
+    let uri = "/v2/hub/library/nginx/manifests/latest";
+    assert_eq!(send(&app, Method::GET, uri).await.0, StatusCode::OK);
+    assert_eq!(search_total(&app, "nginx").await, 1);
+
+    server.reset().await;
+    Mock::given(method("HEAD"))
+        .and(path("/v2/library/nginx/manifests/latest"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v2/library/nginx/manifests/latest"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    now.store(1000 + 61, Ordering::Relaxed);
+    assert_eq!(send(&app, Method::GET, uri).await.0, StatusCode::NOT_FOUND);
+    (server, app)
+}
 
 #[tokio::test]
 async fn test_proxy_tag_is_cached_within_ttl_then_revalidated() {

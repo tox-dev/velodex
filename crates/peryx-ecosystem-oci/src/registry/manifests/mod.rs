@@ -263,7 +263,12 @@ impl OciRegistry {
             // failure to get one, and a failure to confirm a tag is not a reason to forget it: an
             // expired token draws a `401` from Docker Hub, which must serve the cached image rather
             // than report it unknown — and, with nothing cached, report the auth failure itself.
-            Err(UpstreamError::Status(StatusCode::NOT_FOUND)) => Ok(None),
+            Err(UpstreamError::Status(StatusCode::NOT_FOUND)) => {
+                if store::delete_tag(&state.meta, index, repo, tag)? {
+                    state.bump_search_epoch();
+                }
+                Ok(None)
+            }
             Err(UpstreamError::Status(status)) if absent_upstream(status) => stale_tag(state, index, repo, tag, head),
             Err(err) => Ok(Some(
                 stale_tag(state, index, repo, tag, head)?.unwrap_or_else(|| upstream_manifest_error(&err)),
