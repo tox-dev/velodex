@@ -6,6 +6,7 @@
 //! cached per scope so a burst of blob pulls authenticates once, and a cached token that has expired
 //! (a late `401`) re-runs the flow transparently.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use axum::http::{HeaderValue, Method, StatusCode};
@@ -250,12 +251,16 @@ impl Upstream {
     /// realm returns an authenticated token (Docker Hub's higher rate tier) rather than an anonymous one.
     async fn fetch_token(&self, challenge: &Bearer, scope: &str, auth: &Auth) -> Result<String, UpstreamError> {
         let scope = challenge.scope.as_deref().unwrap_or(scope);
-        let mut url = format!("{}?scope={}", challenge.realm, encode_query(scope));
-        if let Some(service) = &challenge.service {
-            url.push_str("&service=");
-            url.push_str(&encode_query(service));
+        let mut url = url::Url::parse(&challenge.realm)
+            .map_err(|err| UpstreamError::Transport(format!("invalid bearer realm: {err}")))?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("scope", scope);
+            if let Some(service) = &challenge.service {
+                query.append_pair("service", service);
+            }
         }
-        let mut request = self.http.get(&url);
+        let mut request = self.http.get(url);
         if let Auth::Basic { username, password } = auth {
             request = request.basic_auth(username, Some(password));
         }
@@ -291,20 +296,6 @@ fn hash_secret(parts: &[&str]) -> u64 {
     hasher.finish()
 }
 
-/// Percent-encode a query-parameter value: the token scope and service names contain `:` and `/`.
-fn encode_query(value: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            let _ = write!(out, "%{byte:02X}");
-        }
-    }
-    out
-}
-
 /// Fail a non-success response, otherwise hand it back for the caller to read. A `429` becomes a
 /// [`UpstreamError::RateLimited`] carrying the upstream's `Retry-After`, so the client is told to back
 /// off rather than seeing an opaque gateway error.
@@ -334,26 +325,96 @@ struct Bearer {
 
 /// Parse a `WWW-Authenticate` header value, keeping only a `Bearer` challenge with a realm.
 fn parse_bearer(value: &HeaderValue) -> Option<Bearer> {
-    let value = value.to_str().ok()?;
-    let rest = strip_auth_scheme(value, "Bearer")?;
+    let mut rest = strip_auth_scheme(value.to_str().ok()?, "Bearer")?;
     let mut realm = None;
     let mut service = None;
     let mut scope = None;
-    for parameter in rest.split(',') {
-        let (key, raw) = parameter.trim().split_once('=')?;
-        let unquoted = raw.trim().trim_matches('"').to_owned();
-        match key.trim() {
-            "realm" => realm = Some(unquoted),
-            "service" => service = Some(unquoted),
-            "scope" => scope = Some(unquoted),
-            _ => {}
+    loop {
+        let (key, value, tail) = auth_parameter(rest)?;
+        if key.eq_ignore_ascii_case("realm") {
+            realm = Some(value.into_owned());
+        } else if key.eq_ignore_ascii_case("service") {
+            service = Some(value.into_owned());
+        } else if key.eq_ignore_ascii_case("scope") {
+            scope = Some(value.into_owned());
+        }
+        rest = trim_ows(tail);
+        if rest.is_empty() {
+            break;
+        }
+        rest = trim_ows(rest.strip_prefix(',')?);
+        if rest.is_empty() {
+            return None;
         }
     }
     Some(Bearer {
-        realm: realm?,
+        realm: realm.filter(|value| !value.is_empty())?,
         service,
         scope,
     })
+}
+
+fn auth_parameter(value: &str) -> Option<(&str, Cow<'_, str>, &str)> {
+    let value = trim_ows(value);
+    let key_len = value.bytes().position(|byte| !is_token(byte)).unwrap_or(value.len());
+    if key_len == 0 {
+        return None;
+    }
+    let key = &value[..key_len];
+    let rest = trim_ows(&value[key_len..]).strip_prefix('=')?;
+    let (value, rest) = auth_value(trim_ows(rest))?;
+    Some((key, value, rest))
+}
+
+fn auth_value(value: &str) -> Option<(Cow<'_, str>, &str)> {
+    if let Some(value) = value.strip_prefix('"') {
+        for (index, byte) in value.bytes().enumerate() {
+            match byte {
+                b'"' => return Some((Cow::Borrowed(&value[..index]), &value[index + 1..])),
+                b'\\' => return unescape_quoted(value, index),
+                _ => {}
+            }
+        }
+        return None;
+    }
+    let len = value.bytes().position(|byte| !is_token(byte)).unwrap_or(value.len());
+    (len > 0).then(|| (Cow::Borrowed(&value[..len]), &value[len..]))
+}
+
+fn unescape_quoted(value: &str, first_escape: usize) -> Option<(Cow<'_, str>, &str)> {
+    let bytes = value.as_bytes();
+    let mut decoded = String::with_capacity(value.len());
+    decoded.push_str(&value[..first_escape]);
+    let mut index = first_escape;
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'"' => return Some((Cow::Owned(decoded), &value[index + 1..])),
+            b'\\' => {
+                index += 1;
+                let escaped = *bytes.get(index).filter(|&&byte| is_quoted_pair(byte))?;
+                decoded.push(char::from(escaped));
+            }
+            _ => decoded.push(char::from(byte)),
+        }
+        index += 1;
+    }
+    None
+}
+
+fn trim_ows(value: &str) -> &str {
+    value.trim_matches(|char| matches!(char, ' ' | '\t'))
+}
+
+const fn is_token(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+        )
+}
+
+const fn is_quoted_pair(byte: u8) -> bool {
+    matches!(byte, b'\t' | b' ' | b'!'..=b'~')
 }
 
 /// The token endpoint's JSON: registries return `token`, some return `access_token`.
@@ -366,6 +427,7 @@ struct TokenResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn header(value: &str) -> HeaderValue {
         HeaderValue::from_str(value).unwrap()
@@ -448,7 +510,7 @@ mod tests {
     }
 
     use base64::Engine as _;
-    use wiremock::matchers::{header as match_header, method, path};
+    use wiremock::matchers::{header as match_header, method, path, query_param};
     use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
     /// Match only the token-less first attempt, so the bearer-carrying retry falls through to the 200.
@@ -462,8 +524,94 @@ mod tests {
     fn challenge(base: &str) -> ResponseTemplate {
         ResponseTemplate::new(401).insert_header(
             "www-authenticate",
-            format!(r#"Bearer realm="{base}token",service="reg",scope="repository:library/nginx:pull""#).as_str(),
+            format!(r#"Bearer realm="{base}token",service=reg,scope="repository:library/nginx:pull""#).as_str(),
         )
+    }
+
+    #[tokio::test]
+    async fn test_manifest_accepts_standard_bearer_parameters() {
+        let server = MockServer::start().await;
+        let base = format!("{}/", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/library/nginx/manifests/latest"))
+            .and(Unauthenticated)
+            .respond_with(ResponseTemplate::new(401).insert_header(
+                "www-authenticate",
+                format!(
+                    r#"bEaReR ReAlM="{base}token?aud=a,b",SeRvIcE="reg\"istry",ScOpE="repository:library\/nginx:pull""#
+                )
+                .as_str(),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .and(query_param("aud", "a,b"))
+            .and(query_param("service", "reg\"istry"))
+            .and(query_param("scope", "repository:library/nginx:pull"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"token":"tok"}"#))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v2/library/nginx/manifests/latest"))
+            .and(match_header("authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = Upstream::new()
+            .manifest(&base, &Auth::None, "library/nginx", "latest")
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[rstest]
+    #[case::trailing_comma(r#"Bearer realm="https://auth.example/token","#)]
+    #[case::missing_name("Bearer =token")]
+    #[case::unterminated_quote(r#"Bearer realm="https://auth.example/token"#)]
+    #[case::unterminated_escape(r#"Bearer realm="https://auth.example/token\"#)]
+    #[case::unterminated_after_escape(r#"Bearer realm="https://auth.example/\token"#)]
+    #[tokio::test]
+    async fn test_manifest_rejects_malformed_bearer_parameters(#[case] challenge: &str) {
+        let server = MockServer::start().await;
+        let base = format!("{}/", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/library/nginx/manifests/latest"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = Upstream::new()
+            .manifest(&base, &Auth::None, "library/nginx", "latest")
+            .await;
+
+        assert!(matches!(result, Err(UpstreamError::Status(StatusCode::UNAUTHORIZED))));
+    }
+
+    #[tokio::test]
+    async fn test_manifest_rejects_an_invalid_bearer_realm() {
+        let server = MockServer::start().await;
+        let base = format!("{}/", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/library/nginx/manifests/latest"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", r#"Bearer realm="://""#))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = Upstream::new()
+            .manifest(&base, &Auth::None, "library/nginx", "latest")
+            .await;
+
+        assert!(
+            matches!(result, Err(UpstreamError::Transport(message)) if message.starts_with("invalid bearer realm:"))
+        );
     }
 
     #[tokio::test]
