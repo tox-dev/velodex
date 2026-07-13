@@ -105,9 +105,21 @@ insta.workspace = true
 criterion = { workspace = true, features = ["async_tokio"] }
 
 [[bench]]
-name = "operations"
+name = "serve"
 harness = false
 required-features = ["serving"]
+
+[[bench]]
+name = "parse"
+harness = false
+
+[[bench]]
+name = "render"
+harness = false
+
+[[bench]]
+name = "name_version"
+harness = false
 
 [lints]
 workspace = true

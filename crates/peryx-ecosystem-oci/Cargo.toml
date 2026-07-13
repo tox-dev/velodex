@@ -51,7 +51,19 @@ criterion = { workspace = true, features = ["async_tokio"] }
 rstest.workspace = true
 
 [[bench]]
-name = "operations"
+name = "version_check"
+harness = false
+
+[[bench]]
+name = "manifest_by_digest"
+harness = false
+
+[[bench]]
+name = "blob_serve"
+harness = false
+
+[[bench]]
+name = "tags_list"
 harness = false
 
 [lints]
