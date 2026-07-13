@@ -478,7 +478,7 @@ fn run_admin(
     outcome: WriteSignal<String>,
     refresh: ProjectPageResource,
 ) {
-    #[cfg(feature = "hydrate")]
+    #[cfg(all(not(feature = "ssr"), feature = "hydrate"))]
     {
         leptos::task::spawn_local(async move {
             let result = crate::data::admin_request(method, &url, &token).await;
@@ -486,7 +486,7 @@ fn run_admin(
             refresh.refetch();
         });
     }
-    #[cfg(not(feature = "hydrate"))]
+    #[cfg(any(feature = "ssr", not(feature = "hydrate")))]
     {
         let _ = (method, url, token, outcome, refresh);
     }

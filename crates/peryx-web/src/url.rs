@@ -12,7 +12,7 @@ pub(crate) fn simple_index_url(route: &str) -> String {
 
 /// The neutral browse-data endpoint for one index's project names: `/+ui/projects?index=<route>`.
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn ui_projects_url(route: &str) -> String {
     let mut url = "/+ui/projects".to_owned();
     QueryAppender::new(&mut url).push("index", route);
@@ -21,7 +21,7 @@ pub(crate) fn ui_projects_url(route: &str) -> String {
 
 /// The neutral browse-data endpoint for one project's view: `/+ui/project?index&project`.
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn ui_project_url(route: &str, project: &str) -> String {
     let mut url = "/+ui/project".to_owned();
     let mut query = QueryAppender::new(&mut url);
@@ -32,7 +32,7 @@ pub(crate) fn ui_project_url(route: &str, project: &str) -> String {
 
 /// The neutral browse-data endpoint for one manifest view: `/+ui/manifest?index&project&ref`.
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn ui_manifest_url(route: &str, repo: &str, reference: &str) -> String {
     let mut url = "/+ui/manifest".to_owned();
     let mut query = QueryAppender::new(&mut url);
@@ -44,7 +44,7 @@ pub(crate) fn ui_manifest_url(route: &str, repo: &str, reference: &str) -> Strin
 
 /// The neutral browse-data endpoint listing a nested item's members: `/+ui/members?index&project&digest`.
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn ui_members_url(route: &str, repo: &str, digest: &str) -> String {
     let mut url = "/+ui/members".to_owned();
     let mut query = QueryAppender::new(&mut url);
@@ -56,7 +56,7 @@ pub(crate) fn ui_members_url(route: &str, repo: &str, digest: &str) -> String {
 
 /// The neutral browse-data endpoint for one member chunk: `/+ui/member?index&project&digest&member&offset`.
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn ui_member_url(route: &str, repo: &str, digest: &str, member: &str, offset: u64) -> String {
     let mut url = "/+ui/member".to_owned();
     let mut query = QueryAppender::new(&mut url);
@@ -179,7 +179,7 @@ pub(crate) fn search_page_url(query: &str, source_type: &str, page: usize, page_
 }
 
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn search_api_url(
     route: Option<&str>,
     query: &str,
@@ -217,7 +217,7 @@ fn append_search_query(
 }
 
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn inspect_url(
     route: &str,
     sha256: &str,
@@ -259,7 +259,7 @@ pub(crate) fn stats_project_url(route: &str, project: &str) -> String {
 }
 
 #[must_use]
-#[cfg(any(feature = "hydrate", test))]
+#[cfg(any(all(not(feature = "ssr"), feature = "hydrate"), test))]
 pub(crate) fn stats_api_url(route: Option<&str>, project: Option<&str>) -> String {
     let mut url = "/+stats".to_owned();
     if let Some(route) = route {
