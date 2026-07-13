@@ -1,142 +1,456 @@
 //! Config snapshot serialization for backup manifests.
 
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use peryx_core::Ecosystem;
+use peryx_driver::rate_limit::{RateLimitConfig, RouteLimit};
+use peryx_identity::Action;
+use peryx_policy::PolicyConfig;
 use serde::Serialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use toml::{Table, Value};
 
-use crate::config::{Config, IndexKind, LogFormat, LogSink, SecretSource};
+use crate::config::{
+    AcmeConfig, AuthConfig, Config, IndexConfig, IndexKind, LogConfig, LogFormat, LogSink, PrefetchConfig,
+    PrefetchMode, SecretSource, TlsConfig, TokenConfig, WebhookConfig, WebhookSecret,
+};
 
 #[derive(Serialize)]
-struct SnapshotConfig {
-    host: String,
+struct SnapshotConfig<'a> {
+    host: &'a str,
     port: u16,
-    data_dir: String,
+    data_dir: &'a Path,
+    offline: bool,
     cache_ttl_secs: i64,
-    index: Vec<SnapshotIndex>,
-    log: SnapshotLog,
+    hot_cache_bytes: u64,
+    max_stale_secs: i64,
+    index: Vec<SnapshotIndex<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls: Option<SnapshotTls<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acme: Option<SnapshotAcme<'a>>,
+    log: SnapshotLog<'a>,
+    rate_limit: SnapshotRateLimit,
+    auth: SnapshotAuth<'a>,
 }
 
 #[derive(Serialize)]
-struct SnapshotIndex {
-    name: String,
-    route: String,
+struct SnapshotIndex<'a> {
+    name: &'a str,
+    route: &'a str,
+    ecosystem: Ecosystem,
+    #[serde(flatten)]
+    kind: SnapshotIndexKind<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cached: Option<String>,
+    anonymous_read: Option<bool>,
+    policy: Table,
     #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_concurrency: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hosted: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upload_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upload_token_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    volatile: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    layers: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upload: Option<String>,
+    settings: Option<&'a Table>,
+    #[serde(rename = "access_token", skip_serializing_if = "Vec::is_empty")]
+    access_tokens: Vec<SnapshotToken<'a>>,
+    #[serde(rename = "webhook", skip_serializing_if = "Vec::is_empty")]
+    webhooks: Vec<SnapshotWebhook<'a>>,
 }
 
 #[derive(Serialize)]
-struct SnapshotLog {
-    level: String,
+#[serde(untagged)]
+enum SnapshotIndexKind<'a> {
+    Cached {
+        cached: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        password: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token: Option<&'a str>,
+        upstream_concurrency: usize,
+        offline: bool,
+        prefetch: SnapshotPrefetch<'a>,
+    },
+    Hosted {
+        hosted: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upload_token: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upload_token_file: Option<&'a Path>,
+        volatile: bool,
+    },
+    Virtual {
+        layers: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upload: Option<&'a str>,
+    },
+}
+
+#[derive(Serialize)]
+struct SnapshotPrefetch<'a> {
+    mode: &'static str,
+    packages: &'a [String],
+    requirements: &'a [PathBuf],
+    include_wheels: bool,
+    include_sdists: bool,
+    python_tags: &'a [String],
+    abi_tags: &'a [String],
+    platform_tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_file_size_bytes: Option<u64>,
+    metadata_only: bool,
+}
+
+#[derive(Serialize)]
+struct SnapshotToken<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_file: Option<&'a Path>,
+    projects: &'a [String],
+    actions: &'a BTreeSet<Action>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SnapshotWebhook<'a> {
+    name: &'a str,
+    url: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_env: Option<&'a str>,
+    events: &'a [String],
+}
+
+#[derive(Serialize)]
+struct SnapshotTls<'a> {
+    cert: &'a Path,
+    key: &'a Path,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct SnapshotAcme<'a> {
+    domains: &'a [String],
+    contact: &'a str,
+    cache_dir: &'a Path,
+    staging: bool,
+}
+
+#[derive(Serialize)]
+struct SnapshotLog<'a> {
+    level: &'a str,
     format: &'static str,
     sink: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    file: Option<String>,
+    file: Option<&'a Path>,
+}
+
+#[derive(Serialize)]
+struct SnapshotRateLimit {
+    enabled: bool,
+    max_clients: u64,
+    listing: SnapshotRouteLimit,
+    metadata: SnapshotRouteLimit,
+    artifact: SnapshotRouteLimit,
+    upload: SnapshotRouteLimit,
+    admin: SnapshotRouteLimit,
+}
+
+#[derive(Serialize)]
+struct SnapshotRouteLimit {
+    requests: u64,
+    window_secs: u64,
+}
+
+#[derive(Serialize)]
+struct SnapshotAuth<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signing_key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signing_key_file: Option<&'a Path>,
+    token_ttl_secs: i64,
+    default_anonymous_read: bool,
 }
 
 pub(super) fn config_snapshot(config: &Config) -> anyhow::Result<String> {
+    let Config {
+        host,
+        port,
+        data_dir,
+        offline,
+        cache_ttl_secs,
+        hot_cache_bytes,
+        max_stale_secs,
+        indexes,
+        tls,
+        log,
+        rate_limit,
+        auth,
+    } = config;
+    let LogConfig {
+        level,
+        format,
+        sink,
+        file,
+    } = log;
+    let AuthConfig {
+        signing_key,
+        token_ttl_secs,
+        default_anonymous_read,
+    } = auth;
+    let (tls, acme) = snapshot_tls(tls.as_ref());
+    let (signing_key, signing_key_file) = secret_parts(signing_key.as_ref());
     let snapshot = SnapshotConfig {
-        host: config.host.clone(),
-        port: config.port,
-        data_dir: config.data_dir.display().to_string(),
-        cache_ttl_secs: config.cache_ttl_secs,
-        index: config.indexes.iter().map(snapshot_index).collect(),
+        host,
+        port: *port,
+        data_dir,
+        offline: *offline,
+        cache_ttl_secs: *cache_ttl_secs,
+        hot_cache_bytes: *hot_cache_bytes,
+        max_stale_secs: *max_stale_secs,
+        index: indexes.iter().map(snapshot_index).collect::<anyhow::Result<_>>()?,
+        tls,
+        acme,
         log: SnapshotLog {
-            level: config.log.level.clone(),
-            format: log_format(config.log.format),
-            sink: log_sink(config.log.sink),
-            file: config.log.file.as_ref().map(|path| path.display().to_string()),
+            level,
+            format: log_format(*format),
+            sink: log_sink(*sink),
+            file: file.as_deref(),
+        },
+        rate_limit: snapshot_rate_limit(rate_limit),
+        auth: SnapshotAuth {
+            signing_key,
+            signing_key_file,
+            token_ttl_secs: *token_ttl_secs,
+            default_anonymous_read: *default_anonymous_read,
         },
     };
     Ok(toml::to_string_pretty(&snapshot)?)
 }
 
-fn snapshot_index(index: &crate::config::IndexConfig) -> SnapshotIndex {
-    match &index.kind {
+fn snapshot_index(index: &IndexConfig) -> anyhow::Result<SnapshotIndex<'_>> {
+    let IndexConfig {
+        name,
+        route,
+        ecosystem,
+        kind,
+        anonymous_read,
+        tokens,
+        policy,
+        ecosystem_policy,
+        ecosystem_settings,
+        webhooks,
+    } = index;
+    let kind = match kind {
         IndexKind::Cached {
             upstream,
             username,
             password,
             token,
             upstream_concurrency,
-            ..
-        } => SnapshotIndex {
-            name: index.name.clone(),
-            route: index.route.clone(),
-            cached: Some(upstream.clone()),
-            username: username.clone(),
-            password: password.clone(),
-            token: token.clone(),
-            upstream_concurrency: Some(*upstream_concurrency),
-            hosted: None,
-            upload_token: None,
-            upload_token_file: None,
-            volatile: None,
-            layers: None,
-            upload: None,
+            offline,
+            prefetch,
+        } => SnapshotIndexKind::Cached {
+            cached: upstream,
+            username: username.as_deref(),
+            password: password.as_deref(),
+            token: token.as_deref(),
+            upstream_concurrency: *upstream_concurrency,
+            offline: *offline,
+            prefetch: snapshot_prefetch(prefetch),
         },
-        IndexKind::Hosted { upload_token, volatile } => SnapshotIndex {
-            name: index.name.clone(),
-            route: index.route.clone(),
-            cached: None,
-            username: None,
-            password: None,
-            token: None,
-            upstream_concurrency: None,
-            hosted: Some(true),
-            upload_token: literal_secret(upload_token.as_ref()),
-            upload_token_file: secret_file(upload_token.as_ref()),
-            volatile: Some(*volatile),
-            layers: None,
-            upload: None,
+        IndexKind::Hosted { upload_token, volatile } => {
+            let (upload_token, upload_token_file) = secret_parts(upload_token.as_ref());
+            SnapshotIndexKind::Hosted {
+                hosted: true,
+                upload_token,
+                upload_token_file,
+                volatile: *volatile,
+            }
+        }
+        IndexKind::Virtual { layers, upload } => SnapshotIndexKind::Virtual {
+            layers,
+            upload: upload.as_deref(),
         },
-        IndexKind::Virtual { layers, upload } => SnapshotIndex {
-            name: index.name.clone(),
-            route: index.route.clone(),
-            cached: None,
-            username: None,
-            password: None,
-            token: None,
-            upstream_concurrency: None,
-            hosted: None,
-            upload_token: None,
-            upload_token_file: None,
-            volatile: None,
-            layers: Some(layers.clone()),
-            upload: upload.clone(),
-        },
+    };
+    Ok(SnapshotIndex {
+        name,
+        route,
+        ecosystem: *ecosystem,
+        kind,
+        anonymous_read: *anonymous_read,
+        policy: snapshot_policy(policy, ecosystem_policy)?,
+        settings: (!ecosystem_settings.is_empty()).then_some(ecosystem_settings),
+        access_tokens: tokens.iter().map(snapshot_token).collect::<anyhow::Result<_>>()?,
+        webhooks: webhooks.iter().map(snapshot_webhook).collect(),
+    })
+}
+
+fn snapshot_prefetch(prefetch: &PrefetchConfig) -> SnapshotPrefetch<'_> {
+    let PrefetchConfig {
+        mode,
+        packages,
+        requirements,
+        include_wheels,
+        include_sdists,
+        python_tags,
+        abi_tags,
+        platform_tags,
+        max_file_size_bytes,
+        metadata_only,
+    } = prefetch;
+    SnapshotPrefetch {
+        mode: prefetch_mode(*mode),
+        packages,
+        requirements,
+        include_wheels: *include_wheels,
+        include_sdists: *include_sdists,
+        python_tags,
+        abi_tags,
+        platform_tags,
+        max_file_size_bytes: *max_file_size_bytes,
+        metadata_only: *metadata_only,
     }
 }
 
-/// A snapshot records where a secret lives, not what it is: a secret kept in a file stays in its file.
-fn literal_secret(source: Option<&SecretSource>) -> Option<String> {
-    match source? {
-        SecretSource::Literal(secret) => Some(secret.clone()),
-        SecretSource::File(_) => None,
+fn snapshot_policy(config: &PolicyConfig, ecosystem: &Table) -> anyhow::Result<Table> {
+    let PolicyConfig {
+        allow_projects,
+        block_projects,
+        max_file_size_bytes,
+        max_project_size_bytes,
+    } = config;
+    let mut policy = ecosystem.clone();
+    policy.insert(
+        "allow_projects".to_owned(),
+        Value::Array(allow_projects.iter().cloned().map(Value::String).collect()),
+    );
+    policy.insert(
+        "block_projects".to_owned(),
+        Value::Array(block_projects.iter().cloned().map(Value::String).collect()),
+    );
+    if let Some(value) = max_file_size_bytes {
+        policy.insert("max_file_size_bytes".to_owned(), Value::Integer((*value).try_into()?));
+    }
+    if let Some(value) = max_project_size_bytes {
+        policy.insert(
+            "max_project_size_bytes".to_owned(),
+            Value::Integer((*value).try_into()?),
+        );
+    }
+    Ok(policy)
+}
+
+fn snapshot_token(token: &TokenConfig) -> anyhow::Result<SnapshotToken<'_>> {
+    let TokenConfig {
+        name,
+        secret,
+        projects,
+        actions,
+        expires_at,
+    } = token;
+    let (secret, secret_file) = secret_parts(Some(secret));
+    Ok(SnapshotToken {
+        name,
+        secret,
+        secret_file,
+        projects,
+        actions,
+        expires_at: expires_at
+            .map(|timestamp| OffsetDateTime::from_unix_timestamp(timestamp)?.format(&Rfc3339))
+            .transpose()?,
+    })
+}
+
+fn snapshot_webhook(webhook: &WebhookConfig) -> SnapshotWebhook<'_> {
+    let WebhookConfig {
+        name,
+        url,
+        secret,
+        events,
+    } = webhook;
+    let (secret, secret_env) = match secret {
+        WebhookSecret::Literal(secret) => (Some(secret.as_str()), None),
+        WebhookSecret::Env(name) => (None, Some(name.as_str())),
+    };
+    SnapshotWebhook {
+        name,
+        url,
+        secret,
+        secret_env,
+        events,
     }
 }
 
-fn secret_file(source: Option<&SecretSource>) -> Option<String> {
-    match source? {
-        SecretSource::Literal(_) => None,
-        SecretSource::File(path) => Some(path.display().to_string()),
+fn snapshot_tls(tls: Option<&TlsConfig>) -> (Option<SnapshotTls<'_>>, Option<SnapshotAcme<'_>>) {
+    match tls {
+        Some(TlsConfig::Manual { cert, key }) => (
+            Some(SnapshotTls {
+                cert: cert.as_path(),
+                key: key.as_path(),
+            }),
+            None,
+        ),
+        Some(TlsConfig::Acme(AcmeConfig {
+            domains,
+            contact,
+            cache_dir,
+            staging,
+        })) => (
+            None,
+            Some(SnapshotAcme {
+                domains,
+                contact,
+                cache_dir,
+                staging: *staging,
+            }),
+        ),
+        None => (None, None),
+    }
+}
+
+const fn snapshot_rate_limit(rate_limit: &RateLimitConfig) -> SnapshotRateLimit {
+    let RateLimitConfig {
+        enabled,
+        max_clients,
+        listing,
+        metadata,
+        artifact,
+        upload,
+        admin,
+    } = rate_limit;
+    SnapshotRateLimit {
+        enabled: *enabled,
+        max_clients: *max_clients,
+        listing: snapshot_route_limit(*listing),
+        metadata: snapshot_route_limit(*metadata),
+        artifact: snapshot_route_limit(*artifact),
+        upload: snapshot_route_limit(*upload),
+        admin: snapshot_route_limit(*admin),
+    }
+}
+
+const fn snapshot_route_limit(limit: RouteLimit) -> SnapshotRouteLimit {
+    let RouteLimit { requests, window_secs } = limit;
+    SnapshotRouteLimit { requests, window_secs }
+}
+
+// Preserve file-backed secret references so snapshots do not expose secret contents.
+fn secret_parts(source: Option<&SecretSource>) -> (Option<&str>, Option<&Path>) {
+    match source {
+        Some(SecretSource::Literal(secret)) => (Some(secret), None),
+        Some(SecretSource::File(path)) => (None, Some(path)),
+        None => (None, None),
+    }
+}
+
+const fn prefetch_mode(mode: PrefetchMode) -> &'static str {
+    match mode {
+        PrefetchMode::All => "all",
+        PrefetchMode::Selected => "selected",
+        PrefetchMode::MetadataOnly => "metadata-only",
     }
 }
 
