@@ -17,8 +17,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  base:
+    name: Base benchmark
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Wait for benchmark
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while true; do
+            run=$(
+              gh run list \
+                --workflow codspeed.yml \
+                --branch main \
+                --event push \
+                --commit "$BASE_SHA" \
+                --limit 1 \
+                --json conclusion,status \
+                --jq '.[0] | [.status, .conclusion] | @tsv'
+            )
+            case "$run" in
+              $'completed\tsuccess') break ;;
+              $'completed\t'*) echo "Base CodSpeed run failed: $run"; exit 1 ;;
+            esac
+            sleep 15
+          done
+
   operations:
     name: Driver operation benchmarks
+    needs: base
+    if: always() && (needs.base.result == 'success' || needs.base.result == 'skipped')
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
