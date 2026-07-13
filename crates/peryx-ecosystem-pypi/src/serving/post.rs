@@ -67,7 +67,11 @@ async fn accept_upload(
     actor: Option<&str>,
     multipart: Multipart,
 ) -> Response {
-    let (form, staged) = match collect_form(multipart, &state.blobs).await {
+    let max_file_size = [index.policy.max_file_size(), hosted.policy.max_file_size()]
+        .into_iter()
+        .flatten()
+        .min();
+    let (form, staged) = match collect_form(multipart, &state.blobs, max_file_size).await {
         Ok(form) => form,
         Err(response) => {
             security_upload_event(headers, actor, &index.route, Some(&hosted.name), "failure")

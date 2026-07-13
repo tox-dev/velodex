@@ -159,12 +159,20 @@ async fn test_policy_rejects_project_detail() {
     assert_eq!(denial["project"], "flask");
     assert_eq!(denial["rule"], "project-block-list");
 }
+#[rstest]
+#[case::hosted(true)]
+#[case::virtual_index(false)]
 #[tokio::test]
-async fn test_policy_rejects_upload_when_target_local_index_denies() {
-    let local_policy = policy(|neutral, _pypi| {
-        neutral.max_file_size_bytes = Some(1);
+async fn test_policy_rejects_upload_when_index_blocks_project(#[case] hosted: bool) {
+    let blocking_policy = policy(|neutral, _pypi| {
+        neutral.block_projects = vec!["peryxpkg".to_owned()];
     });
-    let h = harness_with_policies(true, true, Policy::default(), local_policy, Policy::default()).await;
+    let (local_policy, virtual_policy) = if hosted {
+        (blocking_policy, Policy::default())
+    } else {
+        (Policy::default(), blocking_policy)
+    };
+    let h = harness_with_policies(true, true, Policy::default(), local_policy, virtual_policy).await;
     let wheel = fixture_wheel();
     let (content_type, body) = multipart_body(&upload_fields(), Some(("peryxpkg-1.0-py3-none-any.whl", &wheel)));
 
@@ -174,5 +182,5 @@ async fn test_policy_rejects_upload_when_target_local_index_denies() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(denial["action"], "upload");
     assert_eq!(denial["project"], "peryxpkg");
-    assert_eq!(denial["rule"], "max-file-size");
+    assert_eq!(denial["rule"], "project-block-list");
 }

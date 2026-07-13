@@ -1,7 +1,9 @@
 //! Publishing to a hosted index through the multipart upload API.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 
+use bytes::Bytes;
 use peryx_identity::{Action, Glob, Grant, IndexAcl, NamedToken};
 
 use super::support::*;
@@ -30,22 +32,76 @@ async fn test_upload_via_overlay_then_serve_and_download() {
     assert_eq!(ls, StatusCode::OK);
     assert!(list.contains("peryxpkg"));
 }
+#[rstest]
+#[case::hosted(1, 2)]
+#[case::virtual_index(2, 1)]
 #[tokio::test]
-async fn test_policy_rejects_upload() {
-    let overlay_policy = policy(|neutral, _pypi| {
-        neutral.max_file_size_bytes = Some(1);
+async fn test_policy_rejects_chunked_upload_over_limit(#[case] hosted_limit: u64, #[case] virtual_limit: u64) {
+    let hosted_policy = policy(|neutral, _pypi| {
+        neutral.max_file_size_bytes = Some(hosted_limit);
     });
-    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
-    let wheel = fixture_wheel();
-    let (content_type, body) = multipart_body(&upload_fields(), Some(("peryxpkg-1.0-py3-none-any.whl", &wheel)));
+    let virtual_policy = policy(|neutral, _pypi| {
+        neutral.max_file_size_bytes = Some(virtual_limit);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), hosted_policy, virtual_policy).await;
+    let filename = "peryxpkg-1.0-py3-none-any.whl";
+    let (content_type, body) = multipart_body(&upload_fields(), Some((filename, b"ab")));
+    let chunks = body
+        .chunks(7)
+        .map(Bytes::copy_from_slice)
+        .map(Ok::<_, Infallible>)
+        .collect::<Vec<_>>();
 
-    let (status, body) = post_upload_response(&h.state, "/root/pypi/", Some(&upload_auth()), &content_type, body).await;
+    let (status, body) = post_upload_body_response(
+        &h.state,
+        "/root/pypi/",
+        Some(&upload_auth()),
+        &content_type,
+        Body::from_stream(futures_util::stream::iter(chunks)),
+    )
+    .await;
 
     let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(denial["action"], "upload");
     assert_eq!(denial["project"], "peryxpkg");
+    assert_eq!(denial["filename"], filename);
+    assert_eq!(denial["version"], "1.0");
     assert_eq!(denial["rule"], "max-file-size");
+    assert_eq!(denial["reason"], "file size 2 exceeds limit 1");
+    assert!(
+        h.state
+            .meta
+            .list_upload_entries("hosted", "peryxpkg")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(std::fs::read_dir(h.dir.path().join("blobs")).unwrap().count(), 0);
+}
+#[tokio::test]
+async fn test_policy_accepts_upload_at_size_limit() {
+    let wheel = fixture_wheel();
+    let overlay_policy = policy(|neutral, _pypi| {
+        neutral.max_file_size_bytes = Some(wheel.len() as u64);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+
+    assert_eq!(upload_peryxpkg(&h.state, "/root/pypi/", &wheel).await, StatusCode::OK);
+}
+#[tokio::test]
+async fn test_policy_rejects_declared_oversize_before_staging() {
+    let overlay_policy = policy(|neutral, _pypi| {
+        neutral.max_file_size_bytes = Some(1);
+    });
+    let h = harness_with_policies(true, true, Policy::default(), Policy::default(), overlay_policy).await;
+    let (content_type, body) = multipart_body_with_content_length(2, b"a");
+
+    let (status, body) = post_upload_response(&h.state, "/root/pypi/", Some(&upload_auth()), &content_type, body).await;
+
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denial["reason"], "file size 2 exceeds limit 1");
+    assert!(!h.dir.path().join("blobs").exists());
 }
 #[tokio::test]
 async fn test_upload_direct_to_local_route() {
@@ -942,4 +998,16 @@ async fn test_a_write_only_index_refuses_a_delete() {
     let status = request(&state, "DELETE", "/hosted/peryxpkg/", Some(&scoped_auth())).await;
 
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+fn multipart_body_with_content_length(declared: u64, content: &[u8]) -> (String, Vec<u8>) {
+    let (content_type, body) = multipart_body(&upload_fields(), Some(("peryxpkg-1.0-py3-none-any.whl", content)));
+    let header_end = body
+        .windows(4)
+        .rposition(|window| window == b"\r\n\r\n")
+        .expect("content part has a header terminator");
+    let mut head = body[..header_end + 2].to_vec();
+    head.extend_from_slice(format!("Content-Length: {declared}\r\n\r\n").as_bytes());
+    head.extend_from_slice(&body[header_end + 4..]);
+    (content_type, head)
 }

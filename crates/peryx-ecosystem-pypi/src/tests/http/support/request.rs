@@ -219,6 +219,15 @@ pub async fn post_upload_response(
     content_type: &str,
     body: Vec<u8>,
 ) -> (StatusCode, String) {
+    post_upload_body_response(state, uri, auth, content_type, Body::from(body)).await
+}
+pub async fn post_upload_body_response(
+    state: &Arc<AppState>,
+    uri: &str,
+    auth: Option<&str>,
+    content_type: &str,
+    body: Body,
+) -> (StatusCode, String) {
     let mut builder = Request::builder()
         .uri(uri)
         .method("POST")
@@ -227,7 +236,7 @@ pub async fn post_upload_response(
         builder = builder.header(header::AUTHORIZATION, auth);
     }
     let response = router(state.clone())
-        .oneshot(builder.body(Body::from(body)).unwrap())
+        .oneshot(builder.body(body).unwrap())
         .await
         .unwrap();
     let status = response.status();

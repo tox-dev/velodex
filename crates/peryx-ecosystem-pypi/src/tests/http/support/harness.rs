@@ -4,7 +4,7 @@ use super::*;
 use peryx_identity::IndexAcl;
 
 pub struct Harness {
-    pub(crate) _dir: tempfile::TempDir,
+    pub(crate) dir: tempfile::TempDir,
     pub(crate) server: MockServer,
     pub(crate) state: Arc<AppState>,
     pub(crate) clock: Arc<AtomicI64>,
@@ -93,7 +93,7 @@ pub async fn harness_with_stale(
     state.max_stale_secs = max_stale_secs;
     let state = crate::tests::wired(state);
     Harness {
-        _dir: dir,
+        dir,
         server,
         state,
         clock,
@@ -158,7 +158,7 @@ pub async fn promotion_harness() -> Harness {
         Arc::new(move || ticks.load(Ordering::Relaxed)),
     ));
     Harness {
-        _dir: dir,
+        dir,
         server,
         state,
         clock,

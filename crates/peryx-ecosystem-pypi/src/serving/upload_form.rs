@@ -5,13 +5,16 @@
 )]
 
 use axum::extract::Multipart;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use blake2::Blake2bVar;
 use blake2::digest::{Update as _, VariableOutput as _};
+use peryx_policy::{PolicyAction, PolicyDenial};
 
 use crate::DistributionFilenameError;
 use crate::upload::{StagedUpload, UploadError, UploadForm};
+
+use super::response::policy_denial_response;
 
 const MAX_UPLOAD_TEXT_FIELD_BYTES: usize = 64 * 1024;
 
@@ -21,6 +24,7 @@ const MAX_UPLOAD_TEXT_FIELD_BYTES: usize = 64 * 1024;
 pub(super) async fn collect_form(
     mut multipart: Multipart,
     blobs: &peryx_storage::blob::BlobStore,
+    max_file_size: Option<u64>,
 ) -> Result<(UploadForm, Option<StagedUpload>), Response> {
     let mut form = UploadForm::default();
     let mut staged = None;
@@ -31,7 +35,7 @@ pub(super) async fn collect_form(
                 return Err(reject("duplicate content field"));
             }
             form.filename = field.file_name().map(str::to_owned);
-            staged = Some(stage_content(field, blobs).await?);
+            staged = Some(stage_content(field, blobs, max_file_size, &form).await?);
         } else if let Some(upload_field) = upload_text_field(&field_name) {
             let value = read_text_field(field, &field_name).await?;
             set_upload_text_field(&mut form, upload_field, value);
@@ -125,10 +129,27 @@ async fn drain_field(mut field: axum::extract::multipart::Field<'_>) -> Result<(
 async fn stage_content(
     mut field: axum::extract::multipart::Field<'_>,
     blobs: &peryx_storage::blob::BlobStore,
+    max_file_size: Option<u64>,
+    form: &UploadForm,
 ) -> Result<StagedUpload, Response> {
+    let limit = max_file_size.unwrap_or(u64::MAX);
+    if let Some(size) = field
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        && size > limit
+    {
+        return Err(upload_size_reject(form, size, limit));
+    }
     let mut pending = blobs.begin().map_err(storage_reject)?;
     let mut blake2 = Blake2bVar::new(32).expect("blake2b-256 output size is valid");
+    let mut size = 0_u64;
     while let Some(chunk) = field.chunk().await.map_err(reject)? {
+        size = size.saturating_add(chunk.len() as u64);
+        if size > limit {
+            return Err(upload_size_reject(form, size, limit));
+        }
         blake2.update(&chunk);
         pending.write(&chunk).map_err(storage_reject)?;
     }
@@ -140,6 +161,19 @@ async fn stage_content(
         blob: pending.finish().map_err(storage_reject)?,
         blake2_256: hex(&digest),
     })
+}
+
+fn upload_size_reject(form: &UploadForm, size: u64, limit: u64) -> Response {
+    let project = form.name.as_deref().map(crate::normalize_name).unwrap_or_default();
+    policy_denial_response(&PolicyDenial::new(
+        PolicyAction::Upload,
+        &project,
+        form.filename.as_deref(),
+        form.version.clone(),
+        "max-file-size",
+        "size",
+        format!("file size {size} exceeds limit {limit}"),
+    ))
 }
 
 fn hex(bytes: &[u8]) -> String {
