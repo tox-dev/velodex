@@ -621,6 +621,21 @@ async fn test_ui_dashboard_renders_indexes_and_counters(ui_router: (tempfile::Te
     assert!(body.contains("/pkg/peryx_web.js"));
 }
 
+#[rstest]
+#[tokio::test]
+async fn test_ui_header_marks_outbound_links_external(ui_router: (tempfile::TempDir, axum::Router)) {
+    let (_dir, router) = ui_router;
+    let (status, body) = get(&router, "/").await;
+    assert_eq!(status, StatusCode::OK);
+    for url in ["https://peryx.readthedocs.io/", "https://github.com/tox-dev/peryx"] {
+        assert!(
+            body.contains(&format!("href=\"{url}\" rel=\"{EXTERNAL_LINK_REL}\"")),
+            "{url} lacks the external relationship: {body}"
+        );
+    }
+    assert!(body.contains("<a href=\"/admin/status\">"), "{body}");
+}
+
 #[tokio::test]
 async fn test_ui_dashboard_shows_the_oci_registry_endpoint_not_simple() {
     let dir = tempfile::tempdir().unwrap();
@@ -815,6 +830,39 @@ async fn test_ui_project_page_sanitizes_metadata_links() {
 #[case::relative("/pypi/files/veloxdemo.whl", true)]
 #[tokio::test]
 async fn test_ui_project_page_sanitizes_artifact_links(#[case] url: &str, #[case] linked: bool) {
+    let (_dir, router) = artifact_router(url);
+    let (status, body) = get(&router, "/browse?index=pypi&project=veloxdemo").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (
+            body.contains(&format!(">{ARTIFACT_FILENAME}<")),
+            body.contains(&format!("href=\"{url}\""))
+        ),
+        (true, linked),
+        "{body}"
+    );
+}
+
+#[rstest]
+#[case::http("http://example.com/veloxdemo.whl", true)]
+#[case::https("https://example.com/veloxdemo.whl", true)]
+#[case::local_route("/pypi/files/veloxdemo.whl", false)]
+#[tokio::test]
+async fn test_ui_project_page_marks_outbound_artifact_links_external(#[case] url: &str, #[case] external: bool) {
+    let (_dir, router) = artifact_router(url);
+    let (status, body) = get(&router, "/browse?index=pypi&project=veloxdemo").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.contains(&format!("href=\"{url}\" rel=\"{EXTERNAL_LINK_REL}\"")),
+        external,
+        "{body}"
+    );
+}
+
+const EXTERNAL_LINK_REL: &str = "external nofollow noopener noreferrer";
+const ARTIFACT_FILENAME: &str = "veloxdemo-1.0.tar.bz2";
+
+fn artifact_router(url: &str) -> (tempfile::TempDir, axum::Router) {
     let dir = tempfile::tempdir().unwrap();
     let mut config = ui_config(&dir);
     let IndexKind::Cached { offline, .. } = &mut config.indexes[0].kind else {
@@ -822,7 +870,6 @@ async fn test_ui_project_page_sanitizes_artifact_links(#[case] url: &str, #[case
     };
     *offline = true;
     let state = build_state(&config).unwrap();
-    let filename = "veloxdemo-1.0.tar.bz2";
     state
         .meta
         .put_index(
@@ -838,7 +885,7 @@ async fn test_ui_project_page_sanitizes_artifact_links(#[case] url: &str, #[case
                     "name": "veloxdemo",
                     "versions": ["1.0"],
                     "files": [{
-                        "filename": filename,
+                        "filename": ARTIFACT_FILENAME,
                         "url": url,
                         "hashes": {},
                     }],
@@ -847,16 +894,7 @@ async fn test_ui_project_page_sanitizes_artifact_links(#[case] url: &str, #[case
             },
         )
         .unwrap();
-    let (status, body) = get(&router_for(state), "/browse?index=pypi&project=veloxdemo").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        (
-            body.contains(&format!(">{filename}<")),
-            body.contains(&format!("href=\"{url}\""))
-        ),
-        (true, linked),
-        "{body}"
-    );
+    (dir, router_for(state))
 }
 
 fn wheel_with_metadata(metadata: &str) -> Vec<u8> {

@@ -17,7 +17,7 @@ use regex::Regex;
 
 use super::{ErrorMessage, copy_to_clipboard, human_size};
 use crate::data::load_project_view;
-use crate::markdown::{EXTERNAL_LINK_REL, is_safe_artifact_link, is_safe_link, render_description};
+use crate::markdown::{external_link_rel, is_safe_artifact_link, is_safe_link, render_description};
 use crate::model::{UiFile, UiProject, UiProjectView};
 use crate::url::{
     admin_project_url, admin_version_url, browse_archive_url, browse_index_url, browse_project_file_search_url,
@@ -274,7 +274,8 @@ fn file_row(route: &str, project: &str, file: &UiFile) -> impl IntoView {
     let class = if file.yanked { "yanked" } else { "" };
     let filename = file.filename.clone();
     let download = if is_safe_artifact_link(&file.url) {
-        view! { <a href=file.url.clone()>{filename}</a> }.into_any()
+        let rel = external_link_rel(&file.url);
+        view! { <a href=file.url.clone() rel=rel>{filename}</a> }.into_any()
     } else {
         filename.into_any()
     };
@@ -410,7 +411,8 @@ fn block_view(block: UiBlock) -> AnyView {
             <ul class="links-list">
                 {links.into_iter().map(|(text, url)| {
                     if is_safe_link(&url) {
-                        view! { <li><a href=url rel=EXTERNAL_LINK_REL>{text}</a></li> }.into_any()
+                        let rel = external_link_rel(&url);
+                        view! { <li><a href=url rel=rel>{text}</a></li> }.into_any()
                     } else {
                         view! { <li>{text}</li> }.into_any()
                     }

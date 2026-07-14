@@ -50,6 +50,14 @@ fn render_markdown(text: &str) -> String {
     }
 }
 
+/// An HTTP or HTTPS destination leaves the UI and gets the hardened relationship; a relative peryx
+/// route stays inside it and gets none.
+pub(crate) fn external_link_rel(target: &str) -> Option<&'static str> {
+    Url::parse(target)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        .then_some(EXTERNAL_LINK_REL)
+}
+
 pub(crate) fn is_safe_link(target: &str) -> bool {
     is_safe_url(target, |scheme| matches!(scheme, "http" | "https" | "mailto"))
 }

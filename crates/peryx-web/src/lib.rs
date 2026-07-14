@@ -22,6 +22,7 @@ use leptos_router::components::{Route, Router, Routes};
 use leptos_router::path;
 
 use crate::data::load_search;
+use crate::markdown::external_link_rel;
 use crate::model::UiSearchResult;
 use crate::url::{browse_project_url, search_page_url};
 
@@ -83,6 +84,9 @@ pub fn App() -> impl IntoView {
     }
 }
 
+const DOCS_URL: &str = "https://peryx.readthedocs.io/";
+const REPO_URL: &str = "https://github.com/tox-dev/peryx";
+
 #[component]
 fn Header() -> impl IntoView {
     view! {
@@ -97,8 +101,8 @@ fn Header() -> impl IntoView {
                     <a href="/">"Dashboard"</a>
                     <a href="/search?page_size=25">"Search"</a>
                     <a href="/admin/status">"Status"</a>
-                    <a href="https://peryx.readthedocs.io/" rel="external">"Docs"</a>
-                    <a href="https://github.com/tox-dev/peryx" rel="external">"GitHub"</a>
+                    <a href=DOCS_URL rel=external_link_rel(DOCS_URL)>"Docs"</a>
+                    <a href=REPO_URL rel=external_link_rel(REPO_URL)>"GitHub"</a>
                     <ThemeToggle />
                 </div>
             </nav>
