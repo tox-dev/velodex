@@ -9,17 +9,13 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: codspeed-${{ github.ref }}
-  # Never cancel a main run: it records the baseline every PR is compared against. Cancelling it (as a
-  # burst of merges does) leaves commits with no measurements, so CodSpeed falls back to an older base
-  # taken in a different runtime environment and reports phantom regressions.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   base:
     name: Base benchmark
     if: github.event_name == 'pull_request'
+    concurrency:
+      group: codspeed-base-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -54,6 +50,10 @@ jobs:
     name: ${{ matrix.ecosystem }} operation benchmarks
     needs: base
     if: always() && (needs.base.result == 'success' || needs.base.result == 'skipped')
+    concurrency:
+      # GitHub left ARM jobs running after workflow-level cancellation in #280.
+      group: codspeed-${{ matrix.ecosystem }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
