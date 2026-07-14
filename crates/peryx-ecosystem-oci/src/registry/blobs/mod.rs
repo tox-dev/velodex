@@ -5,6 +5,7 @@
 mod contents;
 
 use contents::{layer_contents_response, layer_query_member};
+use peryx_driver::conditional::applicable_range;
 use peryx_driver::range::{RangeSpec, parse_range, unsatisfiable_range};
 
 use super::uploads::created;
@@ -31,7 +32,7 @@ impl<S: BuildHasher + Default + Send + Sync + 'static> OciRegistryWithHasher<S> 
         name: &str,
         digest: &str,
         head: bool,
-        range: Option<&str>,
+        headers: &HeaderMap,
     ) -> Result<Response, ServeError> {
         let Some((index, repo)) = resolve(&state.indexes, name) else {
             return Ok(error_response(ErrorCode::NameUnknown, "repository name unknown"));
@@ -45,11 +46,18 @@ impl<S: BuildHasher + Default + Send + Sync + 'static> OciRegistryWithHasher<S> 
                 "only sha256 blob digests are supported",
             ));
         };
+        // A blob is content-addressed, so its digest is the strong validator for its bytes.
+        let etag = format!("\"{digest}\"");
+        let asked = BlobRequest {
+            range: applicable_range(headers, &etag),
+            etag: &etag,
+            head,
+        };
         if head {
-            return self.head_blob(state, index, repo, digest, &storage, range).await;
+            return self.head_blob(state, index, repo, digest, &storage, &asked).await;
         }
         let response = match self.ensure_blob(state, index, repo, digest, &storage).await? {
-            BlobFetch::Stored => serve_stored_blob(&state.blobs, &storage, digest, false, range).await?,
+            BlobFetch::Stored => serve_stored_blob(&state.blobs, &storage, digest, &asked).await?,
             BlobFetch::Absent => error_response(ErrorCode::BlobUnknown, "blob unknown"),
             BlobFetch::Gateway(response) => response,
         };
@@ -74,10 +82,10 @@ impl<S: BuildHasher + Default + Send + Sync + 'static> OciRegistryWithHasher<S> 
         repo: &str,
         digest: &str,
         storage: &Digest,
-        range: Option<&str>,
+        asked: &BlobRequest<'_>,
     ) -> Result<Response, ServeError> {
         if state.blobs.exists(storage) && self.blob_authorized(state, index, repo, digest)? {
-            return serve_stored_blob(&state.blobs, storage, digest, true, range).await;
+            return serve_stored_blob(&state.blobs, storage, digest, asked).await;
         }
         for member in serving_members(state, index) {
             let Some(client) = member.proxy_client() else {
@@ -95,7 +103,7 @@ impl<S: BuildHasher + Default + Send + Sync + 'static> OciRegistryWithHasher<S> 
             {
                 Ok(size) => {
                     store::record_blob_membership(&state.meta, &member.name, repo, digest)?;
-                    return Ok(blob_head_response(digest, size, range));
+                    return Ok(blob_head_response(digest, size, asked));
                 }
                 Err(UpstreamError::Status(status)) if absent_upstream(status) => {}
                 Err(err) => return Ok(upstream_error_response(&err, "blob")),
@@ -400,13 +408,21 @@ pub(super) fn blob_created(name: &str, digest: &str) -> Response {
     created(&format!("/v2/{name}/blobs/{digest}"), digest)
 }
 
+/// What a client asked of a blob, once `If-Range` has had its say on the range.
+struct BlobRequest<'a> {
+    /// The blob's entity tag, sent with every response so a client has a validator to condition on.
+    etag: &'a str,
+    /// The single range to serve, or `None` for the whole blob.
+    range: Option<&'a str>,
+    head: bool,
+}
+
 /// Stream a stored blob, honoring a single-range request with `206`/`Content-Range`.
 async fn serve_stored_blob(
     blobs: &BlobStore,
     storage: &Digest,
     digest: &str,
-    head: bool,
-    range: Option<&str>,
+    asked: &BlobRequest<'_>,
 ) -> Result<Response, ServeError> {
     let path = blobs.path_for(storage);
     let file = tokio::fs::File::open(&path).await?;
@@ -414,12 +430,10 @@ async fn serve_stored_blob(
     let common = [
         (header::CONTENT_TYPE, HeaderValue::from_static(OCTET_STREAM)),
         (header::ACCEPT_RANGES, HeaderValue::from_static("bytes")),
-        (
-            DOCKER_CONTENT_DIGEST,
-            HeaderValue::from_str(digest).unwrap_or(HeaderValue::from_static("")),
-        ),
+        (header::ETAG, header_value(asked.etag)),
+        (DOCKER_CONTENT_DIGEST, header_value(digest)),
     ];
-    let spec = range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let spec = asked.range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
     let (start, end) = match spec {
         RangeSpec::Ignore => {
             let mut builder = Response::builder()
@@ -428,7 +442,7 @@ async fn serve_stored_blob(
             for (name, value) in common {
                 builder = builder.header(name, value);
             }
-            let body = if head {
+            let body = if asked.head {
                 Body::empty()
             } else {
                 peryx_driver::body::pipelined_file(file.into_std().await, 0, size)
@@ -448,7 +462,7 @@ async fn serve_stored_blob(
     for (name, value) in common {
         builder = builder.header(name, value);
     }
-    if head {
+    if asked.head {
         return Ok(builder.body(Body::empty()).expect("range head response builds"));
     }
     Ok(builder
@@ -458,11 +472,11 @@ async fn serve_stored_blob(
 
 /// A blob `HEAD` response: the size and digest headers a client needs to decide whether to pull, with
 /// no body.
-fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response {
+fn blob_head_response(digest: &str, size: u64, asked: &BlobRequest<'_>) -> Response {
     // A `HEAD` answers a `Range` the way the matching `GET` would. Ignoring it here while honouring
     // it for a cached blob made one request give two answers depending on what the store happened to
     // hold, which is the one thing a client checking a layer must not see.
-    let spec = range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let spec = asked.range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
     let (status, length, content_range) = match spec {
         RangeSpec::Ignore => (StatusCode::OK, size, None),
         RangeSpec::Unsatisfiable => return unsatisfiable_range(size),
@@ -477,16 +491,18 @@ fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response 
         .header(header::CONTENT_TYPE, OCTET_STREAM)
         .header(header::CONTENT_LENGTH, length)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(
-            DOCKER_CONTENT_DIGEST,
-            HeaderValue::from_str(digest).unwrap_or(HeaderValue::from_static("")),
-        );
+        .header(header::ETAG, header_value(asked.etag))
+        .header(DOCKER_CONTENT_DIGEST, header_value(digest));
     if let Some(content_range) = content_range {
         builder = builder.header(header::CONTENT_RANGE, content_range);
     }
     builder
         .body(Body::empty())
         .expect("blob head response builds from validated parts")
+}
+
+fn header_value(value: &str) -> HeaderValue {
+    HeaderValue::from_str(value).unwrap_or(HeaderValue::from_static(""))
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use peryx_core::path::{self};
-use peryx_driver::conditional::if_none_match;
+use peryx_driver::conditional::{applicable_range, if_none_match};
 use peryx_driver::not_found;
 use peryx_driver::range::{RangeSpec, parse_range, unsatisfiable_range};
 use peryx_driver::state::ServingState;
@@ -209,7 +209,7 @@ async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str, header
     if let Some(response) = not_modified(headers, &etag) {
         return response;
     }
-    let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
+    let range = applicable_range(headers, &etag);
     serve_blob(state, route, &filename, digest, range, &etag).await
 }
 

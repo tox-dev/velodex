@@ -268,6 +268,104 @@ async fn test_blob_head_and_unsatisfiable_range() {
     let (status, _, _) = send(&app, Method::HEAD, &absent).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+const LAYER: &[u8] = b"0123456789";
+
+const STALE: &str = "\"sha256:0000\"";
+
+fn layer_etag() -> String {
+    format!("\"{}\"", oci_digest(LAYER))
+}
+
+/// A hosted index holding [`LAYER`] in repository `app`: the router and the blob's URL.
+fn stored_layer(dir: &tempfile::TempDir) -> (axum::Router, String) {
+    let (state, app) = hosted(dir);
+    let digest = oci_digest(LAYER);
+    state.blobs.write(LAYER).unwrap();
+    crate::store::record_blob_membership(&state.meta, "store", "app", &digest).unwrap();
+    (app, format!("/v2/store/app/blobs/{digest}"))
+}
+
+#[rstest]
+#[case::get(Method::GET)]
+#[case::head(Method::HEAD)]
+#[tokio::test]
+async fn test_blob_is_served_under_its_digest_as_an_entity_tag(#[case] method: Method) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let (status, headers, _) = send(&app, method, &uri).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], layer_etag());
+}
+#[rstest]
+#[case::get(Method::GET, &LAYER[5..=6])]
+#[case::head(Method::HEAD, b"")]
+#[tokio::test]
+async fn test_blob_serves_a_range_an_if_range_still_names(#[case] method: Method, #[case] expected: &[u8]) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let conditional = [("if-range", &*layer_etag()), ("range", "bytes=5-6")];
+    let (status, headers, got) = send_with(&app, method, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 5-6/{}", LAYER.len()));
+    assert_eq!(got, expected);
+}
+#[rstest]
+#[case::stale_tag(STALE)]
+#[case::weak_tag(&format!("W/{}", layer_etag()))]
+#[case::date("Wed, 21 Oct 2015 07:28:00 GMT")]
+#[case::malformed("sha256:0000")]
+#[tokio::test]
+async fn test_blob_serves_the_whole_layer_for_a_range_a_stale_if_range_asks_for(#[case] field: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let conditional = [("if-range", field), ("range", "bytes=5-6")];
+    let (status, headers, got) = send_with(&app, Method::GET, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(got, LAYER);
+}
+#[tokio::test]
+async fn test_blob_head_drops_a_range_a_stale_if_range_asks_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let conditional = [("if-range", STALE), ("range", "bytes=5-6")];
+    let (status, headers, _) = send_with(&app, Method::HEAD, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_LENGTH], LAYER.len().to_string());
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+}
+// A stale copy earns the whole blob rather than a `416`: the request is well formed, only the bytes
+// behind it went stale.
+#[tokio::test]
+async fn test_stale_if_range_serves_the_whole_layer_rather_than_refusing_the_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let conditional = [("if-range", STALE), ("range", "bytes=50-60")];
+    let (status, _, got) = send_with(&app, Method::GET, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, LAYER);
+}
+#[tokio::test]
+async fn test_if_range_without_a_range_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, uri) = stored_layer(&dir);
+
+    let (status, headers, got) = send_with(&app, Method::GET, &uri, &[("if-range", STALE)]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(got, LAYER);
+}
 #[tokio::test]
 async fn test_blob_missing_on_hosted_is_unknown() {
     let dir = tempfile::tempdir().unwrap();

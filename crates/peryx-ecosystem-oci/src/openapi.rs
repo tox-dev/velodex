@@ -162,10 +162,19 @@ fn oci_blob_pull() -> OperationBuilder {
         .summary(Some("Pull a blob"))
         .description(Some(
             "Serves the blob from the content-addressed store, pulling it through an online proxy member \
-             on a miss; concurrent misses share one upstream fetch. Range-capable.",
+             on a miss; concurrent misses share one upstream fetch. Range-capable, with the quoted \
+             digest as the `ETag`: a `Range` carrying an `If-Range` is served only while that tag still \
+             names the blob, and the whole blob otherwise.",
         ))
         .parameter(name_param())
         .parameter(digest_param())
+        .parameter(
+            ParameterBuilder::new()
+                .name("If-Range")
+                .parameter_in(ParameterIn::Header)
+                .description(Some("The entity tag the client's partial copy was cut from"))
+                .example(Some(json!("\"sha256:2c3e...\""))),
+        )
         .response("200", ResponseBuilder::new().description("The blob bytes"))
         .response("206", ResponseBuilder::new().description("A requested byte range"))
         .response("404", ResponseBuilder::new().description("`BLOB_UNKNOWN`"))

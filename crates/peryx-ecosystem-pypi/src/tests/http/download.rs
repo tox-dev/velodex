@@ -340,6 +340,59 @@ async fn test_matching_if_none_match_never_fetches_an_uncached_artifact() {
     assert!(!h.state.blobs.exists(&digest));
 }
 #[tokio::test]
+async fn test_cached_file_serves_a_range_an_if_range_still_names() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let conditional = [("if-range", &*wheel_etag()), ("range", "bytes=2-5")];
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 2-5/{}", WHEEL.len()));
+    assert_eq!(body, &WHEEL[2..=5]);
+}
+#[rstest]
+#[case::stale_tag("\"0000\"")]
+#[case::weak_tag(&format!("W/{}", wheel_etag()))]
+#[case::date("Wed, 21 Oct 2015 07:28:00 GMT")]
+#[case::malformed("0000")]
+#[tokio::test]
+async fn test_cached_file_serves_the_whole_wheel_for_a_range_a_stale_if_range_asks_for(#[case] field: &str) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let conditional = [("if-range", field), ("range", "bytes=2-5")];
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(body, WHEEL);
+}
+// A stale copy earns the whole wheel rather than a `416`: the request is well formed, only the bytes
+// behind it went stale.
+#[tokio::test]
+async fn test_stale_if_range_serves_the_whole_wheel_rather_than_refusing_the_range() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let conditional = [("if-range", "\"0000\""), ("range", "bytes=99-100")];
+    let (status, _, body) = get_bytes_with_headers(&h.state, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, WHEEL);
+}
+#[tokio::test]
+async fn test_if_range_without_a_range_is_ignored() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("if-range", "\"0000\"")]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(body, WHEEL);
+}
+#[tokio::test]
 async fn test_file_path_without_filename_is_not_found() {
     let h = harness().await;
     let (status, ..) = get(&h.state, "/pypi/files/onlyonesegment", None).await;

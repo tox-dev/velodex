@@ -13,13 +13,15 @@ pub(super) fn file_download() -> OperationBuilder {
              be percent-encoded as one path segment. Responses are immutable \
              (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached \
              blob honors a single byte range, so an interrupted download can resume; a range this \
-             server cannot read is ignored and the whole artifact served.",
+             server cannot read is ignored and the whole artifact served, as is a range whose \
+             `If-Range` no longer names the artifact.",
         ))
         .parameter(route_param())
         .parameter(sha256_param())
         .parameter(filename_param("peryxpkg-1.0-py3-none-any.whl"))
         .parameter(range_param())
         .parameter(if_none_match_param())
+        .parameter(if_range_param())
         .response(
             "200",
             ResponseBuilder::new()
