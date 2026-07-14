@@ -270,6 +270,16 @@ pub(super) fn upload_error_message(err: &UploadError) -> (StatusCode, String) {
             StatusCode::BAD_REQUEST,
             "metadata License and License-Expression fields are mutually exclusive".to_owned(),
         ),
+        UploadError::MissingMetadataVersion => (
+            StatusCode::BAD_REQUEST,
+            "artifact metadata is missing required Metadata-Version".to_owned(),
+        ),
+        UploadError::UnsupportedMetadataVersion(value) => (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "invalid metadata Metadata-Version {value:?}: supported values are 1.0 through 1.2 and 2.1 through 2.6"
+            ),
+        ),
         UploadError::MetadataNameMismatch { metadata, form } => (
             StatusCode::BAD_REQUEST,
             format!("metadata Name {metadata:?} does not match upload name {form:?}"),

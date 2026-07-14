@@ -7,6 +7,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use peryx_ecosystem_pypi::store::PypiStore as _;
 use peryx_storage::meta::MetaStore;
+use rstest::rstest;
 use sha2::{Digest as _, Sha256};
 
 use crate::config::{Config, IndexConfig, IndexKind};
@@ -175,6 +176,47 @@ fn test_import_dir_reports_metadata_validation_reasons() {
     assert!(text.contains(
         "LicenseConflict-1.0-py3-none-any.whl\tlicenseconflict\t1.0\tmetadata contains both License and License-Expression"
     ));
+}
+
+#[rstest]
+#[case::missing(b"Name: Invalid\nVersion: 1.0\n", "metadata is missing Metadata-Version")]
+#[case::unsupported(
+    b"Metadata-Version: 3.0\nName: Invalid\nVersion: 1.0\n",
+    "invalid Metadata-Version: \"3.0\""
+)]
+fn test_import_dir_rejects_invalid_metadata_version(#[case] metadata: &[u8], #[case] reason: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let import = root.path().join("import");
+    std::fs::create_dir(&import).unwrap();
+    std::fs::write(
+        import.join("Invalid-1.0-py3-none-any.whl"),
+        wheel_with_metadata("Invalid", "1.0", metadata),
+    )
+    .unwrap();
+    let config = Config {
+        data_dir: root.path().join("data"),
+        ..Config::default()
+    };
+
+    let mut out = Vec::new();
+    operator::import_dir(&config, "root/pypi", &import, &mut out).unwrap();
+
+    assert_eq!(
+        (
+            String::from_utf8(out).unwrap(),
+            MetaStore::open_existing(config.data_dir.join("peryx.redb"))
+                .unwrap()
+                .list_upload_entries("hosted", "invalid")
+                .unwrap()
+                .is_empty(),
+        ),
+        (
+            format!(
+                "status\tfilename\tproject\tversion\treason\nrejected\tInvalid-1.0-py3-none-any.whl\tinvalid\t1.0\t{reason}\nsummary\t\t\t\timported=0 skipped=0 rejected=1\n"
+            ),
+            true,
+        )
+    );
 }
 
 #[test]

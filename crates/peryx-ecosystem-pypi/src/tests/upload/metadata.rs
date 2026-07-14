@@ -36,6 +36,51 @@ fn test_prepare_rejects_metadata_mismatches() {
         );
     }
 }
+
+#[rstest]
+#[case::missing("", None)]
+#[case::empty("Metadata-Version:\n", None)]
+#[case::withdrawn("Metadata-Version: 2.0\n", Some("2.0"))]
+#[case::malformed("Metadata-Version: 2\n", Some("2"))]
+#[case::newer_minor("Metadata-Version: 2.7\n", Some("2.7"))]
+#[case::newer_major("Metadata-Version: 3.0\n", Some("3.0"))]
+fn test_prepare_rejects_invalid_metadata_version(#[case] header: &str, #[case] expected: Option<&str>) {
+    let bytes = wheel_metadata_bytes(format!("{header}Name: Flask\nVersion: 1.0\n").as_bytes());
+    let (_dir, staged) = staged_upload(&bytes);
+    let mut form = staged_form(&bytes);
+    form.requires_python = None;
+
+    assert_eq!(
+        prepare(form, staged, "root/hosted", 1000).unwrap_err(),
+        expected.map_or(UploadError::MissingMetadataVersion, |value| {
+            UploadError::UnsupportedMetadataVersion(value.to_owned())
+        })
+    );
+}
+
+#[rstest]
+#[case::v1_0("1.0")]
+#[case::v1_1("1.1")]
+#[case::v1_2("1.2")]
+#[case::v2_1("2.1")]
+#[case::v2_2("2.2")]
+#[case::v2_3("2.3")]
+#[case::v2_4("2.4")]
+#[case::v2_5("2.5")]
+#[case::v2_6("2.6")]
+fn test_prepare_accepts_supported_metadata_version(#[case] metadata_version: &str) {
+    let bytes =
+        wheel_metadata_bytes(format!("Metadata-Version: {metadata_version}\nName: Flask\nVersion: 1.0\n").as_bytes());
+    let (_dir, staged) = staged_upload(&bytes);
+    let mut form = staged_form(&bytes);
+    form.requires_python = None;
+
+    assert_eq!(
+        prepare(form, staged, "root/hosted", 1000).unwrap().display_name,
+        "Flask"
+    );
+}
+
 #[test]
 fn test_prepare_rejects_metadata_field_mismatches() {
     for (configure, metadata, expected) in [

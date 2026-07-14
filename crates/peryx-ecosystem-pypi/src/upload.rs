@@ -98,6 +98,10 @@ pub enum UploadError {
     InvalidProjectUrl { label: String, url: String },
     /// The metadata document contained both `License` and `License-Expression`.
     ConflictingLicenseFields,
+    /// Core Metadata semantics depend on a declared version.
+    MissingMetadataVersion,
+    /// Peryx cannot apply semantics from an unsupported Core Metadata version.
+    UnsupportedMetadataVersion(String),
     /// The metadata project name does not match the upload form.
     MetadataNameMismatch { metadata: String, form: String },
     /// The metadata version does not match the upload form.
@@ -385,6 +389,7 @@ fn validate_metadata_identity(
     normalized: &str,
     parsed_version: &crate::Version,
 ) -> Result<(), UploadError> {
+    validate_metadata_version(metadata.metadata_version.as_deref())?;
     if normalize_name(&metadata.name) != normalized || !is_valid_name(&metadata.name) {
         return Err(UploadError::MetadataNameMismatch {
             metadata: metadata.name.clone(),
@@ -425,6 +430,20 @@ fn validate_metadata_identity(
     compare_metadata_list("License-File", &form.license_files, &metadata.license_files)?;
     compare_metadata_list("Provides-Extra", &form.provides_extra, &metadata.provides_extra)?;
     compare_project_urls(form, metadata)
+}
+
+fn validate_metadata_version(value: Option<&str>) -> Result<(), UploadError> {
+    let Some(value) = value else {
+        return Err(UploadError::MissingMetadataVersion);
+    };
+    if matches!(
+        value,
+        "1.0" | "1.1" | "1.2" | "2.1" | "2.2" | "2.3" | "2.4" | "2.5" | "2.6"
+    ) {
+        Ok(())
+    } else {
+        Err(UploadError::UnsupportedMetadataVersion(value.to_owned()))
+    }
 }
 
 fn compare_metadata_field(field: &'static str, form: Option<&str>, metadata: Option<&str>) -> Result<(), UploadError> {

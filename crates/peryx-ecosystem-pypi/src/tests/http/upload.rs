@@ -632,6 +632,32 @@ async fn test_upload_invalid_project_url_is_bad_request() {
     )
     .await;
 }
+
+#[rstest]
+#[case::missing(
+    b"Name: peryxpkg\nVersion: 1.0\n",
+    "artifact metadata is missing required Metadata-Version"
+)]
+#[case::unsupported(
+    b"Metadata-Version: 3.0\nName: peryxpkg\nVersion: 1.0\n",
+    "invalid metadata Metadata-Version \"3.0\": supported values are 1.0 through 1.2 and 2.1 through 2.6"
+)]
+#[tokio::test]
+async fn test_upload_rejects_invalid_metadata_version(#[case] metadata: &[u8], #[case] expected: &str) {
+    let h = harness().await;
+    assert_upload_response(
+        &h,
+        &upload_fields(),
+        Some((
+            "peryxpkg-1.0-py3-none-any.whl",
+            fixture_wheel_with_metadata(metadata).as_slice(),
+        )),
+        StatusCode::BAD_REQUEST,
+        expected,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn test_upload_metadata_form_fields_are_validated() {
     let h = harness().await;
