@@ -307,6 +307,18 @@ async fn test_versioned_delete_matches_upload_record_when_filename_lacks_version
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 #[tokio::test]
+async fn test_versioned_delete_removes_parsable_and_opaque_filenames() {
+    let h = harness().await;
+    put_local_file(&h.state, "peryxpkg-1.0-py3-none-any.whl", b"normal", "1.0");
+    put_local_file(&h.state, "peryxpkg-build.whl", b"opaque", "1.0");
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/peryxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (status, ..) = get(&h.state, "/hosted/simple/peryxpkg/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+#[tokio::test]
 async fn test_versioned_delete_fallback_skips_other_versions() {
     let h = harness().await;
     // Neither filename carries a parsable version, so both deletes go through the record fallback.
