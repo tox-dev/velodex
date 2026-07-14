@@ -157,6 +157,7 @@ main { max-width: 70rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 .badge.uploads { background: linear-gradient(115deg, var(--brand-a), var(--brand-b)); color: #fff; border: none; }
 .badge.yanked-badge { color: var(--bad); border-color: var(--bad); }
 .badge.meta-badge { color: var(--ok); border-color: var(--ok); }
+.yank-reason { color: var(--text-soft); font-size: 0.85rem; margin-left: 0.35rem; }
 .layers code { margin-right: 0.3rem; }
 .virtual-card { grid-column: span 2; }
 .layer-stack {

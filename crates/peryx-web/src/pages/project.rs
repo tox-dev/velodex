@@ -324,6 +324,7 @@ fn file_row(route: &str, project: &str, file: &UiFile) -> impl IntoView {
             <td><code title=file.sha256.clone()>{short_hash}</code></td>
             <td>
                 {file.yanked.then(|| view! { <span class="badge yanked-badge">"yanked"</span> })}
+                {file.yanked_reason.clone().map(|reason| view! { <span class="yank-reason">{reason}</span> })}
                 {file.has_metadata.then(|| view! { <span class="badge meta-badge">"metadata"</span> })}
             </td>
         </tr>

@@ -197,14 +197,18 @@ pub fn ui_project_from_detail(value: &serde_json::Value) -> peryx_core::UiProjec
         .as_array()
         .into_iter()
         .flatten()
-        .map(|file| peryx_core::UiFile {
-            filename: string_at(file, "filename"),
-            url: string_at(file, "url"),
-            sha256: file["hashes"]["sha256"].as_str().unwrap_or_default().to_owned(),
-            size: file["size"].as_u64(),
-            upload_time: file["upload-time"].as_str().map(str::to_owned),
-            yanked: file["yanked"].as_bool().unwrap_or(false) || file["yanked"].is_string(),
-            has_metadata: file["core-metadata"].is_object() || file["core-metadata"].as_bool() == Some(true),
+        .map(|file| {
+            let yanked = &file["yanked"];
+            peryx_core::UiFile {
+                filename: string_at(file, "filename"),
+                url: string_at(file, "url"),
+                sha256: file["hashes"]["sha256"].as_str().unwrap_or_default().to_owned(),
+                size: file["size"].as_u64(),
+                upload_time: file["upload-time"].as_str().map(str::to_owned),
+                yanked: yanked.as_bool().unwrap_or(false) || yanked.is_string(),
+                yanked_reason: yanked.as_str().filter(|reason| !reason.is_empty()).map(str::to_owned),
+                has_metadata: file["core-metadata"].is_object() || file["core-metadata"].as_bool() == Some(true),
+            }
         })
         .collect();
     peryx_core::UiProject {

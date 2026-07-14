@@ -78,6 +78,7 @@ pub struct UiFile {
     pub size: Option<u64>,
     pub upload_time: Option<String>,
     pub yanked: bool,
+    pub yanked_reason: Option<String>,
     pub has_metadata: bool,
 }
 

@@ -1,4 +1,5 @@
 use peryx_core::UiBlock;
+use rstest::rstest;
 
 use crate::{file_matches_version, parse_metadata, ui_project_from_detail};
 
@@ -21,8 +22,29 @@ fn test_ui_project_from_detail_maps_files() {
     assert_eq!(project.name, "veloxdemo");
     assert_eq!(project.files[0].sha256, "aa");
     assert_eq!(project.files[0].upload_time.as_deref(), Some("2026-01-01T00:00:00Z"));
-    assert!(project.files[0].yanked, "a reason string counts as yanked");
     assert!(project.files[0].has_metadata);
+}
+
+#[rstest]
+#[case::reason(serde_json::json!("broken build"), true, Some("broken build"))]
+#[case::without_reason(serde_json::json!(true), true, None)]
+#[case::empty_reason(serde_json::json!(""), true, None)]
+#[case::active(serde_json::json!(false), false, None)]
+#[case::absent(serde_json::Value::Null, false, None)]
+fn test_ui_project_from_detail_maps_yanked(
+    #[case] yanked: serde_json::Value,
+    #[case] expected: bool,
+    #[case] reason: Option<&str>,
+) {
+    let value = serde_json::json!({
+        "name": "veloxdemo",
+        "files": [{"filename": "veloxdemo-1.0-py3-none-any.whl", "yanked": yanked}],
+    });
+    let project = ui_project_from_detail(&value);
+    assert_eq!(
+        (project.files[0].yanked, project.files[0].yanked_reason.as_deref()),
+        (expected, reason)
+    );
 }
 
 #[test]

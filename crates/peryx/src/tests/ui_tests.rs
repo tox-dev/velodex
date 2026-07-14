@@ -895,8 +895,55 @@ async fn test_ui_project_page_links_contents_only_for_browsable_archives(
     assert_eq!(body.contains("class=\"inspect\""), browsable, "{body}");
 }
 
+#[rstest]
+#[case::reason(
+    serde_json::json!("broken build"),
+    &["badge yanked-badge", "<span class=\"yank-reason\">broken build</span>"][..],
+    &[][..]
+)]
+#[case::without_reason(serde_json::json!(true), &["badge yanked-badge"][..], &["yank-reason"][..])]
+#[case::active(serde_json::json!(false), &[][..], &["yanked-badge", "yank-reason"][..])]
+#[tokio::test]
+async fn test_ui_project_page_shows_yank_state(
+    #[case] yanked: serde_json::Value,
+    #[case] present: &[&str],
+    #[case] absent: &[&str],
+) {
+    let (_dir, router) = yanked_router(&yanked);
+    let (status, body) = get(&router, "/browse?index=pypi&project=veloxdemo").await;
+    assert_eq!(status, StatusCode::OK);
+    let table = first_files_table(&body);
+    for marker in present {
+        assert!(table.contains(marker), "{body}");
+    }
+    for marker in absent {
+        assert!(!table.contains(marker), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn test_ui_project_page_escapes_yank_reason() {
+    let (_dir, router) = yanked_router(&serde_json::json!("<script>alert(1)</script>"));
+    let (status, body) = get(&router, "/browse?index=pypi&project=veloxdemo").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("<script>alert(1)"),
+        "a yank reason must not become markup: {body}"
+    );
+    assert!(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"), "{body}");
+}
+
 fn artifact_router(url: &str) -> (tempfile::TempDir, axum::Router) {
     file_router(&serde_json::json!({"filename": ARTIFACT_FILENAME, "url": url, "hashes": {}}))
+}
+
+fn yanked_router(yanked: &serde_json::Value) -> (tempfile::TempDir, axum::Router) {
+    file_router(&serde_json::json!({
+        "filename": ARTIFACT_FILENAME,
+        "url": format!("https://example.com/{ARTIFACT_FILENAME}"),
+        "hashes": {},
+        "yanked": yanked,
+    }))
 }
 
 fn file_router(file: &serde_json::Value) -> (tempfile::TempDir, axum::Router) {
