@@ -11,22 +11,21 @@ pub async fn get_with_headers(
     uri: &str,
     extra_headers: &[(&str, &str)],
 ) -> (StatusCode, String) {
-    let mut builder = Request::builder().uri(uri).method("GET");
-    for (name, value) in extra_headers {
-        builder = builder.header(*name, *value);
-    }
-    let response = router(state.clone())
-        .oneshot(builder.body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let (status, _, bytes) = get_bytes_with_headers(state, uri, extra_headers).await;
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 pub async fn get_bytes(state: &Arc<AppState>, uri: &str, accept: Option<&str>) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let accept = accept.map(|accept| (header::ACCEPT.as_str(), accept));
+    get_bytes_with_headers(state, uri, accept.as_slice()).await
+}
+pub async fn get_bytes_with_headers(
+    state: &Arc<AppState>,
+    uri: &str,
+    extra_headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, Vec<u8>) {
     let mut builder = Request::builder().uri(uri).method("GET");
-    if let Some(accept) = accept {
-        builder = builder.header(header::ACCEPT, accept);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
     }
     let response = router(state.clone())
         .oneshot(builder.body(Body::empty()).unwrap())

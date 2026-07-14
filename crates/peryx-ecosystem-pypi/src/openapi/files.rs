@@ -11,16 +11,29 @@ pub(super) fn file_download() -> OperationBuilder {
             "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the \
              sha256, caches it, and serves it. The `{filename}` segment is display context and must \
              be percent-encoded as one path segment. Responses are immutable \
-             (`Cache-Control: max-age=31536000`).",
+             (`Cache-Control: max-age=31536000`). A cached blob honors a single byte range, so an \
+             interrupted download can resume; a range this server cannot read is ignored and the \
+             whole artifact served.",
         ))
         .parameter(route_param())
         .parameter(sha256_param())
         .parameter(filename_param("peryxpkg-1.0-py3-none-any.whl"))
+        .parameter(range_param())
         .response(
             "200",
             ResponseBuilder::new()
                 .description("The artifact bytes")
                 .content("application/octet-stream", ContentBuilder::new().build()),
+        )
+        .response(
+            "206",
+            ResponseBuilder::new()
+                .description("The requested byte range of a cached artifact")
+                .content("application/octet-stream", ContentBuilder::new().build()),
+        )
+        .response(
+            "416",
+            ResponseBuilder::new().description("The range lies outside the artifact; `Content-Range` names its size"),
         )
         .response(
             "400",
