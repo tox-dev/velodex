@@ -419,6 +419,7 @@ fn validate_metadata_identity(
     if metadata.license.is_some() && metadata.license_expression.is_some() {
         return Err(UploadError::ConflictingLicenseFields);
     }
+    validate_license_expression(metadata)?;
     validate_provided_extras(metadata)?;
     compare_metadata_field(
         "Metadata-Version",
@@ -454,6 +455,21 @@ fn validate_metadata_version(value: Option<&str>) -> Result<(), UploadError> {
     } else {
         Err(UploadError::UnsupportedMetadataVersion(value.to_owned()))
     }
+}
+
+fn validate_license_expression(metadata: &CoreMetadataDoc) -> Result<(), UploadError> {
+    let Some(expression) = metadata.license_expression.as_deref() else {
+        return Ok(());
+    };
+    let invalid = |reason| UploadError::InvalidMetadataValue {
+        field: "License-Expression",
+        value: expression.to_owned(),
+        reason,
+    };
+    if !matches!(metadata.metadata_version.as_deref(), Some("2.4" | "2.5" | "2.6")) {
+        return Err(invalid("requires Metadata-Version 2.4 or later"));
+    }
+    crate::license::validate_expression(expression).map_err(invalid)
 }
 
 fn validate_provided_extras(metadata: &CoreMetadataDoc) -> Result<(), UploadError> {

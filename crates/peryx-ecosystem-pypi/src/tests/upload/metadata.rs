@@ -104,7 +104,7 @@ fn test_prepare_rejects_metadata_field_mismatches() {
         ),
         (
             |form| form.license_expression = Some("Apache-2.0".to_owned()),
-            "Metadata-Version: 2.1\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\nLicense-Expression: MIT\n",
+            "Metadata-Version: 2.4\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\nLicense-Expression: MIT\n",
             UploadError::MetadataFieldMismatch {
                 field: "License-Expression",
                 metadata: "MIT".to_owned(),
@@ -356,6 +356,79 @@ fn test_prepare_rejects_conflicting_license_fields() {
         UploadError::ConflictingLicenseFields
     );
 }
+
+#[rstest]
+#[case::identifier("MIT")]
+#[case::compound("MIT OR (Apache-2.0 AND BSD-3-Clause)")]
+#[case::exception("GPL-3.0-or-later WITH Bison-exception-2.2")]
+#[case::or_later("Apache-1.0+")]
+#[case::reference("LicenseRef-Proprietary")]
+fn test_prepare_accepts_valid_license_expression(#[case] expression: &str) {
+    let bytes = license_expression_wheel("2.4", expression);
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000)
+            .unwrap()
+            .display_name,
+        "Flask"
+    );
+}
+
+#[rstest]
+#[case::unclosed_parens("(MIT OR Apache-2.0", "is not a valid SPDX license expression")]
+#[case::dangling_operator("MIT OR", "is not a valid SPDX license expression")]
+#[case::unknown_identifier(
+    "Totally-Made-Up-1.0",
+    "is not a known SPDX license identifier in its reference case"
+)]
+#[case::unnormalized_case("mit", "is not a known SPDX license identifier in its reference case")]
+#[case::unknown_exception(
+    "GPL-3.0-or-later WITH Made-Up-exception",
+    "is not a known SPDX license identifier in its reference case"
+)]
+#[case::deprecated_identifier("GPL-3.0", "uses a deprecated SPDX license identifier")]
+fn test_prepare_rejects_invalid_license_expression(#[case] expression: &str, #[case] reason: &'static str) {
+    let bytes = license_expression_wheel("2.4", expression);
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap_err(),
+        UploadError::InvalidMetadataValue {
+            field: "License-Expression",
+            value: expression.to_owned(),
+            reason,
+        }
+    );
+}
+
+#[rstest]
+#[case::v1_0("1.0")]
+#[case::v1_2("1.2")]
+#[case::v2_3("2.3")]
+fn test_prepare_rejects_license_expression_before_metadata_2_4(#[case] metadata_version: &str) {
+    let bytes = license_expression_wheel(metadata_version, "MIT");
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap_err(),
+        UploadError::InvalidMetadataValue {
+            field: "License-Expression",
+            value: "MIT".to_owned(),
+            reason: "requires Metadata-Version 2.4 or later",
+        }
+    );
+}
+
+fn license_expression_wheel(metadata_version: &str, expression: &str) -> Vec<u8> {
+    wheel_metadata_bytes(
+        format!(
+            "Metadata-Version: {metadata_version}\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\nLicense-Expression: {expression}\n"
+        )
+        .as_bytes(),
+    )
+}
+
 #[test]
 fn test_prepare_rejects_invalid_requires_python_and_clock() {
     let wheel = wheel_metadata("Flask", "1.0");

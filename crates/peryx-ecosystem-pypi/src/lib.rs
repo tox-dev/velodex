@@ -16,6 +16,8 @@ mod html;
 #[cfg(feature = "serving")]
 mod import;
 mod legacy_json;
+#[cfg(feature = "serving")]
+mod license;
 mod metadata;
 mod name;
 #[cfg(feature = "serving")]

@@ -715,6 +715,25 @@ async fn test_upload_rejects_invalid_license_file() {
 }
 
 #[tokio::test]
+async fn test_upload_rejects_invalid_license_expression_when_form_omits_it() {
+    let h = harness().await;
+    assert_upload_response(
+        &h,
+        &upload_fields(),
+        Some((
+            "peryxpkg-1.0-py3-none-any.whl",
+            fixture_wheel_with_metadata(
+                b"Metadata-Version: 2.4\nName: peryxpkg\nVersion: 1.0\nRequires-Python: >=3.8\nLicense-Expression: MIT OR Bogus-1.0\n",
+            )
+            .as_slice(),
+        )),
+        StatusCode::BAD_REQUEST,
+        "metadata License-Expression value \"MIT OR Bogus-1.0\" is not a known SPDX license identifier in its reference case",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_upload_rejects_conflicting_license_fields() {
     let h = harness().await;
     assert_upload_response(
