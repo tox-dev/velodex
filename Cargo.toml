@@ -51,6 +51,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls-acme = { version = "0.15", default-features = false, features = ["ring", "axum", "tls12", "webpki-roots"] }
 bytes = "1"
+httpdate = "1"
 futures-core = "0.3"
 futures-util = "0.3"
 getrandom = "0.4"

@@ -5,11 +5,12 @@
 )]
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use peryx_core::path::{self};
-use peryx_driver::conditional::{applicable_range, if_none_match};
+use peryx_driver::conditional::{applicable_range, http_date, if_modified_since, if_none_match, last_modified};
 use peryx_driver::not_found;
 use peryx_driver::range::{RangeSpec, parse_range, unsatisfiable_range};
 use peryx_driver::state::ServingState;
@@ -210,7 +211,7 @@ async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str, header
         return response;
     }
     let range = applicable_range(headers, &etag);
-    serve_blob(state, route, &filename, digest, range, &etag).await
+    serve_blob(state, route, &filename, digest, range, &etag, conditional_date(headers)).await
 }
 
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -219,24 +220,43 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 ///
 /// RFC 9110 s13.1.2 puts this condition ahead of the method and of `Range`, and the access and
 /// download-policy checks have run by now, so a match answers the request before anything opens the
-/// blob or fetches it from upstream. The `304` repeats the metadata a `200` would have carried, minus
-/// the body.
+/// blob or fetches it from upstream.
 ///
 /// A digest this index has never cached matches all the same: the URL names the bytes, so a client
 /// holding them holds the current representation whether or not the store does.
 fn not_modified(headers: &HeaderMap, etag: &str) -> Option<Response> {
     let field = headers.get(header::IF_NONE_MATCH)?.to_str().ok()?;
-    if_none_match(field, etag).then(|| {
-        (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag),
-                (header::CACHE_CONTROL, IMMUTABLE),
-                (header::ACCEPT_RANGES, "bytes"),
-            ],
-        )
-            .into_response()
-    })
+    if_none_match(field, etag).then(|| unchanged(etag, None))
+}
+
+/// The `If-Modified-Since` date this request leaves any say in, if it sent one.
+///
+/// RFC 9110 s13.1.3: an `If-None-Match` supersedes it, matched or not. A client that sent both asked
+/// to be judged on the exact validator, and answering the date after the tag has already refused would
+/// serve a `304` for bytes the client just said it does not hold.
+fn conditional_date(headers: &HeaderMap) -> Option<&str> {
+    if headers.contains_key(header::IF_NONE_MATCH) {
+        return None;
+    }
+    headers.get(header::IF_MODIFIED_SINCE)?.to_str().ok()
+}
+
+/// The bodyless `304`: the metadata a `200` would have carried, minus the body.
+///
+/// The entity tag is answered from the request line, off a digest the store need never have cached, so
+/// the date rides along only where one was read: the blob the condition was evaluated against.
+fn unchanged(etag: &str, modified: Option<SystemTime>) -> Response {
+    let mut builder = Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header(header::ETAG, etag)
+        .header(header::CACHE_CONTROL, IMMUTABLE)
+        .header(header::ACCEPT_RANGES, "bytes");
+    if let Some(modified) = modified {
+        builder = builder.header(header::LAST_MODIFIED, http_date(modified));
+    }
+    builder
+        .body(axum::body::Body::empty())
+        .expect("not-modified response builds from validated header parts")
 }
 
 fn download_policy_response(state: &ServingState, index: &Index, filename: &str, digest: &Digest) -> Option<Response> {
@@ -301,6 +321,11 @@ fn legacy_json_target(rest: &str) -> Result<Option<LegacyJsonTarget>, Response> 
 /// A cached blob honors a single-range request, which is how pip resumes an interrupted wheel
 /// download. A blob still being teed from upstream has no seekable body to slice, so a range over it
 /// falls back to the whole `200` representation the client asked to resume.
+///
+/// The cached blob also carries the date the store wrote it, which is the one modification date peryx
+/// can stand behind: the digest fixes the bytes, so the only thing that can change under this URL is
+/// which side of the cache serves them. A blob still arriving from upstream has no such date — the
+/// write it would name has not happened — so it goes out with the tag alone, as it did before.
 async fn serve_blob(
     state: &Arc<ServingState>,
     route: String,
@@ -308,6 +333,7 @@ async fn serve_blob(
     digest: Digest,
     range: Option<&str>,
     etag: &str,
+    since: Option<&str>,
 ) -> Response {
     let digest_hex = digest.as_str().to_owned();
     let blob_headers = [
@@ -325,7 +351,18 @@ async fn serve_blob(
                 )
                     .into_response();
             };
-            let size = file.metadata().await.map(|meta| meta.len()).unwrap_or_default();
+            let on_disk = file.metadata().await.ok();
+            let size = on_disk.as_ref().map_or(0, std::fs::Metadata::len);
+            let modified = on_disk
+                .and_then(|on_disk| on_disk.modified().ok())
+                .map(|stored| last_modified(stored, SystemTime::now()));
+            // RFC 9110 s13.2.2 evaluates the condition ahead of the range: a client whose copy is still
+            // current gets the `304` it asked for, not the slice of it that a `Range` would have cut.
+            if let Some(modified) = modified
+                && since.is_some_and(|field| if_modified_since(field, modified))
+            {
+                return unchanged(etag, Some(modified));
+            }
             let (status, start, length, content_range) =
                 match range.map_or(RangeSpec::Ignore, |value| parse_range(value, size)) {
                     RangeSpec::Ignore => (StatusCode::OK, 0, size, None),
@@ -348,6 +385,9 @@ async fn serve_blob(
                 .header(header::CONTENT_LENGTH, length);
             for (name, value) in blob_headers {
                 builder = builder.header(name, value);
+            }
+            if let Some(modified) = modified {
+                builder = builder.header(header::LAST_MODIFIED, http_date(modified));
             }
             if let Some(content_range) = content_range {
                 builder = builder.header(header::CONTENT_RANGE, content_range);
