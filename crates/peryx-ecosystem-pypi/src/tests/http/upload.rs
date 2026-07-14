@@ -634,6 +634,35 @@ async fn test_upload_invalid_project_url_is_bad_request() {
 }
 
 #[rstest]
+#[case::missing_separator(
+    b"Metadata-Version: 2.4\nName: peryxpkg\nmalformed header\nVersion: 1.0\nRequires-Python: >=3.8\n",
+    "malformed artifact metadata: header line \"malformed header\" is missing a colon"
+)]
+#[case::missing_name(
+    b"Metadata-Version: 2.4\nName: peryxpkg\n: 1.0\nRequires-Python: >=3.8\n",
+    "malformed artifact metadata: header line \": 1.0\" has no field name"
+)]
+#[case::leading_continuation(
+    b" peryxpkg\nMetadata-Version: 2.4\nName: peryxpkg\nVersion: 1.0\nRequires-Python: >=3.8\n",
+    "malformed artifact metadata: document starts with the continuation line \" peryxpkg\""
+)]
+#[tokio::test]
+async fn test_upload_rejects_malformed_metadata(#[case] metadata: &[u8], #[case] expected: &str) {
+    let h = harness().await;
+    assert_upload_response(
+        &h,
+        &upload_fields(),
+        Some((
+            "peryxpkg-1.0-py3-none-any.whl",
+            fixture_wheel_with_metadata(metadata).as_slice(),
+        )),
+        StatusCode::BAD_REQUEST,
+        expected,
+    )
+    .await;
+}
+
+#[rstest]
 #[case::missing(
     b"Name: peryxpkg\nVersion: 1.0\n",
     "artifact metadata is missing required Metadata-Version"

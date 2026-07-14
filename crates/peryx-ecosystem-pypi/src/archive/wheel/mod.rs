@@ -83,8 +83,11 @@ fn validate_wheel_reader(filename: &str, reader: impl Read + Seek) -> Result<Val
 /// `License-File` without a member there names a file the wheel does not ship. Upload validation
 /// rejects a malformed declared path on its own, so here one merely reads as missing.
 fn missing_license_files(metadata: &[u8], dist_info: &str, files: &BTreeMap<String, WheelMember>) -> Vec<String> {
-    crate::parse_metadata(&String::from_utf8_lossy(metadata))
-        .license_files
+    // A malformed document is the caller's to reject, so here it simply declares no license file.
+    let Ok(doc) = crate::parse_metadata(&String::from_utf8_lossy(metadata)) else {
+        return Vec::new();
+    };
+    doc.license_files
         .into_iter()
         .filter(|value| !files.contains_key(&format!("{dist_info}/licenses/{value}")))
         .collect()

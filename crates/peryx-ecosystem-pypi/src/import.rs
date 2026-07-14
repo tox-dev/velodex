@@ -160,7 +160,8 @@ fn sdist_pkg_info_identity(filename: &str, parsed: &DistributionFilename, path: 
         DistributionKind::SdistZip => crate::archive::validate_zip_sdist_path(filename, path).ok()?,
         DistributionKind::Wheel => return None,
     };
-    let doc = parse_metadata(std::str::from_utf8(&archive.metadata).ok()?);
+    let doc =
+        parse_metadata(std::str::from_utf8(&archive.metadata).ok()?).expect("archive validation parsed the PKG-INFO");
     Some((normalize_name(&doc.name), parse_version(&doc.version)?))
 }
 
@@ -201,6 +202,7 @@ fn upload_error_reason(err: &UploadError) -> String {
     match err {
         UploadError::InvalidContent(message) => format!("invalid content: {message}"),
         UploadError::InvalidMetadataUtf8 => "metadata is not UTF-8".to_owned(),
+        UploadError::MalformedMetadata(err) => format!("malformed metadata: {err}"),
         UploadError::ConflictingLicenseFields => "metadata contains both License and License-Expression".to_owned(),
         UploadError::MissingMetadataVersion => "metadata is missing Metadata-Version".to_owned(),
         UploadError::UnsupportedMetadataVersion(value) => format!("invalid Metadata-Version: {value:?}"),

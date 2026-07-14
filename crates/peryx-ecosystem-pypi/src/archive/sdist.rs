@@ -181,7 +181,7 @@ impl SdistMembers {
             .metadata
             .ok_or_else(|| invalid_sdist(format!("missing required {}/PKG-INFO", self.root)))?;
         let text = std::str::from_utf8(&metadata).map_err(|_| invalid_sdist("PKG-INFO is not valid UTF-8"))?;
-        let doc = crate::parse_metadata(text);
+        let doc = crate::parse_metadata(text).map_err(|err| invalid_sdist(format!("malformed PKG-INFO: {err}")))?;
         let metadata_version_text = doc
             .metadata_version
             .as_deref()

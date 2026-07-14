@@ -260,6 +260,7 @@ pub(super) fn upload_error_message(err: &UploadError) -> (StatusCode, String) {
             StatusCode::BAD_REQUEST,
             "artifact metadata is not valid UTF-8".to_owned(),
         ),
+        UploadError::MalformedMetadata(err) => (StatusCode::BAD_REQUEST, format!("malformed artifact metadata: {err}")),
         UploadError::InvalidProjectUrl { label, url } => (
             StatusCode::BAD_REQUEST,
             format!(

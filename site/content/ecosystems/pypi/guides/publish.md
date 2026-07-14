@@ -61,6 +61,11 @@ The filename, form fields, and `METADATA` or `PKG-INFO` `Name` and `Version` mus
 metadata model can represent them. `Requires-Python`, when present in the form or metadata, must parse as Python version
 specifiers.
 
+The metadata document must also parse as a well-formed email message, the format core metadata uses. A header line
+without a colon, a line with no field name, or a document opening with a folded continuation line is a defect.
+`email.parser` stops reading headers at that line, and every field below it disappears. peryx rejects the upload rather
+than reading past the defect, the same as pypi.org.
+
 Accepted files are stored content-addressed and served from `/root/pypi/simple/<project>/` alongside the cached index's
 packages. Your file shadows an upstream file of the same name. For wheels, peryx extracts `METADATA`; for sdists, it
 extracts the verified `PKG-INFO`. Both are served as [PEP 658/714](https://peps.python.org/pep-0658/) `.metadata`

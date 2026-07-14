@@ -1,7 +1,7 @@
 use peryx_core::UiBlock;
 use rstest::rstest;
 
-use crate::{file_matches_version, parse_metadata, ui_project_from_detail};
+use crate::{MetadataError, file_matches_version, parse_metadata, ui_project_from_detail};
 
 #[test]
 fn test_ui_project_from_detail_maps_files() {
@@ -68,7 +68,7 @@ fn test_parse_metadata_headers_and_body() {
                 Description-Content-Type: text/markdown\n\
                 \n\
                 # peryxpkg\n\nThe long description.";
-    let doc = parse_metadata(text);
+    let doc = parse_metadata(text).unwrap();
     assert_eq!(doc.metadata_version.as_deref(), Some("2.4"));
     assert_eq!(doc.name, "peryxpkg");
     assert_eq!(doc.version, "1.2.0");
@@ -95,7 +95,9 @@ fn test_parse_metadata_headers_and_body() {
 #[test]
 fn test_parse_metadata_preserves_keyword_spaces() {
     assert_eq!(
-        parse_metadata("Name: x\nVersion: 1\nKeywords: machine learning, cache,,\n").keywords,
+        parse_metadata("Name: x\nVersion: 1\nKeywords: machine learning, cache,,\n")
+            .unwrap()
+            .keywords,
         ["machine learning", "cache"]
     );
 }
@@ -103,19 +105,19 @@ fn test_parse_metadata_preserves_keyword_spaces() {
 #[test]
 fn test_parse_metadata_description_header_and_folding() {
     let text = "Name: x\nVersion: 1\nDescription: first line\n continued here\n";
-    let doc = parse_metadata(text);
+    let doc = parse_metadata(text).unwrap();
     assert_eq!(doc.description, "first line continued here");
 }
 
 #[test]
 fn test_parse_metadata_author_header_wins_over_email() {
     let text = "Name: x\nVersion: 1\nAuthor: Jane\nAuthor-email: jane@example.test\n";
-    assert_eq!(parse_metadata(text).author.as_deref(), Some("Jane"));
+    assert_eq!(parse_metadata(text).unwrap().author.as_deref(), Some("Jane"));
 }
 
 #[test]
 fn test_parse_metadata_uses_license_expression_for_display_when_license_is_absent() {
-    let doc = parse_metadata("Name: x\nVersion: 1\nLicense-Expression: MIT\n");
+    let doc = parse_metadata("Name: x\nVersion: 1\nLicense-Expression: MIT\n").unwrap();
     assert_eq!(doc.license, None);
     assert_eq!(doc.license_expression.as_deref(), Some("MIT"));
     assert_eq!(
@@ -131,6 +133,7 @@ fn test_parse_metadata_uses_license_expression_for_display_when_license_is_absen
 fn test_ui_metadata_prefers_license_expression() {
     assert_eq!(
         parse_metadata("Name: x\nVersion: 1\nLicense: legacy\nLicense-Expression: MIT\n")
+            .unwrap()
             .to_ui_meta()
             .blocks,
         [UiBlock::KeyValue {
@@ -150,28 +153,54 @@ fn test_file_matches_version_wheel_and_sdist() {
     assert!(!file_matches_version("noversion.whl", "1.0"));
 }
 
-#[test]
-fn test_parse_metadata_skips_lines_without_colon() {
-    let doc = parse_metadata("Name: x\ngarbage line\nVersion: 1\n");
-    assert_eq!(doc.name, "x");
-    assert_eq!(doc.version, "1");
+#[rstest]
+#[case::missing_separator(
+    "Metadata-Version: 2.4\nName: Flask\nmalformed header\nVersion: 1.0\n",
+    MetadataError::MissingHeaderSeparator("malformed header".to_owned()),
+    "header line \"malformed header\" is missing a colon"
+)]
+#[case::missing_name(
+    "Name: Flask\n: 1.0\n",
+    MetadataError::MissingHeaderName(": 1.0".to_owned()),
+    "header line \": 1.0\" has no field name"
+)]
+#[case::leading_continuation(
+    " Flask\nName: Flask\n",
+    MetadataError::LeadingContinuation(" Flask".to_owned()),
+    "document starts with the continuation line \" Flask\""
+)]
+fn test_parse_metadata_rejects_malformed_headers(
+    #[case] text: &str,
+    #[case] expected: MetadataError,
+    #[case] message: &str,
+) {
+    let err = parse_metadata(text).unwrap_err();
+
+    assert_eq!((err.to_string().as_str(), &err), (message, &expected));
 }
 
 #[test]
 fn test_parse_metadata_ignores_unknown_headers() {
-    let doc = parse_metadata("Name: x\nX-Internal: ignored\nVersion: 1\n");
+    let doc = parse_metadata("Name: x\nX-Internal: ignored\nVersion: 1\n").unwrap();
     assert_eq!(doc.name, "x");
     assert_eq!(doc.version, "1");
 }
 
-#[test]
-fn test_parse_metadata_splits_headers_from_body_on_a_crlf_blank_line() {
-    // A CRLF document's header/body boundary is `\r\n\r\n`; matching only `\n\n` would read the body
-    // as headers, so a `Version:` line in the description would overwrite the real version.
-    let doc = parse_metadata("Name: x\r\nVersion: 1\r\n\r\nDescription body.\r\nVersion: 2 in prose.\r\n");
-    assert_eq!(doc.name, "x");
-    assert_eq!(doc.version, "1");
-    assert_eq!(doc.description, "Description body.\r\nVersion: 2 in prose.");
+// A document mixes line endings when its long description comes from a CRLF README, so the boundary
+// holds at the first empty line either way and a `Version:` line in the prose never becomes a field.
+#[rstest]
+#[case::crlf_document(
+    "Name: x\r\nVersion: 1\r\n\r\nDescription body.\r\nVersion: 2 in prose.\r\n",
+    "Description body.\r\nVersion: 2 in prose."
+)]
+#[case::crlf_body_below_lf_headers(
+    "Name: x\nVersion: 1\n\nIntro.\r\n\r\nVersion: 2 in prose.\r\n",
+    "Intro.\r\n\r\nVersion: 2 in prose."
+)]
+fn test_parse_metadata_ends_the_header_block_at_the_first_empty_line(#[case] text: &str, #[case] description: &str) {
+    let doc = parse_metadata(text).unwrap();
+
+    assert_eq!((doc.version.as_str(), doc.description.as_str()), ("1", description));
 }
 
 #[test]
@@ -191,6 +220,7 @@ fn test_ui_meta_keeps_legacy_home_page_in_links() {
 
 fn ui_links(text: &str) -> Vec<(String, String)> {
     crate::ui_meta(text)
+        .unwrap()
         .blocks
         .into_iter()
         .find_map(|block| match block {
@@ -223,7 +253,8 @@ fn test_parse_metadata_keeps_raw_project_url_labels() {
     // Normalization is presentation-only, so uploads and the Simple API keep the published label.
     let doc = parse_metadata(
         "Metadata-Version: 2.4\nName: p\nVersion: 1.0\nProject-URL: bug_tracker, https://bugs.example\n",
-    );
+    )
+    .unwrap();
     assert_eq!(
         doc.project_urls,
         [("bug_tracker".to_owned(), "https://bugs.example".to_owned())]
@@ -238,7 +269,7 @@ fn test_ui_meta_groups_classifiers_and_omits_the_block_when_none() {
                 Classifier: Programming Language :: Python :: 3.8\n\
                 Classifier: Programming Language :: Python :: 3.9\n\
                 Classifier: License :: OSI Approved\n\n";
-    let meta = crate::ui_meta(text);
+    let meta = crate::ui_meta(text).unwrap();
     let groups = meta
         .blocks
         .iter()
@@ -258,7 +289,7 @@ fn test_ui_meta_groups_classifiers_and_omits_the_block_when_none() {
         ]
     );
 
-    let bare = crate::ui_meta("Metadata-Version: 2.1\nName: p\nVersion: 1.0\n\n");
+    let bare = crate::ui_meta("Metadata-Version: 2.1\nName: p\nVersion: 1.0\n\n").unwrap();
     assert!(
         !bare
             .blocks

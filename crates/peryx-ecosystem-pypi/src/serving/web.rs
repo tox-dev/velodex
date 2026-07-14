@@ -110,7 +110,8 @@ async fn metadata_for(state: &Arc<ServingState>, route: &str, file: &peryx_core:
                 err.user_message()
             )
         })?;
-    Ok(ui_meta(&String::from_utf8_lossy(&bytes)))
+    ui_meta(&String::from_utf8_lossy(&bytes))
+        .map_err(|err| format!("metadata parse on index {route:?} for file {:?}: {err}", file.filename))
 }
 
 /// The local blob-store path of the artifact `digest_hex`/`filename` on the index at `position`,

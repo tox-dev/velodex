@@ -48,7 +48,7 @@ fn bench_parse(criterion: &mut Criterion) {
         bencher.iter(|| parse_index_html(std::hint::black_box(&index_html), &base).unwrap());
     });
     group.bench_function("metadata", |bencher| {
-        bencher.iter(|| parse_metadata(std::hint::black_box(METADATA)));
+        bencher.iter(|| parse_metadata(std::hint::black_box(METADATA)).unwrap());
     });
     group.bench_function("distribution_filename", |bencher| {
         bencher.iter(|| {

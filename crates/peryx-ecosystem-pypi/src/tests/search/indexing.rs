@@ -175,6 +175,52 @@ async fn test_search_skips_unusable_metadata_and_quarantined_projects() {
     assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["total"], 0);
 }
 #[tokio::test]
+async fn test_search_indexes_a_project_whose_metadata_sibling_is_malformed() {
+    let h = harness().await;
+    let artifact = Digest::of(b"malformed metadata");
+    h.state
+        .meta
+        .put_metadata(
+            artifact.as_str(),
+            "uploaded",
+            h.state
+                .blobs
+                .write(b"Name: malformed\nmalformed header\nVersion: 1.0\n")
+                .unwrap()
+                .as_str(),
+            "pypi",
+        )
+        .unwrap();
+    put_cached_package(
+        &h.state,
+        "pypi/malformed",
+        "pypi",
+        "malformed",
+        &ProjectDetail {
+            meta: Meta::default(),
+            name: "Malformed".to_owned(),
+            versions: vec!["1.0".to_owned()],
+            files: vec![file_with_hash(
+                "malformed-1.0-py3-none-any.whl",
+                artifact.as_str(),
+                None,
+            )],
+        },
+    );
+
+    let (status, _headers, body) = get(
+        &h.state,
+        "/pypi/+search?q=malformed&type=cached&page_size=25",
+        Some("application/json"),
+    )
+    .await;
+
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["results"][0]["display_name"], "Malformed");
+}
+#[tokio::test]
 async fn test_search_indexes_metadata_field_lists_and_long_text() {
     let h = harness().await;
     put_uploaded_package_with_metadata(

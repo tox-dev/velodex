@@ -295,7 +295,9 @@ fn test_prepare_preserves_legacy_provided_extras() {
     let prepared = prepare(form, staged, "root/hosted", 1000).unwrap();
 
     assert_eq!(
-        crate::parse_metadata(std::str::from_utf8(&prepared.metadata).unwrap()).provides_extra,
+        crate::parse_metadata(std::str::from_utf8(&prepared.metadata).unwrap())
+            .unwrap()
+            .provides_extra,
         ["Dev.Test", "docs"]
     );
 }
@@ -331,7 +333,9 @@ fn test_prepare_keeps_declared_classifier_order() {
     let prepared = prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap();
 
     assert_eq!(
-        crate::parse_metadata(std::str::from_utf8(&prepared.metadata).unwrap()).classifiers,
+        crate::parse_metadata(std::str::from_utf8(&prepared.metadata).unwrap())
+            .unwrap()
+            .classifiers,
         [
             "Topic :: Software Development :: Libraries",
             "Development Status :: 4 - Beta",

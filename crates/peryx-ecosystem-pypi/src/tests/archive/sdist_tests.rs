@@ -293,6 +293,10 @@ fn test_validate_sdist_path_rejects_invalid_pkg_info_metadata() {
             b"Name: pkg\nVersion: 1.0\n".as_slice(),
             "PKG-INFO is missing Metadata-Version",
         ),
+        (
+            b"Metadata-Version: 2.2\nName: pkg\nmalformed header\nVersion: 1.0\n".as_slice(),
+            "malformed PKG-INFO: header line \"malformed header\" is missing a colon",
+        ),
     ] {
         let file = temp_archive(&valid_sdist(&[
             ("pkg-1.0/PKG-INFO", metadata),

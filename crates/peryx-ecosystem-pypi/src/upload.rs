@@ -11,9 +11,9 @@ use url::Url;
 
 use crate::archive::ValidatedArchive;
 use crate::{
-    CoreMetadata, CoreMetadataDoc, DistributionFilename, DistributionFilenameError, DistributionKind, File, Provenance,
-    Yanked, is_valid_name, normalize_name, normalize_name_cow, parse_distribution_filename, parse_metadata,
-    parse_version, parse_version_specifiers, to_json,
+    CoreMetadata, CoreMetadataDoc, DistributionFilename, DistributionFilenameError, DistributionKind, File,
+    MetadataError, Provenance, Yanked, is_valid_name, normalize_name, normalize_name_cow, parse_distribution_filename,
+    parse_metadata, parse_version, parse_version_specifiers, to_json,
 };
 use peryx_storage::blob::{BlobError, BlobStore, Digest, StagedBlob};
 use peryx_storage::meta::{MetaError, MetaStore};
@@ -95,6 +95,8 @@ pub enum UploadError {
     InvalidContent(String),
     /// The metadata document was not UTF-8.
     InvalidMetadataUtf8,
+    /// The metadata document's header block is not a well-formed RFC 822 message.
+    MalformedMetadata(MetadataError),
     /// `Project-URL` did not contain a 1-32 character label and an HTTP(S) URL.
     InvalidProjectUrl { label: String, url: String },
     /// `License-File` did not locate a file below the project root.
@@ -209,7 +211,7 @@ pub fn prepare(
         missing_license_files,
     } = validate_archive(&parsed, &filename, staged.blob.path())?;
     let metadata_text = std::str::from_utf8(&metadata).map_err(|_| UploadError::InvalidMetadataUtf8)?;
-    let metadata_doc = parse_metadata(metadata_text);
+    let metadata_doc = parse_metadata(metadata_text).map_err(UploadError::MalformedMetadata)?;
     let form_requires_python = form
         .requires_python
         .clone()

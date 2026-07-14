@@ -28,22 +28,45 @@ pub struct CoreMetadataDoc {
     pub description_content_type: Option<String>,
 }
 
+/// Why a core-metadata document was rejected.
+///
+/// Each variant is a defect that `email.parser` under the `compat32` policy reports, the parser core
+/// metadata names as its format standard, and that `packaging` and Warehouse both refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataError {
+    /// A header line carries no colon. `email.parser` ends the header block there, so every field
+    /// below it is lost.
+    MissingHeaderSeparator(String),
+    /// A header line starts with a colon, naming no field.
+    MissingHeaderName(String),
+    /// The document opens with a folded continuation line, which continues no header.
+    LeadingContinuation(String),
+}
+
+impl std::fmt::Display for MetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingHeaderSeparator(line) => write!(f, "header line {line:?} is missing a colon"),
+            Self::MissingHeaderName(line) => write!(f, "header line {line:?} has no field name"),
+            Self::LeadingContinuation(line) => {
+                write!(f, "document starts with the continuation line {line:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MetadataError {}
+
 /// Parse a core-metadata document.
-#[must_use]
-pub fn parse_metadata(text: &str) -> CoreMetadataDoc {
+///
+/// # Errors
+/// Returns [`MetadataError`] when the header block is not a well-formed RFC 822 message.
+pub fn parse_metadata(text: &str) -> Result<CoreMetadataDoc, MetadataError> {
     let mut doc = CoreMetadataDoc::default();
-    // The header/body boundary is a blank line, which is `\r\n\r\n` in a CRLF document; matching only
-    // `\n\n` would read the whole CRLF document as headers and mis-parse body lines as fields.
-    let (headers, body) = text
-        .split_once("\r\n\r\n")
-        .or_else(|| text.split_once("\n\n"))
-        .unwrap_or((text, ""));
-    for line in unfold(headers) {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
+    let (headers, body) = split_document(text);
+    for (key, value) in unfold(headers)? {
         let value = value.trim();
-        match key.to_ascii_lowercase().as_str() {
+        match key.as_str() {
             "metadata-version" => doc.metadata_version = non_empty(value),
             "name" => value.clone_into(&mut doc.name),
             "version" => value.clone_into(&mut doc.version),
@@ -78,23 +101,45 @@ pub fn parse_metadata(text: &str) -> CoreMetadataDoc {
     if doc.description.is_empty() {
         body.trim().clone_into(&mut doc.description);
     }
-    doc
+    Ok(doc)
 }
 
-/// Join folded (indented continuation) header lines, per RFC 822 folding.
-fn unfold(headers: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
+/// Cut the document at its first empty line, the header/body boundary. A document mixes CRLF and LF
+/// endings when its long description comes from a CRLF README, so the boundary is the first line
+/// that is empty once its ending is stripped, not a fixed `\r\n\r\n` or `\n\n` byte pair.
+fn split_document(text: &str) -> (&str, &str) {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            return (&text[..offset], &text[offset + line.len()..]);
+        }
+        offset += line.len();
+    }
+    (text, "")
+}
+
+/// Split the header block into lowercased `(field, value)` pairs, joining folded (indented
+/// continuation) lines per RFC 822 folding.
+fn unfold(headers: &str) -> Result<Vec<(String, String)>, MetadataError> {
+    let mut fields: Vec<(String, String)> = Vec::new();
     for raw in headers.lines() {
-        if (raw.starts_with(' ') || raw.starts_with('\t'))
-            && let Some(last) = lines.last_mut()
-        {
-            last.push(' ');
-            last.push_str(raw.trim_start());
+        if raw.starts_with(' ') || raw.starts_with('\t') {
+            let Some((_, value)) = fields.last_mut() else {
+                return Err(MetadataError::LeadingContinuation(raw.to_owned()));
+            };
+            value.push(' ');
+            value.push_str(raw.trim_start());
             continue;
         }
-        lines.push(raw.to_owned());
+        let Some((key, value)) = raw.split_once(':') else {
+            return Err(MetadataError::MissingHeaderSeparator(raw.to_owned()));
+        };
+        if key.is_empty() {
+            return Err(MetadataError::MissingHeaderName(raw.to_owned()));
+        }
+        fields.push((key.to_ascii_lowercase(), value.to_owned()));
     }
-    lines
+    Ok(fields)
 }
 
 fn non_empty(value: &str) -> Option<String> {
@@ -209,9 +254,11 @@ fn classifier_groups(classifiers: &[String]) -> Option<Vec<(String, Vec<String>)
 
 /// Parse a `PyPI` core-metadata document straight into the neutral [`UiMeta`](peryx_core::UiMeta) the
 /// web UI renders.
-#[must_use]
-pub fn ui_meta(metadata_text: &str) -> peryx_core::UiMeta {
-    parse_metadata(metadata_text).to_ui_meta()
+///
+/// # Errors
+/// Returns [`MetadataError`] when the document's header block is malformed.
+pub fn ui_meta(metadata_text: &str) -> Result<peryx_core::UiMeta, MetadataError> {
+    Ok(parse_metadata(metadata_text)?.to_ui_meta())
 }
 
 /// Build a neutral [`UiProject`](peryx_core::UiProject) from a PEP 691 project-detail JSON document.

@@ -311,7 +311,11 @@ fn metadata_doc(ctx: &IndexerCtx<'_>, detail: &ProjectDetail) -> Result<Option<C
         let Ok(text) = std::str::from_utf8(&bytes) else {
             continue;
         };
-        return Ok(Some(parse_metadata(text)));
+        // A cached upstream sibling can be malformed; index the next file rather than fail the crawl.
+        let Ok(doc) = parse_metadata(text) else {
+            continue;
+        };
+        return Ok(Some(doc));
     }
     Ok(None)
 }

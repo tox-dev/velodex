@@ -396,6 +396,37 @@ async fn test_project_page_reports_an_unfetchable_metadata_sibling() {
 }
 
 #[tokio::test]
+async fn test_project_page_reports_a_malformed_metadata_sibling() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let h = harness().await;
+    let wheel = Digest::of(b"the wheel");
+    let sibling = b"Metadata-Version: 2.4\nName: flask\nmalformed header\nVersion: 1.0\n";
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_json_page(
+        &h.server,
+        &detail_with_metadata(wheel.as_str(), &file_url, Digest::of(sibling).as_str()),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sibling.to_vec(), "application/octet-stream"))
+        .mount(&h.server)
+        .await;
+    get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+
+    let err = crate::serving::PypiServing
+        .project_page(h.state.serving.clone(), 0, "flask".to_owned())
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.contains("metadata parse on index \"pypi\" for file \"flask-1.0-py3-none-any.whl\": header line"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
 async fn test_upload_to_an_unresolvable_or_non_root_path_is_rejected() {
     use axum::extract::FromRequest as _;
     use peryx_driver::serving::EcosystemDriver as _;

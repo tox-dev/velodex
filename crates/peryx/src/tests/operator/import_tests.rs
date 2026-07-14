@@ -214,6 +214,44 @@ fn test_import_dir_reports_metadata_validation_reasons() {
     ));
 }
 
+#[test]
+fn test_import_dir_rejects_malformed_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let import = root.path().join("import");
+    std::fs::create_dir(&import).unwrap();
+    std::fs::write(
+        import.join("Malformed-1.0-py3-none-any.whl"),
+        wheel_with_metadata(
+            "Malformed",
+            "1.0",
+            b"Metadata-Version: 2.4\nName: Malformed\nmalformed header\nVersion: 1.0\n",
+        ),
+    )
+    .unwrap();
+    let config = Config {
+        data_dir: root.path().join("data"),
+        ..Config::default()
+    };
+
+    let mut out = Vec::new();
+    operator::import_dir(&config, "root/pypi", &import, &mut out).unwrap();
+
+    assert_eq!(
+        (
+            String::from_utf8(out).unwrap(),
+            MetaStore::open_existing(config.data_dir.join("peryx.redb"))
+                .unwrap()
+                .list_upload_entries("hosted", "malformed")
+                .unwrap()
+                .is_empty(),
+        ),
+        (
+            "status\tfilename\tproject\tversion\treason\nrejected\tMalformed-1.0-py3-none-any.whl\tmalformed\t1.0\tmalformed metadata: header line \"malformed header\" is missing a colon\nsummary\t\t\t\timported=0 skipped=0 rejected=1\n".to_owned(),
+            true,
+        )
+    );
+}
+
 #[rstest]
 #[case::missing(b"Name: Invalid\nVersion: 1.0\n", "metadata is missing Metadata-Version")]
 #[case::unsupported(
