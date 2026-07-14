@@ -1,7 +1,7 @@
 use peryx_core::UiDescription;
 use rstest::rstest;
 
-use crate::markdown::render_description;
+use crate::markdown::{external_link_rel, render_description};
 use crate::model::{UiSearchPage, UiSnapshot, members_from_listing, projects_from_list};
 
 #[test]
@@ -143,6 +143,17 @@ fn test_render_description_markdown_preserves_safe_link(#[case] target: &str) {
         html,
         format!("<p><a rel=\"external nofollow noopener noreferrer\" href=\"{target}\">docs</a></p>\n")
     );
+}
+
+#[rstest]
+#[case::http("http://example.com/docs", Some("external nofollow noopener noreferrer"))]
+#[case::https("https://example.com/docs", Some("external nofollow noopener noreferrer"))]
+#[case::mailto("mailto:maintainer@example.com", None)]
+#[case::absolute_route("/pypi/files/veloxdemo-1.0.0.tar.gz", None)]
+#[case::relative_route("../docs/", None)]
+#[case::malformed("http://[invalid", None)]
+fn test_external_link_rel(#[case] target: &str, #[case] expected: Option<&str>) {
+    assert_eq!(external_link_rel(target), expected);
 }
 
 #[test]
