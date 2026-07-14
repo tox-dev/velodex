@@ -96,6 +96,7 @@ toml = { workspace = true, optional = true }
 
 [dev-dependencies]
 peryx-http.workspace = true
+httpdate.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true, features = ["util"] }

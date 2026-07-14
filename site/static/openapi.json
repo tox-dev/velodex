@@ -1042,7 +1042,7 @@
           "files"
         ],
         "summary": "Download an artifact",
-        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached blob honors a single byte range, so an interrupted download can resume; a range this server cannot read is ignored and the whole artifact served, as is a range whose `If-Range` no longer names the artifact.",
+        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached blob honors a single byte range, so an interrupted download can resume; a range this server cannot read is ignored and the whole artifact served, as is a range whose `If-Range` no longer names the artifact. A cached blob also carries the date the store wrote it as its `Last-Modified`, which an older client revalidates on when it kept no entity tag.",
         "parameters": [
           {
             "name": "route",
@@ -1085,6 +1085,13 @@
             "description": "The entity tag the client's partial copy was cut from; the `Range` is served only while it still names the artifact, and the whole artifact otherwise",
             "required": false,
             "example": "\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\""
+          },
+          {
+            "name": "If-Modified-Since",
+            "in": "header",
+            "description": "The `Last-Modified` date of a cached artifact the client already holds; answered `304` unless the store wrote the blob later. Ignored when the request also sends `If-None-Match`",
+            "required": false,
+            "example": "Wed, 21 Oct 2026 07:28:00 GMT"
           }
         ],
         "responses": {
@@ -1101,7 +1108,7 @@
             }
           },
           "304": {
-            "description": "`If-None-Match` names the artifact's digest, so no body is sent"
+            "description": "`If-None-Match` names the artifact's digest, or `If-Modified-Since` covers the cached blob, so no body is sent"
           },
           "400": {
             "description": "The digest is not 64 lowercase hex, or the filename is not a safe path segment"

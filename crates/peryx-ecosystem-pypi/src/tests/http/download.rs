@@ -339,6 +339,126 @@ async fn test_matching_if_none_match_never_fetches_an_uncached_artifact() {
     assert!(body.is_empty());
     assert!(!h.state.blobs.exists(&digest));
 }
+async fn wheel_last_modified(h: &Harness, uri: &str) -> String {
+    let (_, headers, _) = get_bytes(&h.state, uri, None).await;
+    headers[header::LAST_MODIFIED].to_str().unwrap().to_owned()
+}
+
+#[rstest]
+#[case::get("GET")]
+#[case::head("HEAD")]
+#[tokio::test]
+async fn test_cached_file_is_dated_by_the_write_that_cached_it(#[case] verb: &str) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, _) = send_bytes(&h.state, verb, &uri, &[]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let dated = httpdate::parse_http_date(headers[header::LAST_MODIFIED].to_str().unwrap()).unwrap();
+    assert!(
+        dated <= std::time::SystemTime::now(),
+        "the artifact is not dated after the response"
+    );
+}
+#[tokio::test]
+async fn test_an_artifact_arriving_from_upstream_is_dated_by_nothing() {
+    let h = harness().await;
+    let digest = Digest::of(WHEEL);
+    let file_url = format!("{}/files/flask.whl", h.server.uri());
+    mount_detail(&h.server, digest.as_str(), &file_url, None).await;
+    Mock::given(method("GET"))
+        .and(path("/files/flask.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(WHEEL.to_vec()))
+        .mount(&h.server)
+        .await;
+    get(&h.state, "/pypi/simple/flask/", Some("application/json")).await; // registers the file url
+
+    let uri = format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
+    let (status, headers, body) = get_bytes(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, WHEEL, "the tee still serves the bytes it is caching");
+    assert!(!headers.contains_key(header::LAST_MODIFIED), "no write to date it by");
+}
+#[tokio::test]
+async fn test_cached_file_the_client_already_dated_is_not_modified() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+    let dated = wheel_last_modified(&h, &uri).await;
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("if-modified-since", &dated)]).await;
+
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert_eq!(headers[header::LAST_MODIFIED], dated);
+    assert_eq!(headers[header::ETAG], wheel_etag());
+    assert!(body.is_empty());
+}
+#[tokio::test]
+async fn test_cached_file_is_not_modified_since_a_date_that_has_not_arrived() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+    let ahead = httpdate::fmt_http_date(std::time::SystemTime::now() + std::time::Duration::from_hours(24));
+
+    let (status, _, body) = get_bytes_with_headers(&h.state, &uri, &[("if-modified-since", &ahead)]).await;
+
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+}
+#[rstest]
+#[case::stale("Tue, 15 Nov 1994 08:12:31 GMT")]
+#[case::malformed("last tuesday")]
+#[tokio::test]
+async fn test_cached_file_is_served_for_an_if_modified_since_it_does_not_meet(#[case] field: &str) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("if-modified-since", field)]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.contains_key(header::LAST_MODIFIED));
+    assert_eq!(body, WHEEL);
+}
+#[tokio::test]
+async fn test_an_if_none_match_that_holds_other_bytes_settles_the_date_too() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+    let dated = wheel_last_modified(&h, &uri).await;
+
+    let both = [("if-none-match", "\"0000\""), ("if-modified-since", &*dated)];
+    let (status, _, body) = get_bytes_with_headers(&h.state, &uri, &both).await;
+
+    assert_eq!(status, StatusCode::OK, "the entity tag was asked first and refused");
+    assert_eq!(body, WHEEL);
+}
+#[tokio::test]
+async fn test_a_matching_if_none_match_settles_a_date_it_disagrees_with() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let both = [
+        ("if-none-match", &*wheel_etag()),
+        ("if-modified-since", "Tue, 15 Nov 1994 08:12:31 GMT"),
+    ];
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &both).await;
+
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert_eq!(headers[header::ETAG], wheel_etag());
+    assert!(body.is_empty());
+}
+#[tokio::test]
+async fn test_a_current_if_modified_since_answers_before_the_range_is_read() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+    let dated = wheel_last_modified(&h, &uri).await;
+
+    let conditional = [("if-modified-since", &*dated), ("range", "bytes=2-5")];
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &conditional).await;
+
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert!(body.is_empty());
+}
 #[tokio::test]
 async fn test_cached_file_serves_a_range_an_if_range_still_names() {
     let h = harness().await;

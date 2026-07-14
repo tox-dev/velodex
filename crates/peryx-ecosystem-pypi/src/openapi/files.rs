@@ -14,7 +14,9 @@ pub(super) fn file_download() -> OperationBuilder {
              (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached \
              blob honors a single byte range, so an interrupted download can resume; a range this \
              server cannot read is ignored and the whole artifact served, as is a range whose \
-             `If-Range` no longer names the artifact.",
+             `If-Range` no longer names the artifact. A cached blob also carries the date the store \
+             wrote it as its `Last-Modified`, which an older client revalidates on when it kept no \
+             entity tag.",
         ))
         .parameter(route_param())
         .parameter(sha256_param())
@@ -22,6 +24,7 @@ pub(super) fn file_download() -> OperationBuilder {
         .parameter(range_param())
         .parameter(if_none_match_param())
         .parameter(if_range_param())
+        .parameter(if_modified_since_param())
         .response(
             "200",
             ResponseBuilder::new()
@@ -30,7 +33,10 @@ pub(super) fn file_download() -> OperationBuilder {
         )
         .response(
             "304",
-            ResponseBuilder::new().description("`If-None-Match` names the artifact's digest, so no body is sent"),
+            ResponseBuilder::new().description(
+                "`If-None-Match` names the artifact's digest, or `If-Modified-Since` covers the cached \
+                 blob, so no body is sent",
+            ),
         )
         .response(
             "206",

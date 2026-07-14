@@ -99,6 +99,17 @@ pub(super) fn if_range_param() -> ParameterBuilder {
         )))
 }
 
+pub(super) fn if_modified_since_param() -> ParameterBuilder {
+    ParameterBuilder::new()
+        .name("If-Modified-Since")
+        .parameter_in(ParameterIn::Header)
+        .description(Some(
+            "The `Last-Modified` date of a cached artifact the client already holds; answered `304` \
+             unless the store wrote the blob later. Ignored when the request also sends `If-None-Match`",
+        ))
+        .example(Some(json!("Wed, 21 Oct 2026 07:28:00 GMT")))
+}
+
 pub(super) fn filename_param(example: &str) -> ParameterBuilder {
     ParameterBuilder::new()
         .name("filename")
