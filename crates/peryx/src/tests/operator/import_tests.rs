@@ -178,6 +178,15 @@ fn test_import_dir_reports_metadata_validation_reasons() {
         ),
     )
     .unwrap();
+    std::fs::write(
+        import.join("BadClassifier-1.0-py3-none-any.whl"),
+        wheel_with_metadata(
+            "BadClassifier",
+            "1.0",
+            b"Metadata-Version: 2.4\nName: BadClassifier\nVersion: 1.0\nClassifier: Made Up :: Value\n",
+        ),
+    )
+    .unwrap();
     let config = Config {
         data_dir: root.path().join("data"),
         ..Config::default()
@@ -199,6 +208,9 @@ fn test_import_dir_reports_metadata_validation_reasons() {
     ));
     assert!(text.contains(
         "LicensePath-1.0-py3-none-any.whl\tlicensepath\t1.0\tinvalid License-File \"../LICENSE\": parent directory components are not allowed"
+    ));
+    assert!(text.contains(
+        "BadClassifier-1.0-py3-none-any.whl\tbadclassifier\t1.0\tmetadata Classifier value \"Made Up :: Value\" is not a known trove classifier"
     ));
 }
 

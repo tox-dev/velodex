@@ -10,6 +10,8 @@ pub mod archive;
 #[cfg(feature = "serving")]
 pub mod cache;
 #[cfg(feature = "serving")]
+mod classifier;
+#[cfg(feature = "serving")]
 pub mod discovery;
 mod filename;
 mod html;

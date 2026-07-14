@@ -55,7 +55,8 @@ repos:
     rev: v2.4.2
     hooks:
       - id: codespell
-        args: ["--ignore-words-list=ser,unparseable"]
+        # `opps` (a framework) and `ukranian` (deprecated) are trove classifiers, spelled as PyPI publishes them.
+        args: ["--ignore-words-list=ser,unparseable,opps,ukranian"]
         # Generated mermaid SVGs contain mermaid's own class names (e.g. `.composit`).
         exclude: "^site/diagrams/"
   - repo: https://github.com/zizmorcore/zizmor-pre-commit

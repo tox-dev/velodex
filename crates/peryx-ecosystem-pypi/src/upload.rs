@@ -431,6 +431,7 @@ fn validate_metadata_identity(
     }
     validate_license_expression(metadata)?;
     validate_provided_extras(metadata)?;
+    validate_classifiers(metadata)?;
     compare_metadata_field(
         "Metadata-Version",
         form.metadata_version.as_deref(),
@@ -515,6 +516,17 @@ fn validate_provided_extras(metadata: &CoreMetadataDoc) -> Result<(), UploadErro
                 reason: "duplicates an earlier value after normalization",
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_classifiers(metadata: &CoreMetadataDoc) -> Result<(), UploadError> {
+    for value in &metadata.classifiers {
+        crate::classifier::validate(value).map_err(|reason| UploadError::InvalidMetadataValue {
+            field: "Classifier",
+            value: value.clone(),
+            reason,
+        })?;
     }
     Ok(())
 }

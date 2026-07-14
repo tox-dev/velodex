@@ -301,6 +301,52 @@ fn test_prepare_preserves_legacy_provided_extras() {
 }
 
 #[rstest]
+#[case::unknown("Made Up :: Value", "is not a known trove classifier")]
+#[case::private("Private :: Do Not Upload", "is not a known trove classifier")]
+#[case::deprecated("License :: OSI Approved :: X.Net License", "is deprecated")]
+#[case::deprecated_with_replacement(
+    "Natural Language :: Ukranian",
+    "is deprecated; use Natural Language :: Ukrainian instead"
+)]
+fn test_prepare_rejects_invalid_classifier(#[case] classifier: &str, #[case] reason: &'static str) {
+    let bytes = classifier_wheel(&format!("Classifier: {classifier}\n"));
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap_err(),
+        UploadError::InvalidMetadataValue {
+            field: "Classifier",
+            value: classifier.to_owned(),
+            reason,
+        }
+    );
+}
+
+#[test]
+fn test_prepare_keeps_declared_classifier_order() {
+    let bytes = classifier_wheel(
+        "Classifier: Topic :: Software Development :: Libraries\nClassifier: Development Status :: 4 - Beta\nClassifier: Programming Language :: Python :: 3\n",
+    );
+    let (_dir, staged) = staged_upload(&bytes);
+    let prepared = prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap();
+
+    assert_eq!(
+        crate::parse_metadata(std::str::from_utf8(&prepared.metadata).unwrap()).classifiers,
+        [
+            "Topic :: Software Development :: Libraries",
+            "Development Status :: 4 - Beta",
+            "Programming Language :: Python :: 3",
+        ]
+    );
+}
+
+fn classifier_wheel(classifiers: &str) -> Vec<u8> {
+    wheel_metadata_bytes(
+        format!("Metadata-Version: 2.1\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\n{classifiers}").as_bytes(),
+    )
+}
+
+#[rstest]
 #[case::parent("../LICENSE", "parent directory components are not allowed")]
 #[case::relative_parent("./../LICENSE", "parent directory components are not allowed")]
 #[case::unresolved_parent("licenses/../LICENSE", "parent directory components are not allowed")]

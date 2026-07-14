@@ -754,6 +754,25 @@ async fn test_upload_rejects_license_file_missing_from_the_wheel() {
 }
 
 #[tokio::test]
+async fn test_upload_rejects_unknown_classifier() {
+    let h = harness().await;
+    assert_upload_response(
+        &h,
+        &upload_fields(),
+        Some((
+            "peryxpkg-1.0-py3-none-any.whl",
+            fixture_wheel_with_metadata(
+                b"Metadata-Version: 2.4\nName: peryxpkg\nVersion: 1.0\nRequires-Python: >=3.8\nClassifier: Made Up :: Value\n",
+            )
+            .as_slice(),
+        )),
+        StatusCode::BAD_REQUEST,
+        "metadata Classifier value \"Made Up :: Value\" is not a known trove classifier",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_upload_rejects_conflicting_license_fields() {
     let h = harness().await;
     assert_upload_response(
