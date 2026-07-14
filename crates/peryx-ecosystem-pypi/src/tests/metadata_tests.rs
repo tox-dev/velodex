@@ -35,7 +35,7 @@ fn test_parse_metadata_headers_and_body() {
                 License-File: LICENSE\n\
                 Author: Jane\n\
                 Maintainer: Joe\n\
-                Keywords: cache,index proxy\n\
+                Keywords: cache,index,proxy\n\
                 Requires-Dist: requests>=2\n\
                 Requires-Dist: click; extra == \"cli\"\n\
                 Provides-Extra: cli\n\
@@ -69,6 +69,14 @@ fn test_parse_metadata_headers_and_body() {
     );
     assert_eq!(doc.description_content_type.as_deref(), Some("text/markdown"));
     assert!(doc.description.starts_with("# peryxpkg"));
+}
+
+#[test]
+fn test_parse_metadata_preserves_keyword_spaces() {
+    assert_eq!(
+        parse_metadata("Name: x\nVersion: 1\nKeywords: machine learning, cache,,\n").keywords,
+        ["machine learning", "cache"]
+    );
 }
 
 #[test]

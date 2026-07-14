@@ -60,7 +60,8 @@ pub fn parse_metadata(text: &str) -> CoreMetadataDoc {
             "maintainer" | "maintainer-email" => doc.maintainer = doc.maintainer.or_else(|| non_empty(value)),
             "keywords" => {
                 doc.keywords = value
-                    .split([',', ' '])
+                    .split(',')
+                    .map(str::trim)
                     .filter(|keyword| !keyword.is_empty())
                     .map(str::to_owned)
                     .collect();
