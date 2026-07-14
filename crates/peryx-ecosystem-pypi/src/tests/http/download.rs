@@ -169,6 +169,81 @@ async fn test_file_digest_mismatch_fails_the_body_and_never_persists() {
     assert!(!h.state.blobs.exists(&digest));
     assert_eq!(h.state.metrics.index_totals()["pypi"].base.rejected, 1);
 }
+const WHEEL: &[u8] = b"wheelcontent";
+
+fn cached_wheel_uri(h: &Harness) -> String {
+    let digest = Digest::of(WHEEL);
+    h.state.blobs.write_verified(WHEEL, &digest).unwrap();
+    format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str())
+}
+
+#[tokio::test]
+async fn test_cached_file_without_a_range_serves_the_whole_wheel() {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes(&h.state, &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(headers[header::CONTENT_LENGTH], WHEEL.len().to_string());
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(body, WHEEL);
+}
+#[rstest]
+#[case::bounded("bytes=2-5", 2, 5)]
+#[case::open_ended("bytes=6-", 6, 11)]
+#[case::suffix("bytes=-4", 8, 11)]
+#[case::suffix_past_the_start("bytes=-99", 0, 11)]
+#[case::end_past_the_last_byte("bytes=8-99", 8, 11)]
+#[tokio::test]
+async fn test_cached_file_serves_a_byte_range(#[case] range: &str, #[case] start: usize, #[case] end: usize) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("range", range)]).await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        headers[header::CONTENT_RANGE],
+        format!("bytes {start}-{end}/{}", WHEEL.len())
+    );
+    assert_eq!(headers[header::CONTENT_LENGTH], (end - start + 1).to_string());
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(body, WHEEL[start..=end]);
+}
+#[rstest]
+#[case::start_past_the_last_byte("bytes=12-")]
+#[case::wholly_out_of_bounds("bytes=99-100")]
+#[case::empty_suffix("bytes=-0")]
+#[tokio::test]
+async fn test_cached_file_refuses_an_unsatisfiable_range(#[case] range: &str) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("range", range)]).await;
+
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes */{}", WHEEL.len()));
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    assert!(body.is_empty());
+}
+#[rstest]
+#[case::malformed("bytes=abc-")]
+#[case::backwards("bytes=5-2")]
+#[case::unsupported_unit("items=0-1")]
+#[case::multiple("bytes=0-1,4-5")]
+#[tokio::test]
+async fn test_cached_file_serves_the_whole_wheel_for_a_range_it_cannot_read(#[case] range: &str) {
+    let h = harness().await;
+    let uri = cached_wheel_uri(&h);
+
+    let (status, headers, body) = get_bytes_with_headers(&h.state, &uri, &[("range", range)]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key(header::CONTENT_RANGE));
+    assert_eq!(body, WHEEL);
+}
 #[tokio::test]
 async fn test_file_path_without_filename_is_not_found() {
     let h = harness().await;

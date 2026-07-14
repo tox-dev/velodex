@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use peryx_core::path::{self};
 use peryx_driver::not_found;
+use peryx_driver::range::{RangeSpec, parse_range, unsatisfiable_range};
 use peryx_driver::state::ServingState;
 use peryx_events::metrics::Event;
 use peryx_index::Index;
@@ -138,7 +139,7 @@ async fn pypi_get(
         return detail_response(detail, &index.route, &normalized);
     }
     if let Some(file) = rest.strip_prefix("files/") {
-        return file_route(state, index, file).await;
+        return file_route(state, index, file, headers).await;
     }
     if let Some(target) = rest.strip_prefix("inspect/") {
         return inspect_route(state.clone(), index.route.clone(), target, uri.query()).await;
@@ -159,7 +160,7 @@ fn simple_slash_redirect(uri: &axum::http::Uri, rest: &str, canonical_tail: &str
     (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, location)], "").into_response()
 }
 
-async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str) -> Response {
+async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str, headers: &HeaderMap) -> Response {
     let route = index.route.clone();
     let Some((sha256, raw_filename)) = file.split_once('/') else {
         return not_found();
@@ -203,7 +204,8 @@ async fn file_route(state: &Arc<ServingState>, index: &Index, file: &str) -> Res
             CacheContext::metadata(&route, digest.as_str(), &filename),
         );
     }
-    serve_blob(state, route, &filename, digest).await
+    let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
+    serve_blob(state, route, &filename, digest, range).await
 }
 
 fn download_policy_response(state: &ServingState, index: &Index, filename: &str, digest: &Digest) -> Option<Response> {
@@ -264,11 +266,22 @@ fn legacy_json_target(rest: &str) -> Result<Option<LegacyJsonTarget>, Response> 
 }
 
 /// Stream a blob to the client: from disk when cached, teed from the upstream cache otherwise.
-async fn serve_blob(state: &Arc<ServingState>, route: String, filename: &str, digest: Digest) -> Response {
+///
+/// A cached blob honors a single-range request, which is how pip resumes an interrupted wheel
+/// download. A blob still being teed from upstream has no seekable body to slice, so a range over it
+/// falls back to the whole `200` representation the client asked to resume.
+async fn serve_blob(
+    state: &Arc<ServingState>,
+    route: String,
+    filename: &str,
+    digest: Digest,
+    range: Option<&str>,
+) -> Response {
     let digest_hex = digest.as_str().to_owned();
     let blob_headers = [
         (header::CONTENT_TYPE, "application/octet-stream"),
         (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        (header::ACCEPT_RANGES, "bytes"),
     ];
     match cache::stream_file(state.clone(), digest, route.clone(), filename.to_owned()).await {
         Ok(cache::FileOutcome::Cached(path)) => {
@@ -279,17 +292,39 @@ async fn serve_blob(state: &Arc<ServingState>, route: String, filename: &str, di
                 )
                     .into_response();
             };
-            let bytes = file.metadata().await.map(|meta| meta.len()).unwrap_or_default();
+            let size = file.metadata().await.map(|meta| meta.len()).unwrap_or_default();
+            let (status, start, length, content_range) =
+                match range.map_or(RangeSpec::Ignore, |value| parse_range(value, size)) {
+                    RangeSpec::Ignore => (StatusCode::OK, 0, size, None),
+                    RangeSpec::Unsatisfiable => return unsatisfiable_range(size),
+                    RangeSpec::Satisfiable(start, end) => (
+                        StatusCode::PARTIAL_CONTENT,
+                        start,
+                        end - start + 1,
+                        Some(format!("bytes {start}-{end}/{size}")),
+                    ),
+                };
             state.metrics.record(Event::Download {
                 project: crate::project_of_filename(filename),
                 route,
                 filename: filename.to_owned(),
-                bytes,
+                bytes: length,
             });
+            let mut builder = Response::builder()
+                .status(status)
+                .header(header::CONTENT_LENGTH, length);
+            for (name, value) in blob_headers {
+                builder = builder.header(name, value);
+            }
+            if let Some(content_range) = content_range {
+                builder = builder.header(header::CONTENT_RANGE, content_range);
+            }
             // Pipeline the disk read ahead of the socket write: a pull-driven ReaderStream awaits each
             // read before writing it, serializing two independent I/O waits per chunk.
-            let body = peryx_driver::body::pipelined_file(file.into_std().await, 0, bytes);
-            (blob_headers, body).into_response()
+            let body = peryx_driver::body::pipelined_file(file.into_std().await, start, length);
+            builder
+                .body(body)
+                .expect("blob response builds from validated header parts")
         }
         // A live stream records its download event at EOF, when the byte count exists.
         Ok(cache::FileOutcome::Live(stream)) => (blob_headers, axum::body::Body::from_stream(stream)).into_response(),

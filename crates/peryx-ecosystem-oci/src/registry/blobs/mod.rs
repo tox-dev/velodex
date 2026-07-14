@@ -3,10 +3,9 @@
 //! Global blob deduplication requires repository-scoped links before reads.
 
 mod contents;
-mod range;
 
 use contents::{layer_contents_response, layer_query_member};
-use range::{RangeSpec, parse_range, unsatisfiable_range};
+use peryx_driver::range::{RangeSpec, parse_range, unsatisfiable_range};
 
 use super::uploads::created;
 use super::*;
@@ -420,11 +419,7 @@ async fn serve_stored_blob(
             HeaderValue::from_str(digest).unwrap_or(HeaderValue::from_static("")),
         ),
     ];
-    // A range in a unit we do not speak, or a multi-range we do not serve as multipart, is ignored and
-    // the whole blob served, as is any range we cannot parse.
-    let spec = range
-        .filter(|value| !value.contains(','))
-        .map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let spec = range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
     let (start, end) = match spec {
         RangeSpec::Ignore => {
             let mut builder = Response::builder()
@@ -467,9 +462,7 @@ fn blob_head_response(digest: &str, size: u64, range: Option<&str>) -> Response 
     // A `HEAD` answers a `Range` the way the matching `GET` would. Ignoring it here while honouring
     // it for a cached blob made one request give two answers depending on what the store happened to
     // hold, which is the one thing a client checking a layer must not see.
-    let spec = range
-        .filter(|value| !value.contains(','))
-        .map_or(RangeSpec::Ignore, |value| parse_range(value, size));
+    let spec = range.map_or(RangeSpec::Ignore, |value| parse_range(value, size));
     let (status, length, content_range) = match spec {
         RangeSpec::Ignore => (StatusCode::OK, size, None),
         RangeSpec::Unsatisfiable => return unsatisfiable_range(size),

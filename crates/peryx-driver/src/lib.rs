@@ -15,6 +15,7 @@ pub mod discovery;
 pub mod download;
 mod driver_set;
 pub mod openapi;
+pub mod range;
 pub mod rate_limit;
 pub mod serving;
 pub mod state;

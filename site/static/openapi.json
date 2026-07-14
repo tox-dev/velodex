@@ -1035,7 +1035,7 @@
           "files"
         ],
         "summary": "Download an artifact",
-        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`).",
+        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`). A cached blob honors a single byte range, so an interrupted download can resume; a range this server cannot read is ignored and the whole artifact served.",
         "parameters": [
           {
             "name": "route",
@@ -1057,11 +1057,24 @@
             "description": "The display filename, percent-encoded as one path segment. Separators, traversal, and control characters are rejected.",
             "required": true,
             "example": "peryxpkg-1.0-py3-none-any.whl"
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "One byte range over a cached artifact; multiple ranges are ignored",
+            "required": false,
+            "example": "bytes=0-1023"
           }
         ],
         "responses": {
           "200": {
             "description": "The artifact bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "The requested byte range of a cached artifact",
             "content": {
               "application/octet-stream": {}
             }
@@ -1087,6 +1100,9 @@
           },
           "404": {
             "description": "No file with this digest is known"
+          },
+          "416": {
+            "description": "The range lies outside the artifact; `Content-Range` names its size"
           },
           "502": {
             "description": "The upstream cache failed or the bytes did not match the digest"

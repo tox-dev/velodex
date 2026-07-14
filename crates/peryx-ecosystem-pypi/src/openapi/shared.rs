@@ -64,6 +64,16 @@ pub(super) fn sha256_param() -> ParameterBuilder {
         )))
 }
 
+pub(super) fn range_param() -> ParameterBuilder {
+    ParameterBuilder::new()
+        .name("Range")
+        .parameter_in(ParameterIn::Header)
+        .description(Some(
+            "One byte range over a cached artifact; multiple ranges are ignored",
+        ))
+        .example(Some(json!("bytes=0-1023")))
+}
+
 pub(super) fn filename_param(example: &str) -> ParameterBuilder {
     ParameterBuilder::new()
         .name("filename")

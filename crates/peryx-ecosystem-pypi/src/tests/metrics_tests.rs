@@ -4,7 +4,7 @@ use peryx_storage::blob::Digest;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use super::http::{get, harness};
+use super::http::{get, get_bytes_with_headers, harness};
 
 fn settle(metrics: &Metrics, done: impl Fn(&Metrics) -> bool) {
     // The aggregator runs on its own thread; poll until the last event lands.
@@ -218,4 +218,24 @@ async fn test_router_paths_feed_stats_and_prometheus_metrics() {
     assert_eq!(pypi["families"]["metadata"], 1);
     assert_eq!(status["metric_families"][0]["key"], "metadata");
     assert_eq!(status["metric_families"][0]["label"], "PEP 658 metadata hits");
+}
+
+#[tokio::test]
+async fn test_ranged_download_counts_only_the_transmitted_bytes() {
+    let harness = harness().await;
+    let wheel = b"wheelcontent";
+    let digest = Digest::of(wheel);
+    harness.state.blobs.write_verified(wheel, &digest).unwrap();
+    let uri = format!("/pypi/files/{}/flask-1.0-py3-none-any.whl", digest.as_str());
+
+    let (status, ..) = get_bytes_with_headers(&harness.state, &uri, &[("range", "bytes=2-5")]).await;
+
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    settle(&harness.state.metrics, |metrics| {
+        metrics
+            .index_totals()
+            .get("pypi")
+            .is_some_and(|totals| totals.base.downloads == 1)
+    });
+    assert_eq!(harness.state.metrics.index_totals()["pypi"].base.bytes, 4);
 }
