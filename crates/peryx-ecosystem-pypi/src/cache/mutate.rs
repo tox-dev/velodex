@@ -158,12 +158,17 @@ pub async fn remove_files(
     normalized: &str,
     version: Option<&str>,
 ) -> Result<usize, CacheError> {
-    let uploaded = upload_filenames(state, hosted, normalized)?;
-    let mut affected = 0;
-    let mut matched_upload = false;
-    for filename in served_filenames(state, index, normalized, version).await? {
+    let filenames = served_filenames(state, index, normalized, version).await?;
+    let (uploaded, mut affected) = if let Some(version) = version {
+        delete_uploads_of_version(state, hosted, volatile, normalized, version)?
+    } else {
+        (upload_filenames(state, hosted, normalized)?, 0)
+    };
+    for filename in filenames {
         if uploaded.contains(&filename) {
-            matched_upload = true;
+            if version.is_some() {
+                continue;
+            }
             if !volatile {
                 return Err(CacheError::NotVolatile);
             }
@@ -174,12 +179,6 @@ pub async fn remove_files(
             state.meta.put_override(hosted, normalized, &filename, HIDDEN)?;
             affected += 1;
         }
-    }
-    // A versioned delete whose filenames carry no parsable version misses the served-page filter;
-    // fall back to matching the version stored in the upload records. A project-level delete never
-    // needs this: every upload is on the served page.
-    if !matched_upload && let Some(version) = version {
-        affected += delete_uploads_of_version(state, hosted, volatile, normalized, version)?;
     }
     if affected > 0 {
         state.bump_epoch();
@@ -301,20 +300,18 @@ fn upload_filenames(state: &ServingState, hosted: &str, normalized: &str) -> Res
         .collect())
 }
 
-/// Delete the uploaded file records whose stored version matches. Returns how many were removed.
-///
-/// Deleting an upload requires a volatile store, exactly as the served-page path enforces; a match on
-/// a non-volatile index is a [`CacheError::NotVolatile`], not a silent deletion.
 fn delete_uploads_of_version(
     state: &ServingState,
     name: &str,
     volatile: bool,
     normalized: &str,
     version: &str,
-) -> Result<usize, CacheError> {
-    state
+) -> Result<(HashSet<String>, usize), CacheError> {
+    let mut filenames = HashSet::new();
+    let affected = state
         .meta
-        .mutate_uploads(name, normalized, "delete-file", |_filename, bytes| {
+        .mutate_uploads(name, normalized, "delete-file", |filename, bytes| {
+            filenames.insert(filename.to_owned());
             let uploaded: Uploaded = serde_json::from_slice(bytes)?;
             if !versions_match(&uploaded.version, version) {
                 return Ok(UploadMutation::Keep);
@@ -323,7 +320,8 @@ fn delete_uploads_of_version(
                 return Err(CacheError::NotVolatile);
             }
             Ok(UploadMutation::Delete)
-        })
+        })?;
+    Ok((filenames, affected))
 }
 
 /// Set the yank state of uploaded files, optionally limited to one version. Returns how many
