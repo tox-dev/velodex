@@ -86,6 +86,19 @@ pub(super) fn if_none_match_param() -> ParameterBuilder {
         )))
 }
 
+pub(super) fn if_range_param() -> ParameterBuilder {
+    ParameterBuilder::new()
+        .name("If-Range")
+        .parameter_in(ParameterIn::Header)
+        .description(Some(
+            "The entity tag the client's partial copy was cut from; the `Range` is served only while \
+             it still names the artifact, and the whole artifact otherwise",
+        ))
+        .example(Some(json!(
+            "\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\""
+        )))
+}
+
 pub(super) fn filename_param(example: &str) -> ParameterBuilder {
     ParameterBuilder::new()
         .name("filename")

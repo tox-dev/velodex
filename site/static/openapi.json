@@ -513,7 +513,7 @@
           "oci"
         ],
         "summary": "Pull a blob",
-        "description": "Serves the blob from the content-addressed store, pulling it through an online proxy member on a miss; concurrent misses share one upstream fetch. Range-capable.",
+        "description": "Serves the blob from the content-addressed store, pulling it through an online proxy member on a miss; concurrent misses share one upstream fetch. Range-capable, with the quoted digest as the `ETag`: a `Range` carrying an `If-Range` is served only while that tag still names the blob, and the whole blob otherwise.",
         "parameters": [
           {
             "name": "name",
@@ -528,6 +528,13 @@
             "description": "A content digest; blob digests must be `sha256:...`",
             "required": true,
             "example": "sha256:2c3e..."
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "description": "The entity tag the client's partial copy was cut from",
+            "required": false,
+            "example": "\"sha256:2c3e...\""
           }
         ],
         "responses": {
@@ -1035,7 +1042,7 @@
           "files"
         ],
         "summary": "Download an artifact",
-        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached blob honors a single byte range, so an interrupted download can resume; a range this server cannot read is ignored and the whole artifact served.",
+        "description": "Serves the blob if cached; otherwise fetches it from its upstream cache, verifies the sha256, caches it, and serves it. The `{filename}` segment is display context and must be percent-encoded as one path segment. Responses are immutable (`Cache-Control: max-age=31536000`) and carry the quoted sha256 as their `ETag`. A cached blob honors a single byte range, so an interrupted download can resume; a range this server cannot read is ignored and the whole artifact served, as is a range whose `If-Range` no longer names the artifact.",
         "parameters": [
           {
             "name": "route",
@@ -1069,6 +1076,13 @@
             "name": "If-None-Match",
             "in": "header",
             "description": "Entity tags the client already holds; a match answers `304` before any range is read",
+            "required": false,
+            "example": "\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "description": "The entity tag the client's partial copy was cut from; the `Range` is served only while it still names the artifact, and the whole artifact otherwise",
             "required": false,
             "example": "\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\""
           }

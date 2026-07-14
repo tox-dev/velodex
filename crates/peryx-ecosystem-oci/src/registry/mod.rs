@@ -393,10 +393,7 @@ impl<S: BuildHasher + Default + Send + Sync + 'static> OciRegistryWithHasher<S> 
             OciRoute::Manifest { name, reference } if method == Method::DELETE => {
                 delete_manifest(&state, headers, &name, &reference)
             }
-            OciRoute::Blob { name, digest } if read => {
-                let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
-                self.serve_blob(&state, &name, &digest, head, range).await
-            }
+            OciRoute::Blob { name, digest } if read => self.serve_blob(&state, &name, &digest, head, headers).await,
             OciRoute::Blob { name, digest } if method == Method::DELETE => {
                 self.delete_blob(&state, headers, &name, &digest)
             }
