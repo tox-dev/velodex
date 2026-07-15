@@ -449,6 +449,46 @@ fn test_build_indexes_reports_an_unreadable_secret_file() {
 }
 
 #[test]
+fn test_build_indexes_reads_upstream_credentials_from_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let password = dir.path().join("password");
+    let token = dir.path().join("token");
+    std::fs::write(&password, "mirror-secret\n").unwrap();
+    std::fs::write(&token, "upstream-token\n").unwrap();
+    let mut index = cached("corp", "https://corp/simple/");
+    let IndexKind::Cached {
+        password: pw,
+        token: tk,
+        ..
+    } = &mut index.kind
+    else {
+        panic!("expected a cached index");
+    };
+    *pw = Some(SecretSource::File(password));
+    *tk = Some(SecretSource::File(token));
+
+    let indexes = build_indexes(&[index], &AuthConfig::default(), false).unwrap();
+
+    assert!(matches!(&indexes[0].kind, RuntimeKind::Cached { .. }));
+}
+
+#[test]
+fn test_build_indexes_reports_unreadable_upstream_credentials() {
+    let mut index = cached("corp", "https://corp/simple/");
+    let IndexKind::Cached { password, .. } = &mut index.kind else {
+        panic!("expected a cached index");
+    };
+    *password = Some(SecretSource::File(PathBuf::from("/nonexistent/peryx/password")));
+
+    let err = build_indexes(&[index], &AuthConfig::default(), false).unwrap_err();
+
+    assert!(
+        err.to_string().contains("read the upstream credentials of index corp"),
+        "{err}"
+    );
+}
+
+#[test]
 fn test_build_indexes_defaults_upload_to_first_local_layer() {
     let configs = [
         cached("pypi", "https://pypi.org/simple/"),

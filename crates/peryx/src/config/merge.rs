@@ -89,8 +89,14 @@ fn classify_index(raw: RawIndex) -> Result<IndexConfig, ConfigError> {
         IndexKind::Cached {
             upstream,
             username: raw.username,
-            password: raw.password,
-            token: raw.token,
+            password: secret_source(raw.password, raw.password_file).map_err(|reason| ConfigError::Index {
+                name: raw.name.clone(),
+                reason,
+            })?,
+            token: secret_source(raw.token, raw.token_file).map_err(|reason| ConfigError::Index {
+                name: raw.name.clone(),
+                reason,
+            })?,
             upstream_concurrency: raw.upstream_concurrency.unwrap_or(DEFAULT_UPSTREAM_CONCURRENCY),
             offline: raw.offline.unwrap_or(false),
             prefetch: Box::new(raw.prefetch.unwrap_or_default().resolve()),

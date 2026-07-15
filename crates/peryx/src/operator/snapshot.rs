@@ -65,7 +65,11 @@ enum SnapshotIndexKind<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         password: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        password_file: Option<&'a Path>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         token: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_file: Option<&'a Path>,
         upstream_concurrency: usize,
         offline: bool,
         prefetch: SnapshotPrefetch<'a>,
@@ -254,15 +258,21 @@ fn snapshot_index(index: &IndexConfig) -> anyhow::Result<SnapshotIndex<'_>> {
             upstream_concurrency,
             offline,
             prefetch,
-        } => SnapshotIndexKind::Cached {
-            cached: upstream,
-            username: username.as_deref(),
-            password: password.as_deref(),
-            token: token.as_deref(),
-            upstream_concurrency: *upstream_concurrency,
-            offline: *offline,
-            prefetch: snapshot_prefetch(prefetch),
-        },
+        } => {
+            let (password, password_file) = secret_parts(password.as_ref());
+            let (token, token_file) = secret_parts(token.as_ref());
+            SnapshotIndexKind::Cached {
+                cached: upstream,
+                username: username.as_deref(),
+                password,
+                password_file,
+                token,
+                token_file,
+                upstream_concurrency: *upstream_concurrency,
+                offline: *offline,
+                prefetch: snapshot_prefetch(prefetch),
+            }
+        }
         IndexKind::Hosted { upload_token, volatile } => {
             let (upload_token, upload_token_file) = secret_parts(upload_token.as_ref());
             SnapshotIndexKind::Hosted {

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use peryx_driver::rate_limit::{DEFAULT_UPSTREAM_CONCURRENCY, RateLimitConfig, RouteLimit};
 use rstest::rstest;
@@ -156,7 +156,7 @@ fn test_indexes_from_toml_classify_all_kinds() {
     assert_eq!(c.indexes.len(), 5);
     assert_eq!(c.indexes[0].route, "pypi"); // route defaults to name
     assert!(
-        matches!(&c.indexes[0].kind, IndexKind::Cached { token: Some(token), upstream_concurrency: 3, .. } if token == "bear")
+        matches!(&c.indexes[0].kind, IndexKind::Cached { token: Some(SecretSource::Literal(token)), upstream_concurrency: 3, .. } if token == "bear")
     );
     assert!(matches!(
         &c.indexes[1].kind,
@@ -218,6 +218,34 @@ fn test_mirror_upstream_concurrency_defaults() {
             ..
         }
     ));
+}
+
+#[test]
+fn test_upstream_password_and_token_read_from_files() {
+    let c = toml_config(
+        "[[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\n\
+         password_file = \"/run/secrets/pw\"\ntoken_file = \"/run/secrets/tok\"\n",
+    );
+    assert!(matches!(
+        &c.indexes[0].kind,
+        IndexKind::Cached {
+            password: Some(SecretSource::File(pw)),
+            token: Some(SecretSource::File(tok)),
+            ..
+        } if pw == Path::new("/run/secrets/pw") && tok == Path::new("/run/secrets/tok")
+    ));
+}
+
+#[rstest]
+#[case::password("password = \"p\"\npassword_file = \"/run/secrets/pw\"\n")]
+#[case::token("token = \"t\"\ntoken_file = \"/run/secrets/tok\"\n")]
+fn test_an_upstream_credential_may_not_have_two_sources(#[case] credential: &str) {
+    let text = format!("[[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\n{credential}");
+    let err = toml_error(&text).to_string();
+    assert!(
+        err.contains("index corp: set at most one of a secret and its `_file` sibling"),
+        "{err}"
+    );
 }
 
 #[test]

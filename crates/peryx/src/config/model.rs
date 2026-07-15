@@ -178,9 +178,11 @@ pub enum IndexKind {
     Cached {
         upstream: String,
         username: Option<String>,
-        password: Option<String>,
-        /// Bearer token; takes precedence over username/password.
-        token: Option<String>,
+        /// Upstream password; a `password_file` sibling keeps it out of the config file.
+        password: Option<SecretSource>,
+        /// Bearer token; takes precedence over username/password. A `token_file` sibling keeps it out
+        /// of the config file.
+        token: Option<SecretSource>,
         /// Concurrent upstream fetches allowed for this cached index in this process; `0` disables the cap.
         upstream_concurrency: usize,
         /// Serve only cached data for this index.

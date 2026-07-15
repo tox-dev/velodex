@@ -108,7 +108,9 @@ the role. peryx rejects unknown keys.
 | `cached`               | cached  | Upstream URL to cache (a Simple index, or a `/v2/` registry for OCI)  |                    |
 | `username`             | cached  | Basic-auth username for the upstream                                  | (none)             |
 | `password`             | cached  | Basic-auth password for the upstream                                  | (none)             |
+| `password_file`        | cached  | Path to read `password` from instead of inlining it                   | (none)             |
 | `token`                | cached  | Bearer token; takes precedence over username/password                 | (none)             |
+| `token_file`           | cached  | Path to read `token` from instead of inlining it                      | (none)             |
 | `upstream_concurrency` | cached  | Cap on concurrent upstream fetches; `0` is unlimited and the default  | `0`                |
 | `offline`              | cached  | Serve this cached index from disk only                                | `false`            |
 | `prefetch`             | cached  | Package and artifact selection for `peryx mirror`                     | (see below)        |

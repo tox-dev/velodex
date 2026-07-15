@@ -17,7 +17,7 @@ use peryx_storage::blob::BlobStore;
 use peryx_storage::meta::MetaStore;
 use peryx_upstream::{Auth, UpstreamClient, redact_url};
 
-use crate::config::{AuthConfig, Config, IndexConfig, IndexKind as ConfigKind, WebhookSecret};
+use crate::config::{AuthConfig, Config, IndexConfig, IndexKind as ConfigKind, SecretSource, WebhookSecret};
 
 /// Build the peryx router from configuration.
 ///
@@ -208,6 +208,14 @@ fn build_kind(
             offline,
             ..
         } => {
+            let read = |source: &Option<SecretSource>| {
+                source
+                    .as_ref()
+                    .map(SecretSource::read)
+                    .transpose()
+                    .with_context(|| format!("read the upstream credentials of index {}", index.name))
+            };
+            let (token, password) = (read(token)?, read(password)?);
             let auth = upstream_auth(token.as_deref(), username.as_deref(), password.as_deref());
             Ok(IndexKind::Cached {
                 client: UpstreamClient::with_auth(upstream, auth).with_context(|| {

@@ -301,3 +301,28 @@ fn test_backup_snapshots_where_the_upload_token_lives(#[case] source: SecretSour
     let snapshot = std::fs::read_to_string(backup.join("config.toml")).unwrap();
     assert!(snapshot.contains(expected), "{snapshot}");
 }
+
+#[rstest]
+#[case::password("password_file = \"/run/secrets/pw\"")]
+#[case::token("token_file = \"/run/secrets/tok\"")]
+fn test_backup_snapshots_where_upstream_credentials_live(#[case] expected: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let data_dir = root.path().join("data");
+    std::fs::create_dir(&data_dir).unwrap();
+    drop(MetaStore::open(data_dir.join("peryx.redb")).unwrap());
+    let backup = root.path().join("backup");
+    let mut config = Config {
+        data_dir,
+        ..Config::default()
+    };
+    let IndexKind::Cached { password, token, .. } = &mut config.indexes[0].kind else {
+        panic!("expected a cached index");
+    };
+    *password = Some(SecretSource::File(PathBuf::from("/run/secrets/pw")));
+    *token = Some(SecretSource::File(PathBuf::from("/run/secrets/tok")));
+
+    operator::backup_create(&config, &backup, &mut Vec::new()).unwrap();
+
+    let snapshot = std::fs::read_to_string(backup.join("config.toml")).unwrap();
+    assert!(snapshot.contains(expected), "{snapshot}");
+}
