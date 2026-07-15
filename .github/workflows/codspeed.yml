@@ -54,10 +54,10 @@ jobs:
           OCI: ${{ steps.filter.outputs.oci }}
           PYPI: ${{ steps.filter.outputs.pypi }}
         run: |
-          # Two concurrent PyPI fat-LTO links exceed the standard ARM runner's memory, so PyPI links
-          # single-threaded.
+          # thin LTO (set on the operations job) keeps the link within the standard ARM runner's
+          # memory, so both ecosystems build in parallel.
           oci='{"ecosystem":"OCI","package":"peryx-ecosystem-oci","cargo_jobs":2}'
-          pypi='{"ecosystem":"PyPI","package":"peryx-ecosystem-pypi","cargo_jobs":1}'
+          pypi='{"ecosystem":"PyPI","package":"peryx-ecosystem-pypi","cargo_jobs":2}'
           legs=()
           if [ "$EVENT" != "pull_request" ]; then
             legs=("$oci" "$pypi")
@@ -129,11 +129,20 @@ jobs:
       # generic aarch64 code path and a single malloc arena makes the measurement CPU-independent.
       # See CodSpeed's write-up on runner CPU variance (codspeed.io/blog/why-glibc-faster-github-actions).
       GLIBC_TUNABLES: glibc.cpu.name=generic:glibc.malloc.arena_max=1
+      # cargo codspeed builds with the release profile, whose fat LTO does a serial, memory-heavy,
+      # uncacheable whole-program link (~20 min, and the reason PyPI was pinned to -j 1). Override to
+      # thin LTO for the benchmark build only, so it parallelises, fits memory, and caches
+      # incrementally. Production and dist builds keep fat LTO; only relative measurement matters here.
+      CARGO_PROFILE_RELEASE_LTO: thin
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          # Cache the workspace crates too, not just dependencies: with thin LTO the benchmark build
+          # is incremental, so a warm cache skips most of the recompile.
+          cache-workspace-crates: true
       - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: cargo-codspeed@5.0.1
