@@ -125,7 +125,7 @@ fn test_parse_detail_reads_project_status_provenance_gpg_size_upload_time_and_ve
 #[test]
 fn test_legacy_project_json_maps_simple_fields() {
     let detail = sample_detail();
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None).unwrap()).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None, None).unwrap()).unwrap();
 
     assert_eq!(
         legacy["info"],
@@ -212,9 +212,29 @@ fn test_legacy_project_json_maps_simple_fields() {
 }
 
 #[test]
+fn test_legacy_project_json_carries_resolved_contacts() {
+    let metadata = crate::CoreMetadataDoc {
+        author: Some("Jane".to_owned()),
+        author_email: Some("jane@example.test".to_owned()),
+        maintainer: Some("Joe".to_owned()),
+        maintainer_email: Some("joe@example.test".to_owned()),
+        ..crate::CoreMetadataDoc::default()
+    };
+    let legacy: serde_json::Value =
+        serde_json::from_str(&render_legacy_json(&sample_detail(), None, Some(&metadata)).unwrap()).unwrap();
+
+    let info = &legacy["info"];
+    assert_eq!(info["author"], "Jane");
+    assert_eq!(info["author_email"], "jane@example.test");
+    assert_eq!(info["maintainer"], "Joe");
+    assert_eq!(info["maintainer_email"], "joe@example.test");
+}
+
+#[test]
 fn test_legacy_release_json_omits_releases_and_matches_equivalent_version() {
     let detail = sample_detail();
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, Some("1.0.0")).unwrap()).unwrap();
+    let legacy: serde_json::Value =
+        serde_json::from_str(&render_legacy_json(&detail, Some("1.0.0"), None).unwrap()).unwrap();
 
     assert_eq!(legacy.get("releases"), None);
     assert_eq!(legacy["info"]["version"], "1.0");
@@ -225,7 +245,7 @@ fn test_legacy_release_json_omits_releases_and_matches_equivalent_version() {
 
 #[test]
 fn test_legacy_release_json_rejects_unknown_version() {
-    assert_eq!(render_legacy_json(&sample_detail(), Some("9.9")), None);
+    assert_eq!(render_legacy_json(&sample_detail(), Some("9.9"), None), None);
 }
 
 #[test]
@@ -233,7 +253,8 @@ fn test_legacy_release_json_resolves_filename_only_version() {
     let mut detail = sample_detail();
     detail.versions = vec!["not-a-version".to_owned()];
 
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, Some("1.5")).unwrap()).unwrap();
+    let legacy: serde_json::Value =
+        serde_json::from_str(&render_legacy_json(&detail, Some("1.5"), None).unwrap()).unwrap();
 
     assert_eq!(legacy["info"]["version"], "1.5");
     assert_eq!(legacy["urls"][0]["filename"], "proj-1.5.tar.gz");
@@ -247,7 +268,7 @@ fn test_legacy_project_json_uses_advertised_version_when_no_files() {
         versions: vec!["1.0".to_owned()],
         files: Vec::new(),
     };
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None).unwrap()).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None, None).unwrap()).unwrap();
 
     assert_eq!(
         (
@@ -294,7 +315,7 @@ fn test_legacy_project_json_groups_unparseable_version_and_dashless_file() {
             },
         ],
     };
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None).unwrap()).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None, None).unwrap()).unwrap();
 
     assert_eq!(legacy["releases"]["1.0"][0]["filename"], "proj-1.0-py3-none-any.whl");
     assert_eq!(legacy["releases"]["not-a-version"], serde_json::json!([]));
@@ -335,7 +356,7 @@ fn test_legacy_project_json_maps_legacy_filename_shapes() {
         })
         .collect(),
     };
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None).unwrap()).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None, None).unwrap()).unwrap();
 
     assert_eq!(legacy["releases"]["2.1"][0]["python_version"], "py3");
     assert_eq!(legacy["releases"]["1.2"][0]["python_version"], "source");
@@ -353,7 +374,7 @@ fn test_legacy_project_json_handles_empty_project() {
         versions: Vec::new(),
         files: Vec::new(),
     };
-    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None).unwrap()).unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&render_legacy_json(&detail, None, None).unwrap()).unwrap();
 
     assert_eq!(
         (

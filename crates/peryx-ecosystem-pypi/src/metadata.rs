@@ -19,7 +19,9 @@ pub struct CoreMetadataDoc {
     pub license_expression: Option<String>,
     pub license_files: Vec<String>,
     pub author: Option<String>,
+    pub author_email: Option<String>,
     pub maintainer: Option<String>,
+    pub maintainer_email: Option<String>,
     pub keywords: Vec<String>,
     pub requires_dist: Vec<String>,
     pub provides_extra: Vec<String>,
@@ -114,8 +116,10 @@ pub fn parse_metadata(text: &str) -> Result<CoreMetadataDoc, MetadataError> {
             "license" => doc.license = non_empty(value),
             "license-expression" => doc.license_expression = non_empty(value),
             "license-file" => doc.license_files.push(value.to_owned()),
-            "author" | "author-email" => doc.author = doc.author.or_else(|| non_empty(value)),
-            "maintainer" | "maintainer-email" => doc.maintainer = doc.maintainer.or_else(|| non_empty(value)),
+            "author" => doc.author = non_empty(value),
+            "author-email" => doc.author_email = non_empty(value),
+            "maintainer" => doc.maintainer = non_empty(value),
+            "maintainer-email" => doc.maintainer_email = non_empty(value),
             "keywords" => {
                 doc.keywords = value
                     .split(',')
@@ -201,7 +205,9 @@ impl CoreMetadataDoc {
             ("Requires Python", self.requires_python.as_ref()),
             ("License", self.license_expression.as_ref().or(self.license.as_ref())),
             ("Author", self.author.as_ref()),
+            ("Author Email", self.author_email.as_ref()),
             ("Maintainer", self.maintainer.as_ref()),
+            ("Maintainer Email", self.maintainer_email.as_ref()),
         ] {
             if let Some(value) = value {
                 blocks.push(UiBlock::KeyValue {

@@ -123,7 +123,9 @@ fn test_parse_metadata_headers_and_body() {
                 License-Expression: MIT\n\
                 License-File: LICENSE\n\
                 Author: Jane\n\
+                Author-email: jane@example.test\n\
                 Maintainer: Joe\n\
+                Maintainer-email: joe@example.test\n\
                 Keywords: cache,index,proxy\n\
                 Requires-Dist: requests>=2\n\
                 Requires-Dist: click; extra == \"cli\"\n\
@@ -144,7 +146,9 @@ fn test_parse_metadata_headers_and_body() {
     assert_eq!(doc.license_expression.as_deref(), Some("MIT"));
     assert_eq!(doc.license_files, ["LICENSE"]);
     assert_eq!(doc.author.as_deref(), Some("Jane"));
+    assert_eq!(doc.author_email.as_deref(), Some("jane@example.test"));
     assert_eq!(doc.maintainer.as_deref(), Some("Joe"));
+    assert_eq!(doc.maintainer_email.as_deref(), Some("joe@example.test"));
     assert_eq!(doc.keywords, ["cache", "index", "proxy"]);
     assert_eq!(doc.requires_dist.len(), 2);
     assert_eq!(doc.provides_extra, ["cli"]);
@@ -196,10 +200,75 @@ fn test_ui_meta_renders_an_indented_first_line_as_a_code_block() {
     assert!(rendered.html.contains("print("), "{}", rendered.html);
 }
 
-#[test]
-fn test_parse_metadata_author_header_wins_over_email() {
-    let text = "Name: x\nVersion: 1\nAuthor: Jane\nAuthor-email: jane@example.test\n";
-    assert_eq!(parse_metadata(text).unwrap().author.as_deref(), Some("Jane"));
+#[rstest]
+#[case::name_only("Author: Jane\n", Some("Jane"), None)]
+#[case::email_only("Author-email: jane@example.test\n", None, Some("jane@example.test"))]
+#[case::name_then_email(
+    "Author: Jane\nAuthor-email: jane@example.test\n",
+    Some("Jane"),
+    Some("jane@example.test")
+)]
+#[case::email_then_name(
+    "Author-email: jane@example.test\nAuthor: Jane\n",
+    Some("Jane"),
+    Some("jane@example.test")
+)]
+fn test_parse_metadata_keeps_author_name_and_email(
+    #[case] headers: &str,
+    #[case] name: Option<&str>,
+    #[case] email: Option<&str>,
+) {
+    let doc = parse_metadata(&format!("Name: x\nVersion: 1\n{headers}")).unwrap();
+    assert_eq!(doc.author.as_deref(), name);
+    assert_eq!(doc.author_email.as_deref(), email);
+}
+
+#[rstest]
+#[case::name_only("Maintainer: Joe\n", Some("Joe"), None)]
+#[case::email_only("Maintainer-email: joe@example.test\n", None, Some("joe@example.test"))]
+#[case::name_then_email(
+    "Maintainer: Joe\nMaintainer-email: joe@example.test\n",
+    Some("Joe"),
+    Some("joe@example.test")
+)]
+#[case::email_then_name(
+    "Maintainer-email: joe@example.test\nMaintainer: Joe\n",
+    Some("Joe"),
+    Some("joe@example.test")
+)]
+fn test_parse_metadata_keeps_maintainer_name_and_email(
+    #[case] headers: &str,
+    #[case] name: Option<&str>,
+    #[case] email: Option<&str>,
+) {
+    let doc = parse_metadata(&format!("Name: x\nVersion: 1\n{headers}")).unwrap();
+    assert_eq!(doc.maintainer.as_deref(), name);
+    assert_eq!(doc.maintainer_email.as_deref(), email);
+}
+
+#[rstest]
+#[case::name_first("Author: Jane\nAuthor-email: jane@x.test\nMaintainer: Joe\nMaintainer-email: joe@x.test\n")]
+#[case::email_first("Author-email: jane@x.test\nAuthor: Jane\nMaintainer-email: joe@x.test\nMaintainer: Joe\n")]
+fn test_ui_meta_exposes_contacts_in_a_fixed_order(#[case] headers: &str) {
+    let doc = parse_metadata(&format!("Name: x\nVersion: 1\n{headers}")).unwrap();
+    let meta = doc.to_ui_meta();
+    let contacts: Vec<(&str, &str)> = meta
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            UiBlock::KeyValue { label, value } => Some((label.as_str(), value.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        contacts,
+        [
+            ("Author", "Jane"),
+            ("Author Email", "jane@x.test"),
+            ("Maintainer", "Joe"),
+            ("Maintainer Email", "joe@x.test"),
+        ]
+    );
 }
 
 #[test]

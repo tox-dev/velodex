@@ -76,7 +76,7 @@ async fn pypi_get(
             }
             let detail = cache::resolve_detail(state, index, &target.project, &index.route).await;
             if let Ok(Some(found)) = &detail
-                && let Some(body) = crate::render_legacy_json(found, target.version.as_deref())
+                && let Some(body) = crate::render_legacy_json(found, target.version.as_deref(), None)
             {
                 let body = bytes::Bytes::from(body);
                 remember_rendered(state, index, &target.project, &variant, &body);

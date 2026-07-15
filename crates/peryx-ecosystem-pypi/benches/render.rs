@@ -28,7 +28,7 @@ fn bench_render(criterion: &mut Criterion) {
             bencher.iter(|| render_detail_html(std::hint::black_box(&detail)));
         });
         group.bench_function(BenchmarkId::new("legacy_json", label), |bencher| {
-            bencher.iter(|| render_legacy_json(std::hint::black_box(&detail), None));
+            bencher.iter(|| render_legacy_json(std::hint::black_box(&detail), None, None));
         });
     }
     let list = index_list(LARGE);

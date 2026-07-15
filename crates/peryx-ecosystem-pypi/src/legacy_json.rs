@@ -7,8 +7,8 @@ use serde_json::{Map, Value, json};
 
 use crate::version::{VersionKey, version_key};
 use crate::{
-    File, ProjectDetail, Yanked, distribution_version_segment, file_matches_version, parse_distribution_filename,
-    parse_version, sorted_desc,
+    CoreMetadataDoc, File, ProjectDetail, Yanked, distribution_version_segment, file_matches_version,
+    parse_distribution_filename, parse_version, sorted_desc,
 };
 
 /// Bucket a project's files by release version in a single pass, so rendering every release is linear
@@ -27,17 +27,27 @@ fn group_by_version(detail: &ProjectDetail) -> OrderedMap<VersionKey, Vec<&File>
 ///
 /// Returns `None` when the requested version is not present in the resolved detail page.
 ///
+/// `metadata` supplies the release's core-metadata contact fields, which the Simple API omits; `None`
+/// leaves them empty.
+///
 /// # Panics
 /// Never in practice: the model contains only string-keyed maps and plain values, which
 /// `serde_json` always serializes.
 #[must_use]
-pub fn render_legacy_json(detail: &ProjectDetail, version: Option<&str>) -> Option<String> {
+pub fn render_legacy_json(
+    detail: &ProjectDetail,
+    version: Option<&str>,
+    metadata: Option<&CoreMetadataDoc>,
+) -> Option<String> {
     let selected_version = match version {
         Some(version) => Some(find_release_version(detail, version)?),
         None => latest_release_version(detail),
     };
     let mut response = Map::new();
-    response.insert("info".to_owned(), legacy_info(detail, selected_version.as_deref()));
+    response.insert(
+        "info".to_owned(),
+        legacy_info(detail, selected_version.as_deref(), metadata),
+    );
     response.insert("last_serial".to_owned(), json!(0));
     if version.is_none() {
         response.insert("releases".to_owned(), legacy_releases(detail));
@@ -48,14 +58,15 @@ pub fn render_legacy_json(detail: &ProjectDetail, version: Option<&str>) -> Opti
     Some(serde_json::to_string(&Value::Object(response)).expect("legacy JSON API model always serializes"))
 }
 
-fn legacy_info(detail: &ProjectDetail, version: Option<&str>) -> Value {
+fn legacy_info(detail: &ProjectDetail, version: Option<&str>, metadata: Option<&CoreMetadataDoc>) -> Value {
     let first_file = version.and_then(|version| release_files(detail, version).next());
     let requires_python = first_file.and_then(|file| file.requires_python.as_deref());
     let yanked = version.is_some_and(|version| release_yanked(detail, version));
     let yanked_reason = version.and_then(|version| release_yanked_reason(detail, version));
+    let contact = |field: fn(&CoreMetadataDoc) -> Option<&str>| metadata.and_then(field).unwrap_or_default();
     json!({
-        "author": "",
-        "author_email": "",
+        "author": contact(|doc| doc.author.as_deref()),
+        "author_email": contact(|doc| doc.author_email.as_deref()),
         "bugtrack_url": null,
         "classifiers": [],
         "description": "",
@@ -69,8 +80,8 @@ fn legacy_info(detail: &ProjectDetail, version: Option<&str>) -> Value {
         "license": "",
         "license_expression": null,
         "license_files": null,
-        "maintainer": "",
-        "maintainer_email": "",
+        "maintainer": contact(|doc| doc.maintainer.as_deref()),
+        "maintainer_email": contact(|doc| doc.maintainer_email.as_deref()),
         "name": &detail.name,
         "package_url": "",
         "platform": null,

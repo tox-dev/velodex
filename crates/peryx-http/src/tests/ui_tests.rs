@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt as _;
 
-use peryx_core::{Ecosystem, UiManifest, UiMember, UiMemberChunk, UiProjectView};
+use peryx_core::{Ecosystem, UiBlock, UiManifest, UiMember, UiMemberChunk, UiMeta, UiProject, UiProjectView};
 use peryx_driver::state::{AppState, Index, IndexKind, ServingState};
 use peryx_identity::IndexAcl;
 
@@ -51,6 +51,21 @@ impl peryx_driver::serving::EcosystemDriver for UiStub {
         match project.as_str() {
             "boom" => Err("project unreadable".to_owned()),
             "missing" => Ok(None),
+            "contacts" => Ok(Some(UiProjectView::Files {
+                project: UiProject {
+                    name: "contacts".to_owned(),
+                    ..UiProject::default()
+                },
+                meta: UiMeta {
+                    blocks: vec![
+                        contact_block("Author", "Jane"),
+                        contact_block("Author Email", "jane@example.test"),
+                        contact_block("Maintainer", "Joe"),
+                        contact_block("Maintainer Email", "joe@example.test"),
+                    ],
+                    ..UiMeta::default()
+                },
+            })),
             _ => Ok(Some(UiProjectView::References {
                 names: vec!["1.0".to_owned()],
             })),
@@ -108,6 +123,13 @@ impl peryx_driver::serving::EcosystemDriver for UiStub {
             text: "hello".to_owned(),
             ..UiMemberChunk::default()
         })
+    }
+}
+
+fn contact_block(label: &str, value: &str) -> UiBlock {
+    UiBlock::KeyValue {
+        label: label.to_owned(),
+        value: value.to_owned(),
     }
 }
 
@@ -217,6 +239,23 @@ async fn test_ui_project_returns_the_browse_view() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(document["kind"], "references");
     assert_eq!(document["names"], serde_json::json!(["1.0"]));
+}
+
+#[tokio::test]
+async fn test_ui_project_page_exposes_contact_names_and_addresses_separately() {
+    let (_dir, app) = ui_app();
+    let (status, document) = get_json(&app, "/+ui/project?index=good&project=contacts").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(document["kind"], "files");
+    assert_eq!(
+        document["meta"]["blocks"],
+        serde_json::json!([
+            {"kind": "KeyValue", "label": "Author", "value": "Jane"},
+            {"kind": "KeyValue", "label": "Author Email", "value": "jane@example.test"},
+            {"kind": "KeyValue", "label": "Maintainer", "value": "Joe"},
+            {"kind": "KeyValue", "label": "Maintainer Email", "value": "joe@example.test"},
+        ])
+    );
 }
 
 #[tokio::test]

@@ -352,7 +352,9 @@ fn push_metadata(text: &mut String, metadata: &CoreMetadataDoc) {
         metadata.license.as_deref(),
         metadata.license_expression.as_deref(),
         metadata.author.as_deref(),
+        metadata.author_email.as_deref(),
         metadata.maintainer.as_deref(),
+        metadata.maintainer_email.as_deref(),
         metadata.description_content_type.as_deref(),
     ]
     .into_iter()
