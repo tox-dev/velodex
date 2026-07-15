@@ -9,7 +9,7 @@ mod snapshot;
 mod stats;
 
 pub use project::{
-    UiArtifactRef, UiFile, UiManifest, UiMember, UiMemberChunk, UiProject, UiProjectView, UiRelease,
+    UiArtifactRef, UiFile, UiManifest, UiMember, UiMemberChunk, UiProject, UiProjectStatus, UiProjectView, UiRelease,
     members_from_listing, projects_from_list,
 };
 pub use search::{UiSearchPage, UiSearchResult, source_label};

@@ -1,4 +1,6 @@
-pub use peryx_core::{UiArtifactRef, UiFile, UiManifest, UiMember, UiMemberChunk, UiProject, UiProjectView, UiRelease};
+pub use peryx_core::{
+    UiArtifactRef, UiFile, UiManifest, UiMember, UiMemberChunk, UiProject, UiProjectStatus, UiProjectView, UiRelease,
+};
 
 use super::string_at;
 

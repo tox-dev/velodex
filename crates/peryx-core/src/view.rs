@@ -65,10 +65,28 @@ pub enum UiBlock {
     },
 }
 
+/// A project's publish status, when its index flags the project as archived, quarantined, or
+/// deprecated.
+///
+/// The ecosystem driver fills it only for a flagged project, so an active or unmarked one carries
+/// `None` and the page shows no badge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiProjectStatus {
+    /// The status marker, lowercased (`archived`, `quarantined`, `deprecated`). It names the badge and
+    /// keys its style, the way the ecosystem and kind chips do, so a marker the page has no style for
+    /// still renders as a plain badge.
+    pub marker: String,
+    /// The publisher's explanation for the status. Package-supplied text, so the page escapes it.
+    pub reason: Option<String>,
+}
+
 /// A project page: the files of one project on one index, in display order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct UiProject {
     pub name: String,
+    /// The publish status to flag beside the heading, or `None` for a project served as usual. Boxed so
+    /// this rare field does not enlarge the shared `UiProjectView` for every project.
+    pub status: Option<Box<UiProjectStatus>>,
     pub versions: Vec<UiRelease>,
     pub files: Vec<UiFile>,
 }

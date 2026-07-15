@@ -1,4 +1,4 @@
-use peryx_core::{UiBlock, UiRelease};
+use peryx_core::{UiBlock, UiProjectStatus, UiRelease};
 use rstest::rstest;
 
 use crate::{MetadataError, file_matches_version, parse_metadata, ui_project_from_detail};
@@ -94,6 +94,37 @@ fn test_ui_project_from_detail_leaves_a_release_a_nameless_file_says_nothing_abo
             yanked: false,
             yanked_reasons: vec![],
         }]
+    );
+}
+
+#[rstest]
+#[case::archived(Some("archived"), Some("read only"), Some(("archived", Some("read only"))))]
+#[case::quarantined_without_files(Some("quarantined"), Some("malware"), Some(("quarantined", Some("malware"))))]
+#[case::deprecated_without_reason(Some("deprecated"), None, Some(("deprecated", None)))]
+#[case::reason_markup_carried_verbatim(Some("quarantined"), Some("<b>x</b>"), Some(("quarantined", Some("<b>x</b>"))))]
+#[case::active_is_served_as_usual(Some("active"), Some("available"), None)]
+#[case::unknown_marker_ignored(Some("frozen"), None, None)]
+#[case::empty_reason_dropped(Some("archived"), Some(""), Some(("archived", None)))]
+#[case::omitted(None, None, None)]
+fn test_ui_project_from_detail_carries_project_status(
+    #[case] marker: Option<&str>,
+    #[case] reason: Option<&str>,
+    #[case] expected: Option<(&str, Option<&str>)>,
+) {
+    let mut meta = serde_json::json!({"api-version": "1.4"});
+    if let Some(marker) = marker {
+        meta["project-status"] = marker.into();
+    }
+    if let Some(reason) = reason {
+        meta["project-status-reason"] = reason.into();
+    }
+    let value = serde_json::json!({"name": "veloxdemo", "meta": meta, "files": []});
+    assert_eq!(
+        ui_project_from_detail(&value).status,
+        expected.map(|(marker, reason)| Box::new(UiProjectStatus {
+            marker: marker.to_owned(),
+            reason: reason.map(str::to_owned),
+        }))
     );
 }
 

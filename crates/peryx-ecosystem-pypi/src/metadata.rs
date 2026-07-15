@@ -340,9 +340,28 @@ pub fn ui_project_from_detail(value: &serde_json::Value) -> peryx_core::UiProjec
         .collect();
     peryx_core::UiProject {
         name: string_at(value, "name"),
+        status: project_status(value),
         versions: releases(value),
         files,
     }
+}
+
+/// The publish status the page flags, drawn from the PEP 792 `project-status` marker in the detail
+/// document's `meta`. Active, absent, and unrecognized markers carry `None`, so the page flags only a
+/// state that departs from serving the project as usual.
+fn project_status(value: &serde_json::Value) -> Option<Box<peryx_core::UiProjectStatus>> {
+    let meta = &value["meta"];
+    let status = meta["project-status"]
+        .as_str()
+        .and_then(crate::ProjectStatus::from_marker)
+        .filter(|status| *status != crate::ProjectStatus::Active)?;
+    Some(Box::new(peryx_core::UiProjectStatus {
+        marker: status.marker().to_owned(),
+        reason: meta["project-status-reason"]
+            .as_str()
+            .filter(|reason| !reason.is_empty())
+            .map(str::to_owned),
+    }))
 }
 
 /// PEP 592 spells a yank as `true` or as the reason itself, so a string counts as a yank too.

@@ -18,7 +18,7 @@ use regex::Regex;
 use super::{ErrorMessage, copy_to_clipboard, human_size};
 use crate::data::load_project_view;
 use crate::markdown::{external_link_rel, is_safe_artifact_link, is_safe_link};
-use crate::model::{UiFile, UiProject, UiProjectView, UiRelease};
+use crate::model::{UiFile, UiProject, UiProjectStatus, UiProjectView, UiRelease};
 #[cfg(feature = "hydrate")]
 use crate::url::browser_http_origin;
 use crate::url::{
@@ -124,10 +124,14 @@ fn ProjectBody(
     let description = meta.description.clone().unwrap_or_default();
     let notice = description.notice;
     let summary = meta.summary.clone();
+    let status = ui.status.clone();
     let admin_versions = ui.versions.iter().map(|release| release.version.clone()).collect();
     view! {
         <header class="project-head">
-            <h1>{ui.name.clone()} <span class="version">{latest}</span></h1>
+            <h1>
+                {ui.name.clone()} <span class="version">{latest}</span>
+                {status.map(|status| project_status_badge(*status))}
+            </h1>
             {summary.map(|summary| view! { <p class="summary">{summary}</p> })}
             <InstallSnippet index_url=simple_index_url(&route) project=ui.name.clone() />
         </header>
@@ -144,6 +148,17 @@ fn ProjectBody(
                 <MetaPanel meta releases=ui.versions />
             </aside>
         </div>
+    }
+}
+
+/// The status badge beside the project heading: the marker keyed to its style, and the publisher's
+/// reason. The reason comes from the package, so it renders as text, never as markup.
+fn project_status_badge(status: UiProjectStatus) -> impl IntoView {
+    let UiProjectStatus { marker, reason } = status;
+    let class = format!("badge status-{marker}");
+    view! {
+        <span class=class>{marker}</span>
+        {reason.map(|reason| view! { <span class="status-reason">{reason}</span> })}
     }
 }
 
@@ -565,5 +580,42 @@ fn run_admin(
     #[cfg(any(feature = "ssr", not(feature = "hydrate")))]
     {
         let _ = (method, url, token, outcome, refresh);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use leptos::prelude::*;
+    use rstest::rstest;
+
+    use super::{UiProjectStatus, project_status_badge};
+
+    #[rstest]
+    #[case::archived("archived")]
+    #[case::quarantined("quarantined")]
+    #[case::deprecated("deprecated")]
+    fn test_project_status_badge_renders_each_marker(#[case] marker: &str) {
+        let status = UiProjectStatus {
+            marker: marker.to_owned(),
+            reason: None,
+        };
+        let html = project_status_badge(status).to_html();
+        assert!(
+            html.contains(&format!(r#"<span class="badge status-{marker}">{marker}</span>"#)),
+            "{html}"
+        );
+        assert!(!html.contains("status-reason"), "{html}");
+    }
+
+    #[test]
+    fn test_project_status_badge_escapes_a_package_supplied_reason() {
+        let status = UiProjectStatus {
+            marker: "quarantined".to_owned(),
+            reason: Some(r"<script>pwn</script>".to_owned()),
+        };
+        let html = project_status_badge(status).to_html();
+        assert!(html.contains(r#"class="status-reason""#), "{html}");
+        assert!(html.contains("&lt;script&gt;pwn&lt;/script&gt;"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
     }
 }
