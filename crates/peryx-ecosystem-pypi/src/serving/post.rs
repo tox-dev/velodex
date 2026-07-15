@@ -24,8 +24,8 @@ use crate::upload::{self, UploadError};
 use crate::{ProjectStatus, normalize_name};
 
 use super::response::{CacheContext, cache_error_response, policy_denial_response};
-use super::upload_form::{collect_form, upload_error_message, upload_error_response};
-use super::{authorize, identify, request_id, upload_target};
+use super::upload_form::{collect_form, upload_error_message, upload_error_reply};
+use super::{authorize, identify, negotiate, request_id, upload_target};
 
 /// `POST /{route}/`, the legacy multipart upload API, used unchanged by twine and `uv publish`.
 pub async fn pypi_dispatch_post(
@@ -83,12 +83,19 @@ async fn accept_upload(
     let Some(staged) = staged else {
         let err = UploadError::Missing("content");
         let (_, reason) = upload_error_message(&err);
+        let project = form.name.as_deref().map(normalize_name);
         security_upload_event(headers, actor, &index.route, Some(&hosted.name), "denied")
-            .project(form.name.as_deref().map(normalize_name).as_deref())
+            .project(project.as_deref())
             .version(form.version.as_deref())
             .reason(Some(&reason))
             .emit();
-        return upload_error_response(&err);
+        return upload_error_reply(
+            &err,
+            negotiate(headers),
+            project.as_deref(),
+            form.version.as_deref(),
+            form.filename.as_deref(),
+        );
     };
     let form_project = form.name.as_deref().map(normalize_name);
     let form_version = form.version.clone();
@@ -104,7 +111,13 @@ async fn accept_upload(
                 .filename(form_filename.as_deref())
                 .reason(Some(&reason))
                 .emit();
-            return upload_error_response(&err);
+            return upload_error_reply(
+                &err,
+                negotiate(headers),
+                form_project.as_deref(),
+                form_version.as_deref(),
+                form_filename.as_deref(),
+            );
         }
     };
     let project = prepared.normalized.clone();

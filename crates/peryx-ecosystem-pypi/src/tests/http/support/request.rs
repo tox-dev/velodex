@@ -250,6 +250,31 @@ pub async fn post_upload_body_response(
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
+pub async fn post_upload_accept(
+    state: &Arc<AppState>,
+    uri: &str,
+    auth: Option<&str>,
+    content_type: &str,
+    body: Vec<u8>,
+    accept: &str,
+) -> (StatusCode, HeaderMap, String) {
+    let mut builder = Request::builder()
+        .uri(uri)
+        .method("POST")
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT, accept);
+    if let Some(auth) = auth {
+        builder = builder.header(header::AUTHORIZATION, auth);
+    }
+    let response = router(state.clone())
+        .oneshot(builder.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+}
 pub async fn assert_upload_response(
     h: &Harness,
     fields: &[(&str, &str)],

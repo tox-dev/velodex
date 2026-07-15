@@ -5,5 +5,6 @@ mod support;
 mod archive;
 mod form;
 mod metadata;
+mod rule;
 mod wheel_record;
 mod wheel_structure;

@@ -14,6 +14,7 @@ use peryx_policy::{PolicyAction, PolicyDenial};
 use crate::DistributionFilenameError;
 use crate::upload::{StagedUpload, UploadError, UploadForm};
 
+use super::Format;
 use super::response::policy_denial_response;
 
 const MAX_UPLOAD_TEXT_FIELD_BYTES: usize = 64 * 1024;
@@ -200,8 +201,44 @@ fn storage_reject(err: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
-pub(super) fn upload_error_response(err: &UploadError) -> Response {
-    upload_error_message(err).into_response()
+/// Reject an upload: structured JSON when the client negotiated it (a browser upload UI reads the
+/// filename and rule to place the error inline), otherwise the plain-text message twine and uv read.
+pub(super) fn upload_error_reply(
+    err: &UploadError,
+    format: Format,
+    project: Option<&str>,
+    version: Option<&str>,
+    filename: Option<&str>,
+) -> Response {
+    match format {
+        Format::Json => upload_error_json(err, project, version, filename),
+        Format::Html => upload_error_message(err).into_response(),
+    }
+}
+
+fn upload_error_json(
+    err: &UploadError,
+    project: Option<&str>,
+    version: Option<&str>,
+    filename: Option<&str>,
+) -> Response {
+    let (status, reason) = upload_error_message(err);
+    let (rule, field) = err.rule();
+    let denial = PolicyDenial::new(
+        PolicyAction::Upload,
+        project.unwrap_or_default(),
+        filename,
+        version.map(str::to_owned),
+        rule,
+        field,
+        reason,
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_vec(&denial).expect("upload denial serializes"),
+    )
+        .into_response()
 }
 
 pub(super) fn upload_error_message(err: &UploadError) -> (StatusCode, String) {

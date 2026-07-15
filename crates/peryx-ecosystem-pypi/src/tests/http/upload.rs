@@ -1334,6 +1334,73 @@ async fn test_a_write_only_index_refuses_a_delete() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn test_browser_upload_reports_validation_error_as_json() {
+    let h = harness().await;
+    let (content_type, body) = multipart_body(
+        &upload_fields(),
+        Some(("wrongname-1.0-py3-none-any.whl", b"not a real wheel")),
+    );
+
+    let (status, headers, body) = post_upload_accept(
+        &h.state,
+        "/root/pypi/",
+        Some(&upload_auth()),
+        &content_type,
+        body,
+        "application/json",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/json");
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(denial["action"], "upload");
+    assert_eq!(denial["project"], "peryxpkg");
+    assert_eq!(denial["version"], "1.0");
+    assert_eq!(denial["filename"], "wrongname-1.0-py3-none-any.whl");
+    assert_eq!(denial["rule"], "filename-name-mismatch");
+    assert_eq!(denial["field"], "content");
+    assert!(denial["reason"].as_str().unwrap().contains("does not match"));
+}
+#[tokio::test]
+async fn test_browser_upload_reports_missing_content_as_json() {
+    let h = harness().await;
+    let (content_type, body) = multipart_body(&upload_fields(), None);
+
+    let (status, headers, body) = post_upload_accept(
+        &h.state,
+        "/root/pypi/",
+        Some(&upload_auth()),
+        &content_type,
+        body,
+        "application/json",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/json");
+    let denial: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(denial["rule"], "missing-field");
+    assert_eq!(denial["field"], "content");
+    assert_eq!(denial["project"], "peryxpkg");
+    assert!(denial.get("filename").is_none());
+}
+#[tokio::test]
+async fn test_upload_validation_error_stays_plain_text_for_clients() {
+    let h = harness().await;
+    let (content_type, body) = multipart_body(
+        &upload_fields(),
+        Some(("wrongname-1.0-py3-none-any.whl", b"not a real wheel")),
+    );
+
+    let (status, body) = post_upload_response(&h.state, "/root/pypi/", Some(&upload_auth()), &content_type, body).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!body.starts_with('{'), "twine sees the message, not JSON: {body:?}");
+    assert!(body.contains("does not match"));
+}
+
 fn multipart_body_with_content_length(declared: u64, content: &[u8]) -> (String, Vec<u8>) {
     let (content_type, body) = multipart_body(&upload_fields(), Some(("peryxpkg-1.0-py3-none-any.whl", content)));
     let header_end = body

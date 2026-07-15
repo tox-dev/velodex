@@ -147,6 +147,41 @@ pub enum UploadError {
     InvalidUploadTime,
 }
 
+impl UploadError {
+    /// The stable `(rule, field)` a browser upload UI pairs with the filename to name what a
+    /// rejection tripped, mirroring the machine-readable denial the policy path already returns so
+    /// both surface the same shape. The variants that carry the offending field reuse it directly.
+    pub(crate) const fn rule(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::NotFileUpload => ("unsupported-action", ":action"),
+            Self::Missing(field) => ("missing-field", field),
+            Self::InvalidName(_) => ("invalid-name", "name"),
+            Self::InvalidVersion(_) => ("invalid-version", "version"),
+            Self::InvalidFilename(_) => ("invalid-filename", "content"),
+            Self::InvalidDistributionFilename { .. } => ("invalid-distribution-filename", "content"),
+            Self::FiletypeMismatch { .. } => ("filetype-mismatch", "filetype"),
+            Self::FilenameNameMismatch { .. } => ("filename-name-mismatch", "content"),
+            Self::FilenameVersionMismatch { .. } => ("filename-version-mismatch", "content"),
+            Self::DigestMismatch(field) => ("digest-mismatch", field),
+            Self::InvalidDigest { field, .. } => ("invalid-digest", field),
+            Self::InvalidRequiresPython(_) => ("invalid-requires-python", "requires_python"),
+            Self::InvalidContent(_) => ("invalid-content", "content"),
+            Self::InvalidMetadataUtf8 => ("invalid-metadata-utf8", "content"),
+            Self::MalformedMetadata(_) => ("malformed-metadata", "content"),
+            Self::InvalidProjectUrl { .. } => ("invalid-project-url", "project_urls"),
+            Self::InvalidLicenseFile { .. } => ("invalid-license-file", "license_files"),
+            Self::ConflictingLicenseFields => ("conflicting-license-fields", "license"),
+            Self::MissingMetadataVersion => ("missing-metadata-version", "metadata_version"),
+            Self::UnsupportedMetadataVersion(_) => ("unsupported-metadata-version", "metadata_version"),
+            Self::InvalidMetadataValue { field, .. } => ("invalid-metadata-value", field),
+            Self::MetadataNameMismatch { .. } => ("metadata-name-mismatch", "name"),
+            Self::MetadataVersionMismatch { .. } => ("metadata-version-mismatch", "version"),
+            Self::MetadataFieldMismatch { field, .. } => ("metadata-field-mismatch", field),
+            Self::InvalidUploadTime => ("invalid-upload-time", "upload_time"),
+        }
+    }
+}
+
 /// A validated, content-addressed upload ready to be stored.
 #[derive(Debug)]
 pub struct PreparedUpload {
