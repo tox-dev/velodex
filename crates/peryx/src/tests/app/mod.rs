@@ -109,6 +109,7 @@ pub(super) fn uploaded_record_json(digest: &Digest) -> Vec<u8> {
             gpg_sig: None,
             provenance: Provenance::Absent,
         },
+        trashed: None,
     })
     .unwrap()
 }

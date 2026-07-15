@@ -84,6 +84,7 @@ fn uploaded_record_json(content_digest: &Digest, metadata_digest: &Digest) -> Ve
             gpg_sig: None,
             provenance: Provenance::Absent,
         },
+        trashed: None,
     })
     .into_bytes()
 }

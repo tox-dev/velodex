@@ -596,6 +596,7 @@ fn put_file(state: &peryx_driver::AppState, filename: &str, content: &[u8], core
             gpg_sig: None,
             provenance: Provenance::Absent,
         },
+        trashed: None,
     };
     state
         .meta
