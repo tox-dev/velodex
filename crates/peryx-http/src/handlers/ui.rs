@@ -66,7 +66,7 @@ pub async fn ui_projects(
     if let Some(access) = &access
         && let Err(denial) = access.authorize_any_project()
     {
-        return denied(denial);
+        return super::denied(denial);
     }
     match driver.project_names(&state.serving, position) {
         Ok(mut names) => {
@@ -89,7 +89,7 @@ pub async fn ui_project(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(denial) = authorize_project(&state, &headers, position, &query.project) {
-        return denied(denial);
+        return super::denied(denial);
     }
     match driver
         .browse_project(state.serving.clone(), position, query.project)
@@ -112,7 +112,7 @@ pub async fn ui_manifest(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(denial) = authorize_project(&state, &headers, position, &query.project) {
-        return denied(denial);
+        return super::denied(denial);
     }
     match driver
         .manifest_view(state.serving.clone(), position, query.project, query.reference)
@@ -134,7 +134,7 @@ pub async fn ui_members(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(denial) = authorize_project(&state, &headers, position, &query.project) {
-        return denied(denial);
+        return super::denied(denial);
     }
     match driver
         .artifact_members(state.serving.clone(), position, query.project, query.digest)
@@ -156,7 +156,7 @@ pub async fn ui_member(
         return StatusCode::NOT_FOUND.into_response();
     };
     if let Err(denial) = authorize_project(&state, &headers, position, &query.project) {
-        return denied(denial);
+        return super::denied(denial);
     }
     match driver
         .artifact_member_chunk(
@@ -192,15 +192,4 @@ fn authorize_project(state: &AppState, headers: &HeaderMap, position: usize, pro
     ReadAccess::from_headers(state, headers)
         .for_index(state.index_at(position))
         .authorize_project(project)
-}
-
-fn denied(denial: Denial) -> Response {
-    if denial == Denial::Forbidden {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    (
-        StatusCode::UNAUTHORIZED,
-        [(axum::http::header::WWW_AUTHENTICATE, "Basic realm=\"peryx\"")],
-    )
-        .into_response()
 }

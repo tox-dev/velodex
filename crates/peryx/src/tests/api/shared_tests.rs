@@ -21,6 +21,7 @@ fn test_openapi_document_covers_every_endpoint() {
         "/{route}/{project}/{version}/promote",
         "/{route}/{project}/{version}/",
         "/{route}/{project}/",
+        "/+acl",
         "/+api",
         "/+search",
         "/+status",
@@ -38,7 +39,7 @@ fn test_openapi_document_covers_every_endpoint() {
     ] {
         assert!(paths.contains_key(path), "missing path {path}");
     }
-    assert_eq!(paths.len(), 30);
+    assert_eq!(paths.len(), 31);
     assert_eq!(spec["info"]["version"], env!("CARGO_PKG_VERSION"));
 }
 

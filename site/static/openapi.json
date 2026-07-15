@@ -19,6 +19,91 @@
     }
   ],
   "paths": {
+    "/+acl": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "An index's access control",
+        "description": "The tokens, grants, expiry, and anonymous-read policy one index is configured with. peryx has no server-wide administrator, so the gate is the index's own: authenticate with HTTP Basic as a token holding write over every project here (the `upload_token` standing). Token secrets are never returned, only a marker that one is set.",
+        "parameters": [
+          {
+            "name": "index",
+            "in": "query",
+            "description": "The route of the index to describe",
+            "required": true,
+            "example": "hosted"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index's tokens and read policy, secrets redacted",
+            "content": {
+              "application/json": {
+                "example": {
+                  "anonymous_read": true,
+                  "index": "hosted",
+                  "route": "hosted",
+                  "tokens": [
+                    {
+                      "expires_at": null,
+                      "grants": [
+                        {
+                          "actions": [
+                            "write",
+                            "delete"
+                          ],
+                          "projects": [
+                            "*"
+                          ]
+                        }
+                      ],
+                      "name": "upload_token",
+                      "secret": {
+                        "configured": true,
+                        "redacted": "<redacted>"
+                      }
+                    },
+                    {
+                      "expires_at": 1800000000,
+                      "grants": [
+                        {
+                          "actions": [
+                            "read"
+                          ],
+                          "projects": [
+                            "team/*"
+                          ]
+                        }
+                      ],
+                      "name": "ci",
+                      "secret": {
+                        "configured": true,
+                        "redacted": "<redacted>"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential the index accepts was presented"
+          },
+          "403": {
+            "description": "The credential does not administer this index"
+          },
+          "404": {
+            "description": "No index has this route"
+          }
+        },
+        "security": [
+          {
+            "uploadToken": []
+          }
+        ]
+      }
+    },
     "/+api": {
       "get": {
         "tags": [

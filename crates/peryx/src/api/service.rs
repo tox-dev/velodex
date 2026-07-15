@@ -3,7 +3,7 @@
 use serde_json::json;
 use utoipa::openapi::content::ContentBuilder;
 use utoipa::openapi::path::{HttpMethod, OperationBuilder, ParameterBuilder, ParameterIn, PathItemBuilder};
-use utoipa::openapi::{PathsBuilder, ResponseBuilder};
+use utoipa::openapi::{PathsBuilder, Required, ResponseBuilder, SecurityRequirement};
 
 use peryx_driver::openapi::{api_json_response, package_search, text_response};
 
@@ -12,6 +12,10 @@ pub(super) fn service_paths(paths: PathsBuilder) -> PathsBuilder {
         .path(
             "/+status",
             PathItemBuilder::new().operation(HttpMethod::Get, status()).build(),
+        )
+        .path(
+            "/+acl",
+            PathItemBuilder::new().operation(HttpMethod::Get, acl()).build(),
         )
         .path(
             "/+api",
@@ -37,6 +41,53 @@ pub(super) fn service_paths(paths: PathsBuilder) -> PathsBuilder {
                 .operation(HttpMethod::Get, openapi_endpoint())
                 .build(),
         )
+}
+
+fn acl() -> OperationBuilder {
+    OperationBuilder::new()
+        .tag("operations")
+        .summary(Some("An index's access control"))
+        .description(Some(
+            "The tokens, grants, expiry, and anonymous-read policy one index is configured with. peryx \
+             has no server-wide administrator, so the gate is the index's own: authenticate with HTTP \
+             Basic as a token holding write over every project here (the `upload_token` standing). Token \
+             secrets are never returned, only a marker that one is set.",
+        ))
+        .security(SecurityRequirement::new("uploadToken", Vec::<String>::new()))
+        .parameter(
+            ParameterBuilder::new()
+                .name("index")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::True)
+                .description(Some("The route of the index to describe"))
+                .example(Some(json!("hosted"))),
+        )
+        .response(
+            "200",
+            api_json_response(
+                "The index's tokens and read policy, secrets redacted",
+                json!({
+                    "index": "hosted",
+                    "route": "hosted",
+                    "anonymous_read": true,
+                    "tokens": [
+                        {"name": "upload_token", "secret": {"configured": true, "redacted": "<redacted>"},
+                         "expires_at": null, "grants": [{"projects": ["*"], "actions": ["write", "delete"]}]},
+                        {"name": "ci", "secret": {"configured": true, "redacted": "<redacted>"},
+                         "expires_at": 1_800_000_000, "grants": [{"projects": ["team/*"], "actions": ["read"]}]}
+                    ]
+                }),
+            ),
+        )
+        .response(
+            "401",
+            ResponseBuilder::new().description("No credential the index accepts was presented"),
+        )
+        .response(
+            "403",
+            ResponseBuilder::new().description("The credential does not administer this index"),
+        )
+        .response("404", ResponseBuilder::new().description("No index has this route"))
 }
 
 fn discovery() -> OperationBuilder {

@@ -25,6 +25,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/+search", get(handlers::search))
         .route("/+search/", get(handlers::search))
         .route("/+status", get(handlers::status))
+        .route("/+acl", get(handlers::acl))
         .route("/+stats", get(handlers::stats))
         .route("/+ui/projects", get(handlers::ui_projects))
         .route("/+ui/project", get(handlers::ui_project))

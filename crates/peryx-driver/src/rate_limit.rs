@@ -443,7 +443,7 @@ pub fn service_route_class(method: &Method, path: &str) -> Option<RouteClass> {
     let path = path.trim_start_matches('/');
     if matches!(
         path,
-        "" | "+api" | "+api/" | "+status" | "+stats" | "metrics" | "api-docs/openapi.json"
+        "" | "+api" | "+api/" | "+status" | "+acl" | "+stats" | "metrics" | "api-docs/openapi.json"
     ) || matches!(path, "stats" | "admin/status")
         || path.ends_with("/+api")
         || path.contains("/+api/")
@@ -555,6 +555,7 @@ mod tests {
             Some(RouteClass::Upload)
         );
         assert_eq!(service_route_class(&Method::GET, "/+status"), Some(RouteClass::Admin));
+        assert_eq!(service_route_class(&Method::GET, "/+acl"), Some(RouteClass::Admin));
         assert_eq!(
             service_route_class(&Method::GET, "/pypi/hosted/+api"),
             Some(RouteClass::Admin)

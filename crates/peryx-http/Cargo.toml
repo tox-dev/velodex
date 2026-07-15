@@ -24,6 +24,7 @@ tokio = { workspace = true, features = ["sync", "rt", "fs"] }
 
 [dev-dependencies]
 async-trait.workspace = true
+base64.workspace = true
 peryx-policy.workspace = true
 rstest.workspace = true
 tokio.workspace = true
