@@ -586,6 +586,50 @@ fn test_prepare_rejects_invalid_license_expression(#[case] expression: &str, #[c
 }
 
 #[rstest]
+#[case::bare("Author-email: jane@example.test")]
+#[case::named("Author-email: Jane Doe <jane@example.test>")]
+#[case::comma_list("Author-email: \"Doe, Jane\" <jane@example.test>, joe@example.test")]
+#[case::maintainer("Maintainer-email: joe@example.test")]
+#[case::empty("Author-email:")]
+#[case::absent("Summary: a web framework")]
+fn test_prepare_accepts_valid_contact_address(#[case] header: &str) {
+    let bytes = contact_wheel(header);
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000)
+            .unwrap()
+            .display_name,
+        "Flask"
+    );
+}
+
+#[rstest]
+#[case::author("Author-email", "missing-at-sign")]
+#[case::named_author("Author-email", "Jane Doe <not-an-email>")]
+#[case::second_in_list("Author-email", "jane@example.test, missing-at-sign")]
+#[case::maintainer("Maintainer-email", "joe.example.test")]
+fn test_prepare_rejects_invalid_contact_address(#[case] field: &'static str, #[case] value: &str) {
+    let bytes = contact_wheel(&format!("{field}: {value}"));
+    let (_dir, staged) = staged_upload(&bytes);
+
+    assert_eq!(
+        prepare(staged_form(&bytes), staged, "root/hosted", 1000).unwrap_err(),
+        UploadError::InvalidMetadataValue {
+            field,
+            value: value.to_owned(),
+            reason: "is not a valid email address",
+        }
+    );
+}
+
+fn contact_wheel(header: &str) -> Vec<u8> {
+    wheel_metadata_bytes(
+        format!("Metadata-Version: 2.4\nName: Flask\nVersion: 1.0\nRequires-Python: >=3.8\n{header}\n").as_bytes(),
+    )
+}
+
+#[rstest]
 #[case::classifier(
     "1.0",
     "Classifier: Private :: Do Not Upload",

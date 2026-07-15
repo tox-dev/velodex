@@ -69,6 +69,7 @@ serde_json = "1.0"
 pep440_rs = "0.7"
 pep508_rs = "0.9"
 spdx = "0.13"
+email_address = { version = "0.2", default-features = false }
 tantivy = "0.26"
 tl = "0.7"
 toml = "1.1"
