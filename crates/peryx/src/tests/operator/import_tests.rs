@@ -260,6 +260,33 @@ fn test_import_dir_rejects_invalid_legacy_url(#[case] metadata: &[u8], #[case] r
 }
 
 #[test]
+fn test_import_dir_rejects_malformed_contact_address() {
+    let root = tempfile::tempdir().unwrap();
+    let import = root.path().join("import");
+    std::fs::create_dir(&import).unwrap();
+    std::fs::write(
+        import.join("BadContact-1.0-py3-none-any.whl"),
+        wheel_with_metadata(
+            "BadContact",
+            "1.0",
+            b"Metadata-Version: 2.4\nName: BadContact\nVersion: 1.0\nAuthor-email: missing-at-sign\n",
+        ),
+    )
+    .unwrap();
+    let config = Config {
+        data_dir: root.path().join("data"),
+        ..Config::default()
+    };
+
+    let mut out = Vec::new();
+    operator::import_dir(&config, "root/pypi", &import, &mut out).unwrap();
+
+    assert!(String::from_utf8(out).unwrap().contains(
+        "BadContact-1.0-py3-none-any.whl\tbadcontact\t1.0\tmetadata Author-email value \"missing-at-sign\" is not a valid email address"
+    ));
+}
+
+#[test]
 fn test_import_dir_rejects_malformed_metadata() {
     let root = tempfile::tempdir().unwrap();
     let import = root.path().join("import");

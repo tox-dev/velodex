@@ -440,6 +440,7 @@ fn validate_metadata_identity(
     validate_legacy_urls(metadata)?;
     validate_dynamic(metadata)?;
     validate_import_names(metadata)?;
+    validate_contact_addresses(metadata)?;
     compare_metadata_field(
         "Metadata-Version",
         form.metadata_version.as_deref(),
@@ -746,6 +747,22 @@ fn is_python_identifier(name: &str) -> bool {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn validate_contact_addresses(metadata: &CoreMetadataDoc) -> Result<(), UploadError> {
+    for (field, value) in [
+        ("Author-email", metadata.author_email.as_deref()),
+        ("Maintainer-email", metadata.maintainer_email.as_deref()),
+    ] {
+        if let Some(value) = value {
+            crate::contact::validate(value).map_err(|reason| UploadError::InvalidMetadataValue {
+                field,
+                value: value.to_owned(),
+                reason,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn compare_metadata_field(field: &'static str, form: Option<&str>, metadata: Option<&str>) -> Result<(), UploadError> {

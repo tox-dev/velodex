@@ -890,6 +890,25 @@ async fn test_upload_rejects_unknown_classifier() {
 }
 
 #[tokio::test]
+async fn test_upload_rejects_malformed_contact_address() {
+    let h = harness().await;
+    assert_upload_response(
+        &h,
+        &upload_fields(),
+        Some((
+            "peryxpkg-1.0-py3-none-any.whl",
+            fixture_wheel_with_metadata(
+                b"Metadata-Version: 2.4\nName: peryxpkg\nVersion: 1.0\nRequires-Python: >=3.8\nAuthor-email: missing-at-sign\n",
+            )
+            .as_slice(),
+        )),
+        StatusCode::BAD_REQUEST,
+        "metadata Author-email value \"missing-at-sign\" is not a valid email address",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_upload_rejects_conflicting_license_fields() {
     let h = harness().await;
     assert_upload_response(
