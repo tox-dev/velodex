@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::distribution_version_segment;
-use crate::version::{VersionKey, version_key};
+use crate::version::{Version, VersionKey, parse_version, version_key, version_order_desc};
 
 /// The fields of a core-metadata document that the web UI presents, in the spirit of a pypi.org
 /// project page. Unknown fields are ignored.
@@ -429,11 +429,15 @@ fn file_yanked(file: &serde_json::Value) -> bool {
     file["yanked"].as_bool().unwrap_or(false) || file["yanked"].is_string()
 }
 
-/// The releases the detail page declares, each with the yank state its files give it.
+/// The releases the detail page declares, each with the yank state its files give it, newest-first.
 ///
 /// A release is yanked when the publisher yanked every file of the PEP 440-equivalent version, so one
 /// active file keeps the release active and a release with no files is not yanked. Its reasons are the
 /// distinct nonempty ones its files carry, in the order the index lists them.
+///
+/// Releases sort newest-first under PEP 440 so the page shows an ordered history even when an upstream
+/// lists its versions out of order; a version that does not parse keeps its listed order after the
+/// parseable ones.
 fn releases(value: &serde_json::Value) -> Vec<peryx_core::UiRelease> {
     let mut yanks: HashMap<VersionKey, ReleaseYank> = HashMap::new();
     for file in value["files"].as_array().into_iter().flatten() {
@@ -449,20 +453,25 @@ fn releases(value: &serde_json::Value) -> Vec<peryx_core::UiRelease> {
             yank.reasons.push(reason.to_owned());
         }
     }
-    value["versions"]
+    let mut releases: Vec<(Option<Version>, peryx_core::UiRelease)> = value["versions"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
         .map(|version| {
             let yank = yanks.get(&version_key(version)).filter(|yank| !yank.active);
-            peryx_core::UiRelease {
-                version: version.to_owned(),
-                yanked: yank.is_some(),
-                yanked_reasons: yank.map(|yank| yank.reasons.clone()).unwrap_or_default(),
-            }
+            (
+                parse_version(version),
+                peryx_core::UiRelease {
+                    version: version.to_owned(),
+                    yanked: yank.is_some(),
+                    yanked_reasons: yank.map(|yank| yank.reasons.clone()).unwrap_or_default(),
+                },
+            )
         })
-        .collect()
+        .collect();
+    releases.sort_by(|left, right| version_order_desc(left.0.as_ref(), right.0.as_ref()));
+    releases.into_iter().map(|(_, release)| release).collect()
 }
 
 #[derive(Default)]

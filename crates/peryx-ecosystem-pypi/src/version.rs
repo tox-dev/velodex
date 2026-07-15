@@ -38,16 +38,24 @@ pub fn version_key(version: &str) -> VersionKey {
     parse_version(version).map_or_else(|| VersionKey::Raw(version.to_owned()), VersionKey::Parsed)
 }
 
+/// Order two parsed versions newest-first: a parsed version outranks an unparseable one, parsed
+/// versions compare descending, and two unparseable ones compare equal so a stable sort keeps their
+/// input order. Both [`sorted_desc`] and the release list order releases through this.
+#[must_use]
+pub fn version_order_desc(left: Option<&Version>, right: Option<&Version>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(x), Some(y)) => y.cmp(x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
 /// Sort version strings newest-first. Strings that do not parse as PEP 440 keep their input order
 /// after the parseable ones.
 #[must_use]
 pub fn sorted_desc(versions: &[String]) -> Vec<String> {
     let mut parsed: Vec<(Option<Version>, &String)> = versions.iter().map(|v| (parse_version(v), v)).collect();
-    parsed.sort_by(|a, b| match (&a.0, &b.0) {
-        (Some(x), Some(y)) => y.cmp(x),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
+    parsed.sort_by(|a, b| version_order_desc(a.0.as_ref(), b.0.as_ref()));
     parsed.into_iter().map(|(_, v)| v.clone()).collect()
 }

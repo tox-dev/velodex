@@ -77,6 +77,17 @@ fn test_ui_project_from_detail_marks_a_release_its_publisher_yanked_whole(
 }
 
 #[test]
+fn test_ui_project_from_detail_orders_releases_newest_first() {
+    let detail = detail_with_yanks(&["1.0", "2.0", "1.5", "1.0a1", "legacy"], &[]);
+    let ordered: Vec<String> = ui_project_from_detail(&detail)
+        .versions
+        .into_iter()
+        .map(|release| release.version)
+        .collect();
+    assert_eq!(ordered, ["2.0", "1.5", "1.0", "1.0a1", "legacy"]);
+}
+
+#[test]
 fn test_ui_project_from_detail_leaves_a_release_a_nameless_file_says_nothing_about() {
     let detail = serde_json::json!({
         "name": "veloxdemo",
