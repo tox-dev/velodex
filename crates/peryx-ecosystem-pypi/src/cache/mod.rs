@@ -177,6 +177,16 @@ pub(crate) fn fresh_cached(state: &ServingState, key: &str) -> Result<Option<Cac
     }
 }
 
+/// The cached raw page that is past its freshness window but still inside the stale bound, so it can
+/// answer a request now while a background task revalidates it.
+///
+/// Reached only after [`fresh_cached`] has returned `None`, so a present record is already stale and
+/// the bound is all that is left to check. `None` when nothing is cached, its bytes no longer decode,
+/// or the copy has aged past `max_stale_secs` — a miss hard enough to fetch synchronously instead.
+pub(crate) fn stale_servable(state: &ServingState, key: &str) -> Result<Option<CachedIndex>, CacheError> {
+    Ok(cached_record(state, key)?.filter(|record| servable_stale(state, record)))
+}
+
 /// A record's freshness lifetime in seconds.
 const fn freshness(state: &ServingState, record: &CachedIndex) -> i64 {
     freshness_secs(state.ttl_secs, record.fresh_secs)

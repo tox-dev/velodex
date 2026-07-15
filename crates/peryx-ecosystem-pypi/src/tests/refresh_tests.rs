@@ -373,7 +373,20 @@ async fn test_upstream_max_age_shortens_freshness() {
 
     get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     h.clock.fetch_add(6, Ordering::Relaxed);
+    // The now-stale page serves at once and its background revalidation issues the second fetch, so
+    // wait for that refresh to land before the mock verifies both upstream hits.
     get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    for _ in 0..500 {
+        if h.state
+            .meta
+            .get_index("pypi/flask")
+            .unwrap()
+            .is_some_and(|record| record.fetched_at_unix >= 1006)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
 }
 
 #[tokio::test]
@@ -422,7 +435,17 @@ async fn test_stale_serve_records_metric() {
 
     let (_, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
     assert!(body.contains(digest.as_str()));
-    settle(&h.state, "stale_served", 1);
+    // The stale page is served at once and its background revalidation hits the 500, which records the
+    // stale-served metric. That runs on a detached task, so yield to the runtime rather than block it.
+    let mut recorded = false;
+    for _ in 0..500 {
+        if drilled(&h.state, "stale_served") >= 1 {
+            recorded = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert!(recorded, "metric stale_served never reached 1");
 }
 
 #[tokio::test]

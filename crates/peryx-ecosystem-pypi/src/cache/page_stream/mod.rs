@@ -140,6 +140,15 @@ pub async fn stream_detail(
     if state.negative_fresh(&project_negative_key(&key)) {
         return Ok(missing_upstream_outcome(&context));
     }
+    // Stale-while-revalidate: a stale-but-present page answers now while one background task refreshes
+    // it, so a resolver never waits on the network for a page peryx already holds. This runs before
+    // the flight gate on purpose — concurrent stale hits each serve their bytes instead of queuing,
+    // and the coalescing lives inside the spawned task, which takes the gate or skips.
+    if let Some(record) = super::stale_servable(&state, &key)? {
+        let bytes = transform_whole(&state, &hot_key, &record, context)?;
+        let _ = spawn_revalidation(state.clone(), key, cached_name, project, client);
+        return Ok(PageOutcome::Ready(bytes));
+    }
 
     let gate = flight_gate(&state, &key);
     let guard = gate.lock_owned().await;
@@ -381,6 +390,41 @@ fn transform_whole(
     Ok(bytes)
 }
 
+/// Refresh a stale-but-served page against upstream in the background, coalesced by the same
+/// single-flight gate the on-demand fetch uses.
+///
+/// The first hit to find a page stale takes the gate and revalidates it; concurrent hits that also
+/// served it stale find the gate held, so a burst of requests triggers one upstream check, not a
+/// herd. The returned handle lets a test await the refresh; the serving path drops it, having already
+/// answered from the stale bytes.
+fn spawn_revalidation(
+    state: Arc<ServingState>,
+    key: String,
+    name: String,
+    project: String,
+    client: UpstreamClient,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let guard = flight_gate(&state, &key).try_lock_owned().ok()?;
+    Some(tokio::spawn(revalidate(state, key, name, project, client, guard)))
+}
+
+/// Revalidate one page and release the single-flight hold however it ends. The request that spawned
+/// this already holds the stale bytes, so a failed refresh only logs and leaves the stale page in
+/// place for the next request to retry.
+async fn revalidate(
+    state: Arc<ServingState>,
+    key: String,
+    name: String,
+    project: String,
+    client: UpstreamClient,
+    guard: tokio::sync::OwnedMutexGuard<()>,
+) {
+    if let Err(err) = super::fetch::fetch_and_store(&state, &key, &name, &project, &client).await {
+        tracing::debug!(?err, %key, "background revalidation failed");
+    }
+    release_flight(&state, &key, guard);
+}
+
 fn transform_error(err: crate::stream::TransformError) -> CacheError {
     match err {
         crate::stream::TransformError::Parse(err) => CacheError::Parse(err),
@@ -393,6 +437,11 @@ fn transform_error(err: crate::stream::TransformError) -> CacheError {
 
 #[cfg(test)]
 mod tests {
+    use peryx_storage::blob::BlobStore;
+    use peryx_storage::meta::MetaStore;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::*;
 
     #[test]
@@ -407,5 +456,134 @@ mod tests {
             transform_error(crate::stream::TransformError::TooLarge),
             CacheError::Unavailable
         ));
+    }
+
+    fn flask_body(versions: &[&str]) -> Vec<u8> {
+        crate::to_json(&crate::ProjectDetail {
+            meta: crate::Meta::default(),
+            name: "flask".to_owned(),
+            versions: versions.iter().map(|version| (*version).to_owned()).collect(),
+            files: vec![],
+        })
+        .into_bytes()
+    }
+
+    /// A wired state whose `pypi` mirror holds a `flask` page stale since `fetched_at`, over a mock
+    /// upstream at `upstream`.
+    fn stale_flask_state(
+        dir: &tempfile::TempDir,
+        upstream: &str,
+        fetched_at: i64,
+    ) -> (Arc<ServingState>, UpstreamClient) {
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        let blobs = BlobStore::new(dir.path().join("blobs"));
+        let client = UpstreamClient::new(upstream).unwrap();
+        let indexes = vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            ecosystem: peryx_core::Ecosystem::Pypi,
+            kind: IndexKind::Cached {
+                client: client.clone(),
+                offline: false,
+            },
+            policy: peryx_policy::Policy::default(),
+            acl: peryx_identity::IndexAcl::default(),
+        }];
+        let mut app = peryx_driver::state::AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 2000));
+        crate::install(&mut app);
+        let state = app.serving.clone();
+        state
+            .meta
+            .put_index(
+                "pypi/flask",
+                &CachedIndex {
+                    etag: None,
+                    last_serial: None,
+                    fetched_at_unix: fetched_at,
+                    content_type: None,
+                    fresh_secs: None,
+                    body: flask_body(&["1.0"]),
+                },
+            )
+            .unwrap();
+        (state, client)
+    }
+
+    #[tokio::test]
+    async fn test_spawn_revalidation_refreshes_the_cached_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = MockServer::start().await;
+        let (state, client) = stale_flask_state(&dir, &format!("{}/simple/", server.uri()), 1000);
+        Mock::given(method("GET"))
+            .and(path("/simple/flask/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(flask_body(&["1.0", "2.0"]), "application/vnd.pypi.simple.v1+json"),
+            )
+            .mount(&server)
+            .await;
+
+        spawn_revalidation(
+            state.clone(),
+            "pypi/flask".to_owned(),
+            "pypi".to_owned(),
+            "flask".to_owned(),
+            client,
+        )
+        .expect("the free gate lets the refresh run")
+        .await
+        .unwrap();
+
+        let body = state.meta.get_index("pypi/flask").unwrap().unwrap().body;
+        assert!(String::from_utf8(body).unwrap().contains("2.0"));
+        assert!(state.cache.inflight.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_revalidation_skips_when_a_refresh_is_already_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, client) = stale_flask_state(&dir, "https://example.invalid/simple/", 1000);
+        let held = flight_gate(&state, "pypi/flask").lock_owned().await;
+
+        let outcome = spawn_revalidation(
+            state.clone(),
+            "pypi/flask".to_owned(),
+            "pypi".to_owned(),
+            "flask".to_owned(),
+            client,
+        );
+
+        assert!(outcome.is_none());
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn test_revalidation_keeps_the_stale_page_when_upstream_is_unparseable() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = MockServer::start().await;
+        let (state, client) = stale_flask_state(&dir, &format!("{}/simple/", server.uri()), 1000);
+        Mock::given(method("GET"))
+            .and(path("/simple/flask/"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(b"not json".to_vec(), "application/vnd.pypi.simple.v1+json"),
+            )
+            .mount(&server)
+            .await;
+
+        spawn_revalidation(
+            state.clone(),
+            "pypi/flask".to_owned(),
+            "pypi".to_owned(),
+            "flask".to_owned(),
+            client,
+        )
+        .expect("the free gate lets the refresh run")
+        .await
+        .unwrap();
+
+        // The unparseable upstream response is rejected, so the stale page stays and the hold is freed.
+        let body = state.meta.get_index("pypi/flask").unwrap().unwrap().body;
+        assert!(String::from_utf8(body).unwrap().contains("1.0"));
+        assert!(state.cache.inflight.lock().unwrap().is_empty());
     }
 }

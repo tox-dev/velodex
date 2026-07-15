@@ -30,15 +30,16 @@ async fn test_gate_waiter_finds_the_hot_entry_after_a_revalidation() {
         .await;
     get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
 
-    // Past freshness: both racers revalidate; a 304 refills the hot cache without an epoch bump,
-    // so the gate waiter's post-gate hot check hits.
+    // Past the stale bound the page no longer serves stale-while-revalidate, so both racers take the
+    // gate and revalidate; a 304 refills the hot cache without an epoch bump, so the gate waiter's
+    // post-gate hot check hits.
     h.server.reset().await;
     Mock::given(method("GET"))
         .and(path("/simple/flask/"))
         .respond_with(ResponseTemplate::new(304).set_delay(std::time::Duration::from_millis(150)))
         .mount(&h.server)
         .await;
-    h.clock.fetch_add(61, Ordering::Relaxed);
+    h.clock.fetch_add(100_000, Ordering::Relaxed);
     let (a, b) = tokio::join!(
         get(&h.state, "/pypi/simple/flask/", Some("application/json")),
         get(&h.state, "/pypi/simple/flask/", Some("application/json")),

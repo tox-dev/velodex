@@ -261,6 +261,68 @@ async fn test_mirror_detail_serves_any_age_when_the_bound_is_zero() {
     assert!(served.contains("flask"));
 }
 #[tokio::test]
+async fn test_mirror_detail_serves_stale_json_then_revalidates_in_background() {
+    let h = harness().await;
+    h.state
+        .meta
+        .put_index(
+            "pypi/flask",
+            &CachedIndex {
+                etag: None,
+                last_serial: None,
+                fetched_at_unix: 1000,
+                content_type: None,
+                fresh_secs: None,
+                body: crate::to_json(&crate::ProjectDetail {
+                    meta: crate::Meta::default(),
+                    name: "flask".to_owned(),
+                    versions: vec!["1.0".to_owned()],
+                    files: vec![],
+                })
+                .into_bytes(),
+            },
+        )
+        .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                crate::to_json(&crate::ProjectDetail {
+                    meta: crate::Meta::default(),
+                    name: "flask".to_owned(),
+                    versions: vec!["1.0".to_owned(), "2.0".to_owned()],
+                    files: vec![],
+                })
+                .into_bytes(),
+                "application/vnd.pypi.simple.v1+json",
+            ),
+        )
+        .mount(&h.server)
+        .await;
+    h.clock.store(1100, Ordering::Relaxed); // 100s old: past the 60s freshness, inside the stale bound
+
+    // The first request answers from the stale page at once, never blocking on the fresh upstream body.
+    let (status, _, body) = get(&h.state, "/pypi/simple/flask/", Some("application/json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("1.0") && !body.contains("2.0"));
+
+    // The background revalidation the first request kicked off then stores the fresh page.
+    let mut refreshed = false;
+    for _ in 0..200 {
+        if h.state
+            .meta
+            .get_index("pypi/flask")
+            .unwrap()
+            .is_some_and(|record| String::from_utf8_lossy(&record.body).contains("2.0"))
+        {
+            refreshed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(refreshed, "background revalidation never refreshed the cache");
+}
+#[tokio::test]
 async fn test_mirror_detail_stale_on_5xx() {
     let h = harness().await;
     let body = crate::to_json(&crate::ProjectDetail {
@@ -350,7 +412,9 @@ async fn test_mirror_detail_stale_on_upstream_error() {
         acl: IndexAcl::default(),
     }];
     let state = crate::tests::wired(AppState::with_clock(meta, blobs, 60, indexes, Arc::new(|| 100_000)));
-    let (status, _, served) = get(&state, "/pypi/simple/flask/", Some("application/json")).await;
+    // The buffered legacy-JSON view revalidates inline (no stale-while-revalidate), so an unreachable
+    // upstream falls back to the stale cached page here rather than papering over the failure elsewhere.
+    let (status, _, served) = get(&state, "/pypi/flask/json", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(served.contains("flask"));
 }
