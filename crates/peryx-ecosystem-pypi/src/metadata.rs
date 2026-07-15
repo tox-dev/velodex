@@ -396,6 +396,9 @@ pub fn ui_project_from_detail(value: &serde_json::Value) -> peryx_core::UiProjec
                 .filter(|reason| !reason.is_empty())
                 .map(str::to_owned),
             has_metadata: file["core-metadata"].is_object() || file["core-metadata"].as_bool() == Some(true),
+            // The wire document alone cannot prove a blob is stored locally, so every file starts
+            // upstream-only; `serving::web::project_page` upgrades it against the blob and upload stores.
+            availability: peryx_core::UiAvailability::RemoteOnly,
         })
         .collect();
     peryx_core::UiProject {

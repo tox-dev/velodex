@@ -1,14 +1,19 @@
 //! Producing the web UI's neutral view models from the `PyPI` serving layer, so the web crate renders
 //! a project page without any knowledge of the Simple API, wheels, or PEP 658.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use peryx_core::{UiMeta, UiProject};
+use peryx_core::{UiAvailability, UiMeta, UiProject};
 use peryx_driver::ServingState;
+use peryx_index::{Index, IndexKind};
 use peryx_storage::blob::Digest;
 
-use crate::cache;
-use crate::{file_matches_version, normalize_name, parse_version, to_json, ui_meta, ui_project_from_detail};
+use crate::cache::{self, CacheError};
+use crate::store::PypiStore as _;
+use crate::{
+    ProjectDetail, file_matches_version, normalize_name, parse_version, to_json, ui_meta, ui_project_from_detail,
+};
 
 /// The project names of the cached/hosted/virtual index at `position`.
 pub(super) fn project_names(state: &ServingState, position: usize) -> Result<Vec<String>, String> {
@@ -26,7 +31,7 @@ pub(super) async fn project_page(
     let route = state.index_at(position).route.clone();
     let normalized = normalize_name(&project);
     let index = state.index_at(position);
-    let Some(detail) = cache::resolve_detail(&state, index, &normalized, &route)
+    let Some((detail, hosted)) = resolve_detail_and_hosted(&state, index, &normalized, &route)
         .await
         .map_err(|err| {
             format!(
@@ -39,7 +44,8 @@ pub(super) async fn project_page(
     };
     // `to_json` serializes the detail, so parsing it straight back cannot fail.
     let value = serde_json::from_str(&to_json(&detail)).expect("to_json emits JSON that round-trips");
-    let ui = ui_project_from_detail(&value);
+    let mut ui = ui_project_from_detail(&value);
+    apply_availability(&state, &hosted, &mut ui);
     let default = default_version(&ui);
     // A pre-PEP 700 upstream names no versions, so no release owns a file and the newest sibling stands in.
     let sibling = match default.as_deref() {
@@ -52,6 +58,62 @@ pub(super) async fn project_page(
     };
     meta.version = default.or(meta.version);
     Ok(Some((ui, meta)))
+}
+
+/// Resolve a project's detail together with the filenames its hosted layers published, so both store
+/// reads share the caller's one error mapping.
+async fn resolve_detail_and_hosted(
+    state: &ServingState,
+    index: &Index,
+    project: &str,
+    route: &str,
+) -> Result<Option<(ProjectDetail, BTreeSet<String>)>, CacheError> {
+    let Some(detail) = cache::resolve_detail(state, index, project, route).await? else {
+        return Ok(None);
+    };
+    let mut hosted = BTreeSet::new();
+    collect_hosted_filenames(state, index, project, &mut hosted)?;
+    Ok(Some((detail, hosted)))
+}
+
+/// The filenames an index's hosted (upload) layers published for `project`, unioned across a virtual
+/// index's layers so a merged page can tell an uploaded file from a mirrored one.
+fn collect_hosted_filenames(
+    state: &ServingState,
+    index: &Index,
+    project: &str,
+    names: &mut BTreeSet<String>,
+) -> Result<(), peryx_storage::meta::MetaError> {
+    match &index.kind {
+        IndexKind::Hosted { .. } => {
+            for (filename, _record) in state.meta.list_upload_entries(&index.name, project)? {
+                names.insert(filename);
+            }
+        }
+        IndexKind::Virtual { layers, .. } => {
+            for &pos in layers {
+                collect_hosted_filenames(state, state.index_at(pos), project, names)?;
+            }
+        }
+        IndexKind::Cached { .. } => {}
+    }
+    Ok(())
+}
+
+/// Mark each file with where its artifact lives: `Hosted` when a hosted layer published it, `Cached`
+/// when the blob is in local storage, else `RemoteOnly`. This is the axis the page badges and its
+/// `Local only` filter cut on. Hosted outranks cached because a hosted upload shadows a same-named
+/// upstream file, the dependency-confusion order [`cache::resolve_detail`] merged the page by.
+fn apply_availability(state: &ServingState, hosted: &BTreeSet<String>, ui: &mut UiProject) {
+    for file in &mut ui.files {
+        file.availability = if hosted.contains(&file.filename) {
+            UiAvailability::Hosted
+        } else if Digest::from_hex(&file.sha256).is_some_and(|digest| state.blobs.exists(&digest)) {
+            UiAvailability::Cached
+        } else {
+            UiAvailability::RemoteOnly
+        };
+    }
 }
 
 /// The release the project page defaults to. An active release (one the publisher has not yanked

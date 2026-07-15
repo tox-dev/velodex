@@ -427,6 +427,97 @@ async fn test_project_page_reports_a_malformed_metadata_sibling() {
 }
 
 #[tokio::test]
+async fn test_project_page_is_absent_for_an_unknown_hosted_project() {
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let h = harness().await;
+    // The hosted store holds no uploads for `flask`, so its page resolves to nothing.
+    let page = crate::serving::PypiServing
+        .project_page(h.state.serving.clone(), 1, "flask".to_owned())
+        .await
+        .unwrap();
+    assert!(page.is_none());
+}
+
+#[tokio::test]
+async fn test_project_page_marks_cached_and_remote_only_files() {
+    use peryx_core::UiAvailability;
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let h = harness().await;
+    let cached = h.state.blobs.write(b"cached wheel bytes").unwrap();
+    let page = crate::to_json(&serde_json::json!({
+        "meta": {"api-version": "1.1"},
+        "name": "flask",
+        "versions": ["1.0", "2.0"],
+        "files": [
+            {
+                "filename": "flask-1.0-py3-none-any.whl",
+                "url": "https://files.example/flask-1.0-py3-none-any.whl",
+                "hashes": {"sha256": cached.as_str()},
+            },
+            {
+                "filename": "flask-2.0-py3-none-any.whl",
+                "url": "https://files.example/flask-2.0-py3-none-any.whl",
+                "hashes": {"sha256": Digest::of(b"a wheel this proxy has never downloaded").as_str()},
+            },
+        ],
+    }));
+    mount_json_page(&h.server, &page).await;
+
+    let (project, _) = crate::serving::PypiServing
+        .project_page(h.state.serving.clone(), 0, "flask".to_owned())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let availability = |filename: &str| {
+        project
+            .files
+            .iter()
+            .find(|file| file.filename == filename)
+            .unwrap_or_else(|| panic!("no file {filename:?}"))
+            .availability
+    };
+    assert_eq!(availability("flask-1.0-py3-none-any.whl"), UiAvailability::Cached);
+    assert_eq!(availability("flask-2.0-py3-none-any.whl"), UiAvailability::RemoteOnly);
+}
+
+#[tokio::test]
+async fn test_project_page_marks_a_hosted_upload_over_its_cached_blob() {
+    use peryx_core::UiAvailability;
+    use peryx_driver::serving::EcosystemDriver as _;
+
+    let h = harness().await;
+    let filename = "flask-1.0-py3-none-any.whl";
+    // The blob is present, so a name-blind check would read `Cached`; the hosted upload must win.
+    let digest = h.state.blobs.write(b"hosted wheel bytes").unwrap();
+    let uploaded = serde_json::json!({
+        "version": "1.0",
+        "file": {
+            "filename": filename,
+            "url": format!("/hosted/files/{}/{filename}", digest.as_str()),
+            "hashes": {"sha256": digest.as_str()},
+        },
+    });
+    h.state
+        .meta
+        .put_upload("hosted", "flask", filename, crate::to_json(&uploaded).as_bytes())
+        .unwrap();
+
+    // Index 2 is the virtual index layering the hosted store in front of the cache, so classification
+    // walks its layers to find the upload.
+    let (project, _) = crate::serving::PypiServing
+        .project_page(h.state.serving.clone(), 2, "flask".to_owned())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(project.files.len(), 1);
+    assert_eq!(project.files[0].availability, UiAvailability::Hosted);
+}
+
+#[tokio::test]
 async fn test_upload_to_an_unresolvable_or_non_root_path_is_rejected() {
     use axum::extract::FromRequest as _;
     use peryx_driver::serving::EcosystemDriver as _;

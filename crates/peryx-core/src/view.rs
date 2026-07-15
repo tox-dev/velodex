@@ -102,6 +102,22 @@ pub struct UiRelease {
     pub yanked_reasons: Vec<String>,
 }
 
+/// Where the artifact a file names lives, relative to this instance.
+///
+/// The badge a package page shows for a file, and the axis its `Local only` filter cuts on. `Hosted`
+/// and `Cached` are both served from local storage; `RemoteOnly` is an upstream catalog entry whose
+/// blob this instance has not downloaded, so a `Local only` view drops it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAvailability {
+    /// Uploaded into this instance.
+    Hosted,
+    /// Mirrored from upstream: the artifact blob is in local storage.
+    Cached,
+    /// Present in the upstream catalog, but the blob is not stored locally.
+    RemoteOnly,
+}
+
 /// One downloadable file as the project page shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiFile {
@@ -113,6 +129,8 @@ pub struct UiFile {
     pub yanked: bool,
     pub yanked_reason: Option<String>,
     pub has_metadata: bool,
+    /// Whether the artifact is served from local storage (hosted or cached) or remains upstream-only.
+    pub availability: UiAvailability,
 }
 
 /// What a project-level browse request renders as.
@@ -177,4 +195,39 @@ pub struct UiMemberChunk {
     pub size: Option<u64>,
     pub offset: u64,
     pub next_offset: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UiAvailability, UiFile};
+
+    #[test]
+    fn test_ui_availability_round_trips_snake_case() {
+        for (availability, wire) in [
+            (UiAvailability::Hosted, "\"hosted\""),
+            (UiAvailability::Cached, "\"cached\""),
+            (UiAvailability::RemoteOnly, "\"remote_only\""),
+        ] {
+            assert_eq!(serde_json::to_string(&availability).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<UiAvailability>(wire).unwrap(), availability);
+        }
+    }
+
+    #[test]
+    fn test_ui_file_carries_availability_on_the_wire() {
+        let file = UiFile {
+            filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+            url: "/pypi/files/aa/pkg-1.0-py3-none-any.whl".to_owned(),
+            sha256: "aa".to_owned(),
+            size: Some(10),
+            upload_time: None,
+            yanked: false,
+            yanked_reason: None,
+            has_metadata: false,
+            availability: UiAvailability::RemoteOnly,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(json.contains("\"availability\":\"remote_only\""), "{json}");
+        assert_eq!(serde_json::from_str::<UiFile>(&json).unwrap(), file);
+    }
 }
