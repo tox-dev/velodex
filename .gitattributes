@@ -1,4 +1,0 @@
-# Byte-exact fixtures and include_str! comparisons need LF on every platform.
-* text=auto eol=lf
-*.whl binary
-*.wasm binary

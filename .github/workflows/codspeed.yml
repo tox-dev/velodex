@@ -122,6 +122,13 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # GitHub hands out heterogeneous ARM CPUs for ubuntu-24.04-arm. glibc then picks CPU-specific
+      # memcpy/memset/malloc paths per runner, so cachegrind (simulation mode) measures the same
+      # benchmark differently and reports phantom regressions on unrelated benchmarks. Forcing the
+      # generic aarch64 code path and a single malloc arena makes the measurement CPU-independent.
+      # See CodSpeed's write-up on runner CPU variance (codspeed.io/blog/why-glibc-faster-github-actions).
+      GLIBC_TUNABLES: glibc.cpu.name=generic:glibc.malloc.arena_max=1
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
