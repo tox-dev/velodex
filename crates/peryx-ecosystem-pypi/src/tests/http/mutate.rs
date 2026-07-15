@@ -422,6 +422,97 @@ async fn test_delete_project_named_restore() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 #[tokio::test]
+async fn test_soft_delete_hides_file_but_keeps_blob_and_trash_metadata() {
+    let h = harness().await;
+    upload_peryxpkg(&h.state, "/hosted/", &fixture_wheel()).await;
+    let before = blob_count(&h.state);
+
+    let status = request(
+        &h.state,
+        "DELETE",
+        "/hosted/peryxpkg/1.0/?reason=bad+build",
+        Some(&upload_auth()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Hidden from the Simple API, but the blob stays for recovery.
+    let (served, ..) = get(&h.state, "/hosted/simple/peryxpkg/", Some("application/json")).await;
+    assert_eq!(served, StatusCode::NOT_FOUND);
+    assert_eq!(blob_count(&h.state), before);
+
+    // The record is kept, marked trashed with the delete provenance.
+    let entries = h.state.meta.list_upload_entries("hosted", "peryxpkg").unwrap();
+    let (_, bytes) = entries.first().expect("the soft-deleted record is kept");
+    let record: crate::upload::Uploaded = serde_json::from_slice(bytes).unwrap();
+    let trash = record.trashed.expect("the record carries trash metadata");
+    assert_eq!(trash.deleted_at_unix, 1000);
+    assert_eq!(trash.reason.as_deref(), Some("bad build"));
+    assert!(trash.actor.is_some(), "the deleting token is recorded");
+}
+#[tokio::test]
+async fn test_soft_delete_then_restore_serves_the_file_again() {
+    let h = harness().await;
+    upload_peryxpkg(&h.state, "/hosted/", &fixture_wheel()).await;
+
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/peryxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (gone, ..) = get(&h.state, "/hosted/simple/peryxpkg/", Some("application/json")).await;
+    assert_eq!(gone, StatusCode::NOT_FOUND);
+
+    assert_eq!(
+        request(&h.state, "PUT", "/hosted/peryxpkg/1.0/restore", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (back, _, body) = get(&h.state, "/hosted/simple/peryxpkg/", Some("application/json")).await;
+    assert_eq!(back, StatusCode::OK);
+    assert!(body.contains("peryxpkg-1.0"));
+}
+#[tokio::test]
+async fn test_soft_delete_twice_is_idempotent() {
+    let h = harness().await;
+    upload_peryxpkg(&h.state, "/hosted/", &fixture_wheel()).await;
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/peryxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    // Already trashed: a second delete matches nothing.
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/peryxpkg/1.0/", Some(&upload_auth())).await,
+        StatusCode::NOT_FOUND
+    );
+}
+#[tokio::test]
+async fn test_restore_one_version_leaves_the_other_trashed() {
+    let h = harness().await;
+    upload_version(&h.state, "/hosted/", "1.0").await;
+    upload_version(&h.state, "/hosted/", "2.0").await;
+    // Trash the whole project, then restore only 1.0.
+    assert_eq!(
+        request(&h.state, "DELETE", "/hosted/peryxpkg/", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&h.state, "PUT", "/hosted/peryxpkg/1.0/restore", Some(&upload_auth())).await,
+        StatusCode::OK
+    );
+    let (_, _, body) = get(&h.state, "/hosted/simple/peryxpkg/", Some("application/json")).await;
+    assert!(body.contains("peryxpkg-1.0"));
+    assert!(!body.contains("peryxpkg-2.0"));
+}
+#[tokio::test]
+async fn test_restore_with_only_live_uploads_is_not_found() {
+    let h = harness().await;
+    upload_peryxpkg(&h.state, "/hosted/", &fixture_wheel()).await;
+    // Nothing is trashed and no hidden override exists to clear.
+    assert_eq!(
+        request(&h.state, "PUT", "/hosted/peryxpkg/1.0/restore", Some(&upload_auth())).await,
+        StatusCode::NOT_FOUND
+    );
+}
+#[tokio::test]
 async fn test_delete_project_named_promote() {
     let h = harness().await;
     put_local_project(&h.state, "promote", "promote-1.0-py3-none-any.whl", b"payload", "1.0");

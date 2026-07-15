@@ -95,7 +95,12 @@ async fn test_search_rebuilds_after_yank_and_hide_overrides() {
     assert_eq!(value["total"], 1);
     assert_eq!(value["results"][0]["type"], "override");
 
-    cache::remove_files(&h.state, h.state.index_at(2), "hosted", true, "flask", None)
+    let trash = cache::TrashContext {
+        deleted_at_unix: 0,
+        actor: None,
+        reason: None,
+    };
+    cache::remove_files(&h.state, h.state.index_at(2), "hosted", true, "flask", None, trash)
         .await
         .unwrap();
     let (status, _headers, body) = get(

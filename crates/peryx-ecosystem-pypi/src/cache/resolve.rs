@@ -277,7 +277,8 @@ pub(super) fn known_metadata(state: &ServingState, files: &[File]) -> Result<BTr
 }
 
 /// Build a hosted (uploaded) project's detail from its stored file records. Yank markers are kept, so
-/// yanked files stay downloadable but are skipped by resolvers.
+/// yanked files stay downloadable but are skipped by resolvers; soft-deleted files are dropped, so a
+/// project whose files are all trashed reads as absent.
 pub(super) fn local_detail(
     state: &ServingState,
     name: &str,
@@ -291,8 +292,14 @@ pub(super) fn local_detail(
     let mut versions = BTreeSet::new();
     for (_filename, bytes) in entries {
         let uploaded: Uploaded = serde_json::from_slice(&bytes)?;
+        if uploaded.trashed.is_some() {
+            continue;
+        }
         versions.insert(uploaded.version);
         files.push(uploaded.file);
+    }
+    if files.is_empty() {
+        return Ok(None);
     }
     let mut detail = ProjectDetail {
         meta: Meta::default(),

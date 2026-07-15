@@ -77,6 +77,7 @@ pub(super) fn put_uploaded_package_with_metadata(
             gpg_sig: None,
             provenance: Provenance::Absent,
         },
+        trashed: None,
     };
     state
         .meta

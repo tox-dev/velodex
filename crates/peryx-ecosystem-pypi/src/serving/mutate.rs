@@ -215,7 +215,7 @@ fn restore_request(
     count_response(result)
 }
 
-/// `DELETE /{route}/{project}/[{version}/]` removes files: uploads are deleted outright (volatile
+/// `DELETE /{route}/{project}/[{version}/]` removes files: uploads are soft-deleted to trash (volatile
 /// indexes only), read-only upstream files are hidden reversibly. A `.../yank` suffix un-yanks.
 pub async fn pypi_dispatch_delete(state: Arc<ServingState>, uri: axum::http::Uri, headers: HeaderMap) -> Response {
     state.requests.fetch_add(1, Ordering::Relaxed);
@@ -251,7 +251,22 @@ pub async fn pypi_dispatch_delete(state: Arc<ServingState>, uri: axum::http::Uri
         Err(response) => return response,
     };
     let volatile = is_volatile(hosted);
-    let result = cache::remove_files(&state, index, &hosted.name, volatile, &project, version.as_deref()).await;
+    let reason = delete_reason(uri.query());
+    let trash = cache::TrashContext {
+        deleted_at_unix: (state.clock)(),
+        actor: actor.as_deref(),
+        reason: reason.as_deref(),
+    };
+    let result = cache::remove_files(
+        &state,
+        index,
+        &hosted.name,
+        volatile,
+        &project,
+        version.as_deref(),
+        trash,
+    )
+    .await;
     let audit = MutationAudit {
         headers: &headers,
         action: "delete",
@@ -411,6 +426,18 @@ fn parse_project_version(spec: &str) -> Result<(String, Option<String>), Respons
         path::validate_path_segment("version", version).map_err(|err| path_error_response(&err))?;
     }
     Ok((normalize_name(&project), version))
+}
+
+/// The soft-delete reason from a DELETE query's `reason=`, recorded in the trash metadata. Absent when
+/// no query, no `reason`, or an empty one.
+fn delete_reason(query: Option<&str>) -> Option<String> {
+    let mut reason = None;
+    for (key, value) in url::form_urlencoded::parse(query?.as_bytes()) {
+        if key == "reason" && !value.is_empty() {
+            reason = Some(value.into_owned());
+        }
+    }
+    reason
 }
 
 fn yank_marker(query: Option<&str>) -> Yanked {

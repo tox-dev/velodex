@@ -31,6 +31,25 @@ use peryx_core::path::{local_file_url, validate_filename};
 pub struct Uploaded {
     pub version: String,
     pub file: File,
+    /// Set when the file is soft-deleted. The record and its blob stay in the store for recovery,
+    /// but every served page hides the file until a restore clears this or a purge removes it. Absent
+    /// on a live file, and skipped on the wire so an untrashed record encodes exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed: Option<TrashInfo>,
+}
+
+/// The provenance a soft-delete keeps about a trashed file, so a later restore or audit has the
+/// context an immediate delete would have thrown away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrashInfo {
+    /// When the file was trashed, as a Unix timestamp.
+    pub deleted_at_unix: i64,
+    /// The token or actor that deleted it, when the request carried an identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    /// The operator's stated reason, when the delete request supplied one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The fields peryx reads from an upload's multipart form. Every field is optional here so the
@@ -253,7 +272,11 @@ pub fn prepare(
         digest,
         content: staged.blob,
         metadata,
-        record: Uploaded { version, file },
+        record: Uploaded {
+            version,
+            file,
+            trashed: None,
+        },
     })
 }
 

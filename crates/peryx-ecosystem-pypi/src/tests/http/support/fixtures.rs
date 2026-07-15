@@ -293,6 +293,7 @@ pub fn upload_record(
             gpg_sig: None,
             provenance: Provenance::Absent,
         },
+        trashed: None,
     }
 }
 pub fn put_local_file(state: &AppState, filename: &str, bytes: &[u8], version: &str) -> Digest {

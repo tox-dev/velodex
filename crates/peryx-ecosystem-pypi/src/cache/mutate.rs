@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::store::PypiStore as _;
 use crate::store::{Guard, UploadMutation};
-use crate::upload::{self, PreparedUpload, Uploaded};
+use crate::upload::{self, PreparedUpload, TrashInfo, Uploaded};
 use crate::{ProjectStatus, Yanked, file_matches_version, parse_distribution_filename, to_json, versions_match};
 use peryx_core::path::local_file_url;
 use peryx_driver::state::ServingState;
@@ -142,10 +142,20 @@ fn yank_override_value(yanked: &Yanked) -> Result<Option<String>, CacheError> {
     })
 }
 
+/// The provenance a soft-delete records on each file it trashes, threaded from the delete request.
+#[derive(Clone, Copy)]
+pub struct TrashContext<'a> {
+    pub deleted_at_unix: i64,
+    pub actor: Option<&'a str>,
+    pub reason: Option<&'a str>,
+}
+
 /// Remove a project's files as served by `index`.
 ///
-/// Uploaded files are deleted outright (requires `volatile`); read-only upstream files get a
-/// reversible `hidden` override on `hosted`. Returns how many files were affected.
+/// Uploaded files are soft-deleted (requires `volatile`): the record is marked trashed and its blob
+/// kept, so the file drops out of every served page but stays recoverable until a restore or a purge.
+/// Read-only upstream files get a reversible `hidden` override on `hosted`. Returns how many files
+/// were affected.
 ///
 /// # Errors
 /// Returns [`CacheError::NotVolatile`] when uploaded files match but the hosted store is not
@@ -157,28 +167,17 @@ pub async fn remove_files(
     volatile: bool,
     normalized: &str,
     version: Option<&str>,
+    trash: TrashContext<'_>,
 ) -> Result<usize, CacheError> {
     let filenames = served_filenames(state, index, normalized, version).await?;
-    let (uploaded, mut affected) = if let Some(version) = version {
-        delete_uploads_of_version(state, hosted, volatile, normalized, version)?
-    } else {
-        (upload_filenames(state, hosted, normalized)?, 0)
-    };
+    let uploaded = upload_filenames(state, hosted, normalized)?;
+    let mut affected = trash_uploads(state, hosted, volatile, normalized, version, trash)?;
     for filename in filenames {
         if uploaded.contains(&filename) {
-            if version.is_some() {
-                continue;
-            }
-            if !volatile {
-                return Err(CacheError::NotVolatile);
-            }
-            if state.meta.delete_upload(hosted, normalized, &filename)? {
-                affected += 1;
-            }
-        } else {
-            state.meta.put_override(hosted, normalized, &filename, HIDDEN)?;
-            affected += 1;
+            continue;
         }
+        state.meta.put_override(hosted, normalized, &filename, HIDDEN)?;
+        affected += 1;
     }
     if affected > 0 {
         state.bump_epoch();
@@ -186,8 +185,8 @@ pub async fn remove_files(
     Ok(affected)
 }
 
-/// Clear `hidden` overrides for a project (optionally one version), restoring upstream files that a
-/// delete removed from the merged page. Returns how many files reappeared.
+/// Restore a project's files (optionally one version): clear `hidden` overrides so a deleted upstream
+/// file reappears, and un-trash soft-deleted uploaded files. Returns how many files reappeared.
 ///
 /// # Errors
 /// Returns [`CacheError`] on a store failure.
@@ -197,7 +196,7 @@ pub fn restore_files(
     normalized: &str,
     version: Option<&str>,
 ) -> Result<usize, CacheError> {
-    let mut restored = 0;
+    let mut restored = untrash_uploads(state, hosted, normalized, version)?;
     for (filename, kind) in state.meta.list_overrides(hosted, normalized)? {
         if kind != HIDDEN {
             continue;
@@ -300,28 +299,57 @@ fn upload_filenames(state: &ServingState, hosted: &str, normalized: &str) -> Res
         .collect())
 }
 
-fn delete_uploads_of_version(
+/// Mark uploaded records trashed, optionally limited to one version. An already-trashed record is
+/// left as it is (delete is idempotent), and a non-volatile store rejects a live match rather than
+/// touching it. The blob is never removed here, so the file stays recoverable. Returns how many
+/// records were trashed.
+fn trash_uploads(
     state: &ServingState,
     name: &str,
     volatile: bool,
     normalized: &str,
-    version: &str,
-) -> Result<(HashSet<String>, usize), CacheError> {
-    let mut filenames = HashSet::new();
-    let affected = state
+    version: Option<&str>,
+    trash: TrashContext<'_>,
+) -> Result<usize, CacheError> {
+    state
         .meta
-        .mutate_uploads(name, normalized, "delete-file", |filename, bytes| {
-            filenames.insert(filename.to_owned());
-            let uploaded: Uploaded = serde_json::from_slice(bytes)?;
-            if !versions_match(&uploaded.version, version) {
+        .mutate_uploads(name, normalized, "delete-file", |_filename, bytes| {
+            let mut uploaded: Uploaded = serde_json::from_slice(bytes)?;
+            if version.is_some_and(|version| !versions_match(&uploaded.version, version)) || uploaded.trashed.is_some()
+            {
                 return Ok(UploadMutation::Keep);
             }
             if !volatile {
                 return Err(CacheError::NotVolatile);
             }
-            Ok(UploadMutation::Delete)
-        })?;
-    Ok((filenames, affected))
+            uploaded.trashed = Some(TrashInfo {
+                deleted_at_unix: trash.deleted_at_unix,
+                actor: trash.actor.map(str::to_owned),
+                reason: trash.reason.map(str::to_owned),
+            });
+            Ok(UploadMutation::Replace(to_json(&uploaded).into_bytes()))
+        })
+}
+
+/// Clear the trashed marker off soft-deleted uploaded records, optionally limited to one version, so
+/// the files return to every served page. Returns how many records were restored.
+fn untrash_uploads(
+    state: &ServingState,
+    name: &str,
+    normalized: &str,
+    version: Option<&str>,
+) -> Result<usize, CacheError> {
+    state
+        .meta
+        .mutate_uploads(name, normalized, "restore", |_filename, bytes| {
+            let mut uploaded: Uploaded = serde_json::from_slice(bytes)?;
+            if uploaded.trashed.is_none() || version.is_some_and(|version| !versions_match(&uploaded.version, version))
+            {
+                return Ok(UploadMutation::Keep);
+            }
+            uploaded.trashed = None;
+            Ok(UploadMutation::Replace(to_json(&uploaded).into_bytes()))
+        })
 }
 
 /// Set the yank state of uploaded files, optionally limited to one version. Returns how many
