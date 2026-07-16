@@ -130,6 +130,29 @@ value from, so no plaintext lives in the config file. peryx reads each file once
 whitespace; an empty file is a startup error. The rationale and the tools it composes with are in
 [client auth versus upstream credentials](@/core/access-explained.md).
 
+## Server-user records
+
+The metadata store can hold server users for management and later authentication features. A user receives a random,
+opaque ID at creation. Renaming changes its display name and canonical lookup key without changing that ID. This follows
+the [NIST subscriber-account model](https://pages.nist.gov/800-63-4/sp800-63a/accounts/), in which mutable account
+attributes do not replace the stable subject identifier.
+
+Display names are trimmed for storage. Lookups compare an NFC-normalized lowercase key, so case changes and equivalent
+composed Unicode spellings identify the same user. Creating or renaming to an existing canonical name fails without
+changing either account. The original display spelling remains available for presentation.
+
+New users are `active`. A disabled user remains inspectable by ID, but the next identity lookup no longer resolves it.
+Reactivation restores lookup. Create, rename, disable, and reactivate operations append actor-neutral lifecycle records
+in the same transaction as the account change. No operation in this lifecycle stores a password, token, role, or
+external identity subject.
+
+Opening an existing metadata store creates the user tables in one metadata transaction. Existing index configuration,
+cached package records, and access policy remain in their current tables. If table initialization fails, the transaction
+does not leave a partial user schema, and the prior metadata remains available to the existing recovery procedure.
+
+Server users do not yet authenticate package requests. Existing `upload_token` and `[[index.access_token]]` credentials
+keep their current subjects and behavior when a server user is renamed or disabled.
+
 ## What this does not do
 
 The model authorizes a client against peryx. It never sends a client's credential to an upstream: peryx reaches an

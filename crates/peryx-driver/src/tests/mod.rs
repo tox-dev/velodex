@@ -3,3 +3,4 @@ mod body_tests;
 mod conditional_tests;
 mod range_tests;
 mod state_tests;
+mod user_tests;

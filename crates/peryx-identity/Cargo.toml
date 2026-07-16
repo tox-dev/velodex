@@ -12,6 +12,8 @@ base64.workspace = true
 jsonwebtoken.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
