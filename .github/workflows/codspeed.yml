@@ -32,18 +32,18 @@ jobs:
         with:
           filters: |
             shared:
-              - 'crates/peryx-core/**'
-              - 'crates/peryx-storage/**'
-              - 'crates/peryx-http/**'
-              - 'crates/peryx-driver/**'
-              - 'crates/peryx-identity/**'
-              - 'crates/peryx-policy/**'
-              - 'crates/peryx-index/**'
-              - 'crates/peryx-events/**'
-              - 'crates/peryx-upstream/**'
-              - 'crates/peryx-search/**'
-              - 'crates/peryx-replication/**'
-              - 'crates/peryx/**'
+              - 'crates/peryx-core/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-storage/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-http/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-driver/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-identity/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-policy/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-index/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-events/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-upstream/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-search/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx-replication/{Cargo.toml,build.rs,src/**,benches/**}'
+              - 'crates/peryx/{Cargo.toml,build.rs,src/**,benches/**}'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.cargo/**'
@@ -55,9 +55,9 @@ jobs:
             workflow:
               - '.github/workflows/codspeed.yml'
             pypi:
-              - 'crates/peryx-ecosystem-pypi/**'
+              - 'crates/peryx-ecosystem-pypi/{Cargo.toml,build.rs,src/**,benches/**}'
             oci:
-              - 'crates/peryx-ecosystem-oci/**'
+              - 'crates/peryx-ecosystem-oci/{Cargo.toml,build.rs,src/**,benches/**}'
       - id: matrix
         env:
           EVENT: ${{ github.event_name }}
