@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -16,8 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Pull requests and merge groups build affected benchmark legs. Pushes and manual runs refresh the
-  # complete baseline.
+  # Pull requests build affected benchmark legs. Pushes and manual runs refresh the complete baseline.
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -280,13 +277,9 @@ jobs:
       # memory-heavy whole-program link. Cargo's standard optimized benchmark profile disables LTO;
       # use that here so changed sources remain quick to link. Production and dist builds keep LTO.
       CARGO_PROFILE_RELEASE_LTO: "false"
-      # CodSpeed does not support GitHub's merge_group event. Pull requests carry the performance
-      # gate; queue commits compile affected suites without trying to publish an invalid event.
-      CODSPEED_BUILD_ONLY: ${{ github.event_name == 'merge_group' }}
       CODSPEED_SKIP_UPLOAD: >-
-        ${{ github.event_name == 'merge_group' ||
-            (github.event_name == 'pull_request' &&
-             (needs.changes.outputs.workflow_changed == 'true' || needs.baseline.outputs.compatible != 'true')) }}
+        ${{ github.event_name == 'pull_request' &&
+            (needs.changes.outputs.workflow_changed == 'true' || needs.baseline.outputs.compatible != 'true') }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
