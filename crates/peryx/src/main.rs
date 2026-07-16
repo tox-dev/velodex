@@ -27,6 +27,7 @@ fn resolve_config(args: &peryx::cli::RuntimeArgs) -> anyhow::Result<Config> {
     let mut cfg = resolve_config_file(args.config.as_deref())?;
     cfg = cfg.apply(config::from_env()?)?;
     cfg = cfg.apply(args.overlay())?;
+    cfg.validate()?;
     Ok(cfg)
 }
 

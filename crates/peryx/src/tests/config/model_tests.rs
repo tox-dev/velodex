@@ -30,3 +30,40 @@ fn test_default_config() {
     assert!(matches!(&c.indexes[4].kind, IndexKind::Hosted { .. }));
     assert!(matches!(&c.indexes[5].kind, IndexKind::Virtual { upload: Some(target), .. } if target == "images"));
 }
+
+#[test]
+fn test_config_rejects_a_blank_writer_identity() {
+    let config = Config {
+        writer_identity: Some(" \t".to_owned()),
+        ..Config::default()
+    };
+
+    assert_eq!(
+        config.validate().unwrap_err().to_string(),
+        "writer identity: must not be blank"
+    );
+}
+
+#[test]
+fn test_config_requires_a_writer_identity_in_replica_mode() {
+    let config = Config {
+        read_only: true,
+        ..Config::default()
+    };
+
+    assert_eq!(
+        config.validate().unwrap_err().to_string(),
+        "writer identity: required in read replica mode"
+    );
+}
+
+#[test]
+fn test_config_accepts_a_replica_writer_identity() {
+    let config = Config {
+        writer_identity: Some("writer-a".to_owned()),
+        read_only: true,
+        ..Config::default()
+    };
+
+    config.validate().unwrap();
+}

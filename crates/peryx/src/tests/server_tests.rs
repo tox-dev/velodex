@@ -207,6 +207,7 @@ fn test_build_state_makes_replica_upstreams_offline() {
     let dir = tempfile::tempdir().unwrap();
     let state = build_state(&Config {
         data_dir: dir.path().to_path_buf(),
+        writer_identity: Some("writer-a".to_owned()),
         read_only: true,
         ..Config::default()
     })
@@ -216,6 +217,26 @@ fn test_build_state_makes_replica_upstreams_offline() {
         peryx_driver::IndexKind::Cached { offline, .. } => *offline,
         peryx_driver::IndexKind::Hosted { .. } | peryx_driver::IndexKind::Virtual { .. } => true,
     }));
+}
+
+#[test]
+fn test_build_state_rejects_a_replica_without_writer_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Config {
+        data_dir: dir.path().to_path_buf(),
+        read_only: true,
+        ..Config::default()
+    };
+
+    let Err(error) = build_state(&config) else {
+        panic!("expected invalid replica configuration");
+    };
+
+    assert_eq!(
+        format!("{error:#}"),
+        "validate configuration: writer identity: required in read replica mode"
+    );
+    assert!(!dir.path().join("peryx.redb").exists());
 }
 
 #[test]

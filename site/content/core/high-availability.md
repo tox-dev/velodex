@@ -22,6 +22,9 @@ Enable replica mode in TOML:
 read_only = true
 ```
 
+A replica must retain the writer's identity in its configuration. peryx refuses to start replica mode when the identity
+is missing or blank.
+
 ```shell
 PERYX_READ_ONLY=true peryx serve --config peryx.toml
 peryx serve --config peryx.toml --read-only

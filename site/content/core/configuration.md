@@ -60,7 +60,8 @@ Use `peryx mirror sync` before enabling offline mode on a machine that must run 
 `read_only = true` runs the process as a [read replica](@/core/high-availability.md). It rejects each HTTP mutation with
 `503 Service Unavailable`, disables upstream cache fills, webhook delivery, and background maintenance, and reports the
 replica role through `GET /+status`. Use this mode only with a data directory populated by backup restore or an external
-replication system.
+replication system. Replica mode requires a nonblank `writer_identity`; peryx refuses startup without the identity that
+the promotion command must replace.
 
 `writer_identity` enables the single-writer startup guard. A writer claims this value in the metadata store at startup;
 another configured identity cannot start against that store. Replica mode does not claim it, so a restored config
