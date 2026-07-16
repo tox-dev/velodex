@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: codspeed-${{ github.ref }}
-  cancel-in-progress: true
+  group: codspeed-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Path-based gating so a PR that only touches one ecosystem benches just that leg. bench_matrix is
@@ -81,47 +81,77 @@ jobs:
           IFS=,
           echo "include=[${legs[*]}]" >> "$GITHUB_OUTPUT"
 
-  base:
-    name: Base benchmark
+  baseline:
+    name: Compatible baseline
     needs: changes
-    # A workflow repair cannot have a successful base run using its new workflow. Its operation jobs
-    # still validate the benchmark path before merge; the next main run becomes the new baseline.
     if: >-
       github.event_name == 'pull_request' &&
-      needs.changes.outputs.bench_matrix != '[]' &&
-      needs.changes.outputs.workflow_changed != 'true'
-    concurrency:
-      group: codspeed-base-${{ github.ref }}
-      cancel-in-progress: true
+      needs.changes.outputs.bench_matrix != '[]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
+    outputs:
+      compatible: ${{ steps.baseline.outputs.compatible }}
     steps:
-      - name: Wait for benchmark
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+      - name: Find compatible baseline
+        id: baseline
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          while true; do
-            run=$(
-              gh run list \
-                --workflow codspeed.yml \
-                --branch main \
-                --event push \
-                --commit "$BASE_SHA" \
-                --limit 1 \
-                --json conclusion,status \
-                --jq '.[0] | [.status, .conclusion] | @tsv'
-            )
-            case "$run" in
-              $'completed\tsuccess') break ;;
-              $'completed\t'*) echo "Base CodSpeed run failed: $run"; exit 1 ;;
-            esac
-            sleep 15
+          set -euo pipefail
+          echo "compatible=false" >> "$GITHUB_OUTPUT"
+
+          main_sha=$(gh api "repos/$GH_REPO/commits/$DEFAULT_BRANCH" --jq .sha) || exit 0
+          baseline_sha=$(
+            gh run list \
+              --repo "$GH_REPO" \
+              --workflow codspeed.yml \
+              --branch "$DEFAULT_BRANCH" \
+              --event push \
+              --status success \
+              --limit 1 \
+              --json headSha \
+              --jq '.[0].headSha'
+          ) || exit 0
+          if [[ -z "$baseline_sha" ]]; then
+            echo "No successful main benchmark is available."
+            exit 0
+          fi
+
+          for revision in "$main_sha" "$baseline_sha"; do
+            git cat-file -e "$revision^{commit}" 2>/dev/null || git fetch --depth=1 origin "$revision"
           done
+
+          runtime_id() {
+            local revision=$1
+            local path
+            {
+              for path in \
+                .github/codspeed/Dockerfile \
+                .github/workflows/codspeed.yml \
+                ci/run-codspeed.sh; do
+                printf '%s\0' "$path"
+                git show "$revision:$path"
+                printf '\0'
+              done
+            } | sha256sum | cut -d ' ' -f 1
+          }
+
+          head_runtime=$(runtime_id HEAD)
+          main_runtime=$(runtime_id "$main_sha")
+          baseline_runtime=$(runtime_id "$baseline_sha")
+          if [[ "$head_runtime" == "$main_runtime" && "$main_runtime" == "$baseline_runtime" ]]; then
+            echo "compatible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No compatible main benchmark is available; results will not be uploaded."
+          fi
 
   codspeed-image:
     name: CodSpeed runtime image
@@ -193,10 +223,10 @@ jobs:
 
   operations:
     name: ${{ matrix.ecosystem }} operation benchmarks
-    needs: [changes, base, codspeed-image]
+    needs: [changes, baseline, codspeed-image]
     if: >-
       always() &&
-      (needs.base.result == 'success' || needs.base.result == 'skipped') &&
+      (needs.baseline.result == 'success' || needs.baseline.result == 'skipped') &&
       needs.codspeed-image.result == 'success' &&
       needs.codspeed-image.outputs.available == 'true' &&
       needs.changes.outputs.bench_matrix != '[]'
@@ -236,9 +266,9 @@ jobs:
       # thin LTO for the benchmark build only, so it parallelises, fits memory, and caches
       # incrementally. Production and dist builds keep fat LTO; only relative measurement matters here.
       CARGO_PROFILE_RELEASE_LTO: thin
-      # A workflow repair validates the runner but cannot compare against results from the old runtime.
       CODSPEED_SKIP_UPLOAD: >-
-        ${{ github.event_name == 'pull_request' && needs.changes.outputs.workflow_changed == 'true' }}
+        ${{ github.event_name == 'pull_request' &&
+            (needs.changes.outputs.workflow_changed == 'true' || needs.baseline.outputs.compatible != 'true') }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -257,7 +287,7 @@ jobs:
   # fails if any failed or was cancelled.
   codspeed-gate:
     if: always()
-    needs: [changes, base, codspeed-image, operations]
+    needs: [changes, baseline, codspeed-image, operations]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify no required job failed
