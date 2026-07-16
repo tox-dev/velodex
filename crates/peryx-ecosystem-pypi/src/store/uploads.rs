@@ -4,6 +4,7 @@ use peryx_storage::meta::{MetaError, MetaScanError, MetaStore};
 
 use super::journal::JournalEntry;
 use super::{OVERRIDE_PREFIX, UPLOAD_PREFIX, metadata_key, metadata_value, override_key, project_key, upload_key};
+use crate::distribution_version_segment;
 
 /// The PEP 658 metadata sibling recorded alongside a published file.
 pub struct MetadataSibling<'a> {
@@ -158,6 +159,7 @@ pub fn promote_files_checked<E: From<MetaError>>(
 ) -> Result<usize, E> {
     meta.commit_driver_txn(|txn| {
         let mut written = 0;
+        let mut journal = Vec::new();
         for (filename, token, record) in release.records {
             let key = upload_key(release.index, release.normalized, filename);
             match guard(filename, token, txn.get(&key)?.as_deref())? {
@@ -168,6 +170,13 @@ pub fn promote_files_checked<E: From<MetaError>>(
                         txn.reference_blob(token, *size);
                     }
                     written += 1;
+                    journal.push(journal_bytes(
+                        "add-file",
+                        release.normalized,
+                        journal_version(filename, record).as_deref(),
+                        Some(filename),
+                        release.submitted_at_unix,
+                    ));
                 }
             }
         }
@@ -176,16 +185,7 @@ pub fn promote_files_checked<E: From<MetaError>>(
         }
         let project = project_key(release.index, release.normalized);
         txn.put(&project, release.display.as_bytes())?;
-        Ok((
-            written,
-            vec![journal_bytes(
-                "promote",
-                release.normalized,
-                None,
-                None,
-                release.submitted_at_unix,
-            )],
-        ))
+        Ok((written, journal))
     })
 }
 
@@ -231,7 +231,7 @@ pub fn mutate_uploads<E: From<MetaError>>(
             journal.push(journal_bytes(
                 action,
                 normalized,
-                None,
+                journal_version(filename, &record).as_deref(),
                 Some(filename),
                 submitted_at_unix,
             ));
@@ -276,13 +276,15 @@ pub fn delete_upload(
     submitted_at_unix: i64,
 ) -> Result<bool, MetaError> {
     meta.commit_driver_txn(|txn| {
-        if txn.remove(&upload_key(index, normalized, filename))? {
+        let key = upload_key(index, normalized, filename);
+        if let Some(record) = txn.get(&key)? {
+            txn.remove(&key)?;
             Ok((
                 true,
                 vec![journal_bytes(
                     "delete-file",
                     normalized,
-                    None,
+                    journal_version(filename, &record).as_deref(),
                     Some(filename),
                     submitted_at_unix,
                 )],
@@ -343,7 +345,7 @@ pub fn put_override(
             vec![journal_bytes(
                 action,
                 normalized,
-                None,
+                distribution_version_segment(filename),
                 Some(filename),
                 submitted_at_unix,
             )],
@@ -378,7 +380,7 @@ pub fn delete_override(
             vec![journal_bytes(
                 action,
                 normalized,
-                None,
+                distribution_version_segment(filename),
                 Some(filename),
                 submitted_at_unix,
             )],
@@ -440,6 +442,13 @@ fn journal_bytes(
     .expect("journal entry always serializes")
 }
 
+fn journal_version(filename: &str, record: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(record)
+        .ok()
+        .and_then(|value| value["version"].as_str().map(str::to_owned))
+        .or_else(|| distribution_version_segment(filename).map(str::to_owned))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -499,11 +508,11 @@ mod tests {
             "the sibling row is written"
         );
         assert_eq!(meta.get_project("hosted", "flask").unwrap().as_deref(), Some("Flask"));
-        assert_eq!(meta.current_serial().unwrap(), 1, "the publish is journaled");
-        assert_eq!(
-            read_journal_entries(&meta, 0, 1).unwrap().entries[0].submitted_at_unix,
-            123
-        );
+        let journal = read_journal_entries(&meta, 0, 1).unwrap().entries.pop().unwrap();
+        assert_eq!(journal.action, "add-file");
+        assert_eq!(journal.version.as_deref(), Some("1.0"));
+        assert_eq!(journal.filename.as_deref(), Some("flask-1.0.whl"));
+        assert_eq!(journal.submitted_at_unix, 123);
     }
 
     #[test]
@@ -596,7 +605,7 @@ mod tests {
         let records = vec![(
             "flask-1.0.whl".to_owned(),
             "artifact-sha".to_owned(),
-            b"record".to_vec(),
+            br#"{"version":"1.0"}"#.to_vec(),
         )];
         let blob_sizes = BTreeMap::from([("artifact-sha".to_owned(), 8)]);
 
@@ -622,7 +631,7 @@ mod tests {
             meta.get_driver_value(&upload_key("hosted", "flask", "flask-1.0.whl"))
                 .unwrap()
                 .as_deref(),
-            Some(b"record".as_slice())
+            Some(br#"{"version":"1.0"}"#.as_slice())
         );
         assert_eq!(meta.get_project("hosted", "flask").unwrap().as_deref(), Some("Flask"));
         let batch = meta.journal_after(0, 1).unwrap().pop().unwrap();
@@ -633,10 +642,11 @@ mod tests {
                 size: 8,
             }]
         );
-        assert_eq!(
-            read_journal_entries(&meta, 0, 1).unwrap().entries[0].submitted_at_unix,
-            123
-        );
+        let journal = read_journal_entries(&meta, 0, 1).unwrap().entries.pop().unwrap();
+        assert_eq!(journal.action, "add-file");
+        assert_eq!(journal.version.as_deref(), Some("1.0"));
+        assert_eq!(journal.filename.as_deref(), Some("flask-1.0.whl"));
+        assert_eq!(journal.submitted_at_unix, 123);
     }
 
     #[test]
@@ -692,6 +702,26 @@ mod tests {
             2,
             "each rewritten record allocates its own serial"
         );
+        assert_eq!(
+            read_journal_entries(&meta, 0, 2)
+                .unwrap()
+                .entries
+                .into_iter()
+                .map(|entry| (entry.action, entry.version, entry.filename))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "yank".to_owned(),
+                    Some("1.0".to_owned()),
+                    Some("flask-1.0.whl".to_owned()),
+                ),
+                (
+                    "yank".to_owned(),
+                    Some("2.0".to_owned()),
+                    Some("flask-2.0.whl".to_owned()),
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -720,6 +750,10 @@ mod tests {
             meta.current_serial().unwrap(),
             1,
             "only the removed record is journaled"
+        );
+        assert_eq!(
+            read_journal_entries(&meta, 0, 1).unwrap().entries[0].version.as_deref(),
+            Some("1.0")
         );
     }
 
@@ -752,6 +786,10 @@ mod tests {
                 .is_none()
         );
         assert_eq!(meta.current_serial().unwrap(), 1, "the deletion is journaled");
+        assert_eq!(
+            read_journal_entries(&meta, 0, 1).unwrap().entries[0].version.as_deref(),
+            Some("1.0")
+        );
     }
 
     #[test]
@@ -778,6 +816,10 @@ mod tests {
             Some(b"hidden".as_slice())
         );
         assert_eq!(meta.current_serial().unwrap(), 1, "the override is journaled");
+        assert_eq!(
+            read_journal_entries(&meta, 0, 1).unwrap().entries[0].version.as_deref(),
+            Some("1.0")
+        );
     }
 
     #[test]
@@ -831,6 +873,10 @@ mod tests {
                 .is_none()
         );
         assert_eq!(meta.current_serial().unwrap(), 1, "the restore is journaled");
+        assert_eq!(
+            read_journal_entries(&meta, 0, 1).unwrap().entries[0].version.as_deref(),
+            Some("1.0")
+        );
     }
 
     #[test]

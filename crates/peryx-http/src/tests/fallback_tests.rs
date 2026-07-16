@@ -311,6 +311,31 @@ fn test_serving_for_path_resolves_a_request_uri_path() {
 }
 
 #[tokio::test]
+async fn test_post_without_multipart_content_type_is_bad_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = peryx_storage::meta::MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+    let blobs = peryx_storage::blob::BlobStore::new(dir.path().join("blobs"));
+    let mut state = AppState::new(meta, blobs, 60, vec![pypi_index("pypi")]);
+    state.register_ecosystem(
+        std::sync::Arc::new(StubServing(peryx_core::Ecosystem::Pypi)),
+        std::sync::Arc::new(peryx_search::EmptyIndexer),
+    );
+
+    let response = crate::router(std::sync::Arc::new(state))
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/pypi/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_two_route_mounted_ecosystems_each_serve_their_own_indexes() {
     let dir = tempfile::tempdir().unwrap();
     let meta = peryx_storage::meta::MetaStore::open(dir.path().join("peryx.redb")).unwrap();
@@ -385,6 +410,11 @@ async fn test_bare_driver_serving_methods_reach_the_wrong_mount_guard() {
         .serve(serving.clone(), Request::builder().body(Body::empty()).unwrap())
         .await;
     assert_eq!(serve.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(driver.classify_service_post("x", &HeaderMap::new()), None);
+    let service_post = driver
+        .service_post(serving.clone(), Request::builder().body(Body::empty()).unwrap())
+        .await;
+    assert_eq!(service_post.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let get = driver
         .get(
             serving.clone(),

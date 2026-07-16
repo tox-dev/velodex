@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::extract::Multipart;
+use axum::extract::{Multipart, Request};
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use peryx_core::Ecosystem;
@@ -32,6 +32,7 @@ use peryx_storage::blob::Digest;
 use crate::cache::{self};
 use crate::discovery;
 
+mod changelog;
 mod get;
 mod inspect;
 mod mutate;
@@ -40,6 +41,7 @@ mod response;
 mod upload_form;
 mod web;
 
+use changelog::{is_changelog_path, pypi_changelog};
 use get::pypi_dispatch_get;
 use mutate::{pypi_dispatch_delete, pypi_dispatch_put};
 use post::pypi_dispatch_post;
@@ -203,6 +205,14 @@ const PYPI_FAMILIES: &[MetricFamily] = &[METADATA_FAMILY];
 impl EcosystemDriver for PypiServing {
     fn ecosystem(&self) -> Ecosystem {
         Ecosystem::Pypi
+    }
+
+    fn classify_service_post(&self, path: &str, headers: &HeaderMap) -> Option<RouteClass> {
+        is_changelog_path(path, headers).then_some(RouteClass::Listing)
+    }
+
+    async fn service_post(&self, state: Arc<ServingState>, request: Request) -> Response {
+        pypi_changelog(state, request).await
     }
 
     async fn get(

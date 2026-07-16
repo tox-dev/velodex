@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use axum::extract::{Multipart, OriginalUri, Path, Request, State};
+use axum::extract::{FromRequest as _, Multipart, OriginalUri, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
@@ -86,16 +86,22 @@ pub async fn dispatch_get(
     }
 }
 
-/// `POST /{route}/`: hand the upload to the index's ecosystem driver.
-pub async fn dispatch_post(
-    State(state): State<Arc<AppState>>,
-    Path(path): Path<String>,
-    headers: HeaderMap,
-    multipart: Multipart,
-) -> Response {
+/// `POST /{*path}`: serve a driver's non-multipart compatibility route or dispatch an index upload.
+pub async fn dispatch_post(State(state): State<Arc<AppState>>, Path(path): Path<String>, request: Request) -> Response {
+    if let Some(serving) = state
+        .drivers()
+        .find(|driver| driver.classify_service_post(&path, request.headers()).is_some())
+    {
+        return serving.service_post(state.serving.clone(), request).await;
+    }
     let serving = match driver_for(&state, &path) {
         Ok(serving) => serving.clone(),
         Err(reason) => return reason.response(),
+    };
+    let headers = request.headers().clone();
+    let multipart = match Multipart::from_request(request, &()).await {
+        Ok(multipart) => multipart,
+        Err(rejection) => return rejection.into_response(),
     };
     serving.post(state.serving.clone(), path, headers, multipart).await
 }

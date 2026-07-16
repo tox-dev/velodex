@@ -24,6 +24,7 @@ pub use index::{
     get_index, get_project_status, list_index_pages, put_cached_page, put_index, scan_index_pages, scan_index_records,
     touch_index_freshness,
 };
+pub(crate) use journal::{ChangelogReadError, read_changelog_page};
 pub use journal::{JournalEntry, JournalSnapshot, read_journal_entries};
 pub use peryx_driver::serving::{IndexSummary, RecentUpload};
 pub use projects::{

@@ -68,18 +68,24 @@ pub fn router(state: Arc<AppState>) -> Router {
         router
     };
     let router = if state.read_only {
-        router.layer(middleware::from_fn(reject_replica_mutation))
+        router.layer(middleware::from_fn_with_state(state.clone(), reject_replica_mutation))
     } else {
         router
     };
     router.with_state(state)
 }
 
-async fn reject_replica_mutation(request: Request, next: Next) -> Response {
+async fn reject_replica_mutation(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
     if matches!(
         *request.method(),
         axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
-    ) {
+    ) || (*request.method() == axum::http::Method::POST
+        && state.drivers().any(|driver| {
+            driver
+                .classify_service_post(request.uri().path().trim_start_matches('/'), request.headers())
+                .is_some()
+        }))
+    {
         return next.run(request).await;
     }
     (

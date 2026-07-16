@@ -45,15 +45,22 @@ async fn test_yank_and_unyank_and_delete() {
             .unwrap()
             .entries
             .into_iter()
-            .map(|entry| (entry.action, entry.submitted_at_unix))
+            .map(|entry| (entry.action, entry.version, entry.filename, entry.submitted_at_unix))
             .collect::<Vec<_>>(),
         [
             ("add-file", 1000),
             ("yank", 2000),
             ("unyank", 3000),
-            ("delete-file", 4000)
+            ("delete-file", 4000),
         ]
-        .map(|(action, submitted)| (action.to_owned(), submitted))
+        .map(|(action, submitted)| {
+            (
+                action.to_owned(),
+                Some("1.0".to_owned()),
+                Some("peryxpkg-1.0-py3-none-any.whl".to_owned()),
+                submitted,
+            )
+        })
     );
 }
 #[tokio::test]

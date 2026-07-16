@@ -2,6 +2,7 @@
 
 mod support;
 
+mod changelog;
 mod discovery;
 mod download;
 mod inspect;

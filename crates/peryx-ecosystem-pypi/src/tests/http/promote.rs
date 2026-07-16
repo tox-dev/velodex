@@ -119,7 +119,15 @@ async fn test_promote_copies_release_records_without_copying_blobs() {
         .entries
         .pop()
         .unwrap();
-    assert_eq!((entry.action.as_str(), entry.submitted_at_unix), ("promote", 2000));
+    assert_eq!(
+        (
+            entry.action.as_str(),
+            entry.version.as_deref(),
+            entry.filename.as_deref(),
+            entry.submitted_at_unix,
+        ),
+        ("add-file", Some("1.0"), Some("peryxpkg-1.0-py3-none-any.whl"), 2000,)
+    );
 }
 
 #[tokio::test]

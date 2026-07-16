@@ -420,6 +420,16 @@ pub trait EcosystemDriver: Send + Sync {
         wrong_mount()
     }
 
+    /// Classify a process-wide service `POST` this driver owns, or return `None` for normal dispatch.
+    fn classify_service_post(&self, _path: &str, _headers: &HeaderMap) -> Option<crate::rate_limit::RouteClass> {
+        None
+    }
+
+    /// Serve a process-wide endpoint claimed by [`classify_service_post`](Self::classify_service_post).
+    async fn service_post(&self, _state: Arc<ServingState>, _request: Request) -> Response {
+        wrong_mount()
+    }
+
     /// Serve a GET or HEAD for an [`Indexed`](RouteMount::Indexed) wire-protocol path. The router has
     /// resolved the request to index `position`, with `rest` the sub-path after the index route.
     ///

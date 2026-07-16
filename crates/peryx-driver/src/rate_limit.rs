@@ -392,10 +392,17 @@ pub struct UpstreamLimited {
 
 pub async fn enforce(State(state): State<Arc<AppState>>, request: axum::extract::Request, next: Next) -> Response {
     let path = request.uri().path();
-    let class = service_route_class(request.method(), path);
+    let service_post_class = if *request.method() == Method::POST {
+        state
+            .drivers()
+            .find_map(|driver| driver.classify_service_post(path.trim_start_matches('/'), request.headers()))
+    } else {
+        None
+    };
+    let class = service_post_class.or_else(|| service_route_class(request.method(), path));
     let has_authorization = request.headers().contains_key(header::AUTHORIZATION);
     // Avoid a second route lookup when credential validation and read classification both need the driver.
-    let resolved_driver = if class.is_none() || has_authorization {
+    let resolved_driver = if service_post_class.is_none() && (class.is_none() || has_authorization) {
         route_driver(&state, path)
     } else {
         None
