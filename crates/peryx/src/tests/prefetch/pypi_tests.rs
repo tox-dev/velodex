@@ -1,13 +1,15 @@
+use std::collections::BTreeMap;
+
 use peryx_ecosystem_pypi::store::CachedIndex;
 use peryx_ecosystem_pypi::store::PypiStore as _;
 use peryx_storage::blob::{BlobStore, Digest};
 use peryx_storage::meta::MetaStore;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header as match_header, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
 use super::*;
 use crate::cli::{PrefetchPlanArgs, PrefetchSyncArgs, PrefetchVerifyArgs};
-use crate::config::PrefetchMode;
+use crate::config::{PrefetchMode, SecretSource, UpstreamConfig, UpstreamRoutingConfig};
 
 fn wheel_page(server: &MockServer, wheel: &[u8], metadata: &[u8]) -> String {
     to_json(&serde_json::json!({
@@ -249,6 +251,82 @@ async fn test_mirror_sync_downloads_then_reuses_cached_blobs() {
     let blobs = BlobStore::new(dir.path().join("blobs"));
     assert!(blobs.exists(&wheel_digest));
     assert!(blobs.exists(&metadata_digest));
+}
+
+#[tokio::test]
+async fn test_mirror_sync_uses_routed_source_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = MockServer::start().await;
+    let second = MockServer::start().await;
+    let wheel = b"wheel from the second source".to_vec();
+    let metadata = b"Metadata-Version: 2.1\nName: flask\n".to_vec();
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&first)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .and(match_header("authorization", "Bearer second-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            wheel_page(&second, &wheel, &metadata).into_bytes(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&second)
+        .await;
+    for (path, body) in [
+        ("/files/flask-1.0-py3-none-any.whl", wheel.clone()),
+        ("/files/flask-1.0-py3-none-any.whl.metadata", metadata.clone()),
+    ] {
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(path))
+            .and(match_header("authorization", "Bearer second-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .expect(1)
+            .mount(&second)
+            .await;
+    }
+    let mut config = mirror_config(dir.path(), &format!("{}/simple/", first.uri()));
+    let IndexKind::Cached { routing, .. } = &mut config.indexes[0].kind else {
+        panic!("expected cached index");
+    };
+    *routing = Some(Box::new(UpstreamRoutingConfig {
+        upstreams: vec![
+            UpstreamConfig {
+                name: "first".to_owned(),
+                url: format!("{}/simple/", first.uri()),
+                username: None,
+                password: None,
+                token: None,
+            },
+            UpstreamConfig {
+                name: "second".to_owned(),
+                url: format!("{}/simple/", second.uri()),
+                username: None,
+                password: None,
+                token: Some(SecretSource::Literal("second-token".to_owned())),
+            },
+        ],
+        fallback: true,
+        protected: Vec::new(),
+        pins: BTreeMap::default(),
+    }));
+
+    let text = run_ok(
+        &config,
+        &PrefetchCommand::Sync(PrefetchSyncArgs {
+            options: command_options(dir.path(), vec!["flask".to_owned()]),
+        }),
+    )
+    .await;
+
+    assert!(text.contains("metadata\tpypi\tflask\tflask-1.0-py3-none-any.whl.metadata"));
+    assert!(text.contains("file\tpypi\tflask\tflask-1.0-py3-none-any.whl"));
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    assert!(blobs.exists(&Digest::of(&wheel)));
+    assert!(blobs.exists(&Digest::of(&metadata)));
 }
 
 #[tokio::test]
