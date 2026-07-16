@@ -160,23 +160,27 @@ fn run_server(config: &Config) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async {
         let state = peryx::server::build_state(config)?;
-        for index in &state.indexes {
-            if let peryx_driver::IndexKind::Cached { client, offline: false } = &index.kind {
-                let client = client.clone();
-                tokio::spawn(async move { client.warm().await });
+        let replication = peryx::replication::ReplicationRuntime::new(config, &state)?;
+        if !replication.is_replica() {
+            for index in &state.indexes {
+                if let peryx_driver::IndexKind::Cached { client, offline: false } = &index.kind {
+                    let client = client.clone();
+                    tokio::spawn(async move { client.warm().await });
+                }
             }
-        }
-        let maintainer = state.clone();
-        tokio::spawn(async move {
-            // Reuse one process-wide tick to avoid a task and timer for each cached page or upload.
-            let mut ticker = tokio::time::interval(std::time::Duration::from_mins(1));
-            ticker.tick().await;
-            loop {
+            let maintainer = state.clone();
+            tokio::spawn(async move {
+                // Reuse one process-wide tick to avoid a task and timer for each cached page or upload.
+                let mut ticker = tokio::time::interval(std::time::Duration::from_mins(1));
                 ticker.tick().await;
-                background_maintenance(&maintainer).await;
-            }
-        });
-        let router = peryx::server::router_for(state);
+                loop {
+                    ticker.tick().await;
+                    background_maintenance(&maintainer).await;
+                }
+            });
+        }
+        let router = replication.mount(peryx::server::router_for(state));
+        let _replication = replication.start();
         let addr: std::net::SocketAddr = format!("{}:{}", config.host, config.port)
             .parse()
             .with_context(|| format!("parse listen address {}:{}", config.host, config.port))?;
