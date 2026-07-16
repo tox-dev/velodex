@@ -20,7 +20,8 @@ env:
   DISTRIBUTION_SPEC_REF: fcfba1ec55526073f48b2f6d4e3d7eef410ddcbc
 
 jobs:
-  # Path-based gating: OCI conformance only runs when OCI or shared code changed (or on non-PR events).
+  # Pull requests and merge groups run conformance only for OCI or shared changes. Pushes and manual
+  # runs exercise it unconditionally.
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -59,7 +60,9 @@ jobs:
   conformance:
     name: distribution-spec conformance
     needs: changes
-    if: needs.changes.outputs.oci == 'true' || needs.changes.outputs.shared == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.oci == 'true' || needs.changes.outputs.shared == 'true' ||
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

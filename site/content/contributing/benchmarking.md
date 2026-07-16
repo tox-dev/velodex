@@ -72,6 +72,10 @@ ci/run-codspeed-local.sh peryx-ecosystem-oci
 keyed by the image definition. If the current Dockerfile has not been published, the runner builds it locally; compare
 those results only with another run using the same definition.
 
+CodSpeed does not support GitHub's `merge_group` event. Pull requests publish the affected benchmarks and enforce the
+performance gate. Merge groups compile the affected benchmark targets without uploading them, while the queue runs the
+functional gates against the combined commit. Pushes to `main` publish every target and refresh the shared baseline.
+
 CodSpeed simulation does not measure kernel, filesystem, socket, or upstream latency. Use `peryx-bench` for those paths.
 The OCI blob-serving benchmark reads the blob from disk inside each router request, so CodSpeed excludes it from CPU
 simulation. It remains available through standard Criterion, along with every CPU benchmark. Host wall-clock results are

@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Path-based gating so a PR that only touches one ecosystem skips the others. On main and on
-  # non-PR events every job is forced to run via the `github.event_name != 'pull_request'` clause.
+  # Path-based gating lets pull requests and merge groups run only affected jobs. Pushes, schedules,
+  # and manual runs exercise the complete suite.
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -69,7 +69,9 @@ jobs:
 
   lint:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -83,7 +85,9 @@ jobs:
 
   test:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -119,7 +123,9 @@ jobs:
 
   test-windows-build:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -148,7 +154,9 @@ jobs:
 
   test-windows:
     needs: [changes, test-windows-build]
-    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     env:
       INSTA_WORKSPACE_ROOT: ${{ github.workspace }}
     strategy:
@@ -171,7 +179,9 @@ jobs:
 
   coverage:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -183,13 +193,15 @@ jobs:
       - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: cargo-llvm-cov,cargo-nextest
-      # Uncovered lines and functions fail CI. Region coverage is reported but not gated: it includes
-      # compiler/macro-generated branches (tracing expansions, drop glue) that are not reachable from
-      # a test on stable. main.rs is the entrypoint shell; peryx-web is the UI, whose browser-event
-      # closures only execute as wasm. peryx's UI tests assert server rendering; Playwright asserts
-      # browser interactivity.
+      # LCOV DA records aggregate source-line hits across test binaries. LLVM's line total counts
+      # uncovered generic instantiations separately, so it can regress when dependency edges change.
+      # Functions remain LLVM-gated. main.rs is the entrypoint shell; peryx-web is the UI, whose
+      # browser-event closures only execute as wasm. peryx's UI tests assert server rendering;
+      # Playwright asserts browser interactivity.
+      - run: .github/scripts/test-check-lcov-lines
       - run: >
-          cargo llvm-cov nextest --workspace --ignore-filename-regex '(main\.rs|crates/peryx-web/|crates/peryx-bench/)' --fail-uncovered-lines 0 --fail-under-functions 100 --lcov --output-path lcov.info
+          cargo llvm-cov nextest --workspace --ignore-filename-regex '(main\.rs|crates/peryx-web/|crates/peryx-bench/)' --fail-under-functions 100 --lcov --output-path lcov.info
+      - run: .github/scripts/check-lcov-lines.awk lcov.info
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           files: lcov.info
@@ -199,7 +211,9 @@ jobs:
   # external network is touched. Proves downstream clients work through peryx on every PR.
   e2e:
     needs: changes
-    if: needs.changes.outputs.pypi == 'true' || needs.changes.outputs.shared == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.pypi == 'true' || needs.changes.outputs.shared == 'true' ||
+      github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -225,7 +239,9 @@ jobs:
   # The same client flows against the real pypi.org, to catch upstream drift.
   e2e-live:
     needs: changes
-    if: needs.changes.outputs.pypi == 'true' || needs.changes.outputs.shared == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.pypi == 'true' || needs.changes.outputs.shared == 'true' ||
+      github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -252,7 +268,9 @@ jobs:
   # suite exercises search, the project page, the archive browser, and token-authenticated actions.
   frontend:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.frontend_tests == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.rust == 'true' || needs.changes.outputs.frontend_tests == 'true' ||
+      github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     env:
       CARGO_LEPTOS_VERSION: "0.3.6"
@@ -289,7 +307,9 @@ jobs:
   # `npm --prefix site run render` (a git pre-commit hook does this automatically) and commit the result.
   docs:
     needs: changes
-    if: needs.changes.outputs.docs == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.docs == 'true' || github.event_name == 'push' ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

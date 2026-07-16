@@ -27,6 +27,9 @@ if [[ "$rebuilt" == true ]]; then
   printf '%s\n' "$CODSPEED_SOURCE_KEY" > "$marker"
 fi
 sha256sum "target/codspeed/analysis/$package"/*
+if [[ ${CODSPEED_BUILD_ONLY:-false} == true ]]; then
+  exit 0
+fi
 codspeed_args=(run --mode simulation)
 if [[ ${CODSPEED_SKIP_UPLOAD:-false} == true ]]; then
   codspeed_args+=(--skip-upload)

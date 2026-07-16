@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Path-based gating so a PR that only touches one ecosystem benches just that leg. bench_matrix is
-  # the dynamic `operations` matrix: both legs on non-PR events, otherwise only the affected ones.
+  # Pull requests and merge groups build affected benchmark legs. Pushes and manual runs refresh the
+  # complete baseline.
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -71,7 +71,7 @@ jobs:
           oci='{"ecosystem":"OCI","package":"peryx-ecosystem-oci","cargo_jobs":4}'
           pypi='{"ecosystem":"PyPI","package":"peryx-ecosystem-pypi","cargo_jobs":4}'
           legs=()
-          if [ "$EVENT" != "pull_request" ]; then
+          if [ "$EVENT" == "push" ] || [ "$EVENT" == "workflow_dispatch" ]; then
             legs=("$oci" "$pypi")
           elif [ "$SHARED" = "true" ]; then
             legs=("$oci" "$pypi")
@@ -268,10 +268,13 @@ jobs:
       # memory-heavy whole-program link. Cargo's standard optimized benchmark profile disables LTO;
       # use that here so changed sources remain quick to link. Production and dist builds keep LTO.
       CARGO_PROFILE_RELEASE_LTO: "false"
+      # CodSpeed does not support GitHub's merge_group event. Pull requests carry the performance
+      # gate; queue commits compile affected suites without trying to publish an invalid event.
+      CODSPEED_BUILD_ONLY: ${{ github.event_name == 'merge_group' }}
       CODSPEED_SKIP_UPLOAD: >-
-        ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
-            (needs.changes.outputs.workflow_changed == 'true' ||
-             (github.event_name == 'pull_request' && needs.baseline.outputs.compatible != 'true')) }}
+        ${{ github.event_name == 'merge_group' ||
+            (github.event_name == 'pull_request' &&
+             (needs.changes.outputs.workflow_changed == 'true' || needs.baseline.outputs.compatible != 'true')) }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -357,10 +360,10 @@ jobs:
         env:
           ANALYSIS_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           EXPECT_ANALYSIS: >-
-            ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+            ${{ github.event_name == 'pull_request' &&
                 needs.changes.outputs.bench_matrix != '[]' &&
                 needs.changes.outputs.workflow_changed != 'true' &&
-                (github.event_name == 'merge_group' || needs.baseline.outputs.compatible == 'true') &&
+                needs.baseline.outputs.compatible == 'true' &&
                 needs.operations.result == 'success' }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}

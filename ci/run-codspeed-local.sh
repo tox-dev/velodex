@@ -60,6 +60,7 @@ container=(
   docker run "${tty[@]}" --rm
   --platform linux/arm64
   --security-opt seccomp=unconfined
+  --env CODSPEED_BUILD_ONLY
   --env CODSPEED_OAUTH_TOKEN
   --env CODSPEED_SKIP_UPLOAD
   --env CODSPEED_FORCE_REBUILD=true
