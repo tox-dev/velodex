@@ -78,7 +78,7 @@ metrics, and signed webhooks ship with the server, not as add-ons.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and the
 [architecture overview](https://peryx.readthedocs.io/en/latest/contributing/architecture/) for how the crates fit
-together. [proposal.md](proposal.md) holds the original design document and roadmap.
+together.
 
 ## License
 
