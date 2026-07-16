@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       bench_matrix: ${{ steps.matrix.outputs.include }}
+      workflow_changed: ${{ steps.filter.outputs.workflow }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -48,6 +49,8 @@ jobs:
               - '.github/codspeed/**'
               - '.github/workflows/codspeed.yml'
               - 'ci/run-codspeed*.sh'
+            workflow:
+              - '.github/workflows/codspeed.yml'
             pypi:
               - 'crates/peryx-ecosystem-pypi/**'
             oci:
@@ -76,7 +79,12 @@ jobs:
   base:
     name: Base benchmark
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.bench_matrix != '[]'
+    # A workflow repair cannot have a successful base run using its new workflow. Its operation jobs
+    # still validate the benchmark path before merge; the next main run becomes the new baseline.
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.changes.outputs.bench_matrix != '[]' &&
+      needs.changes.outputs.workflow_changed != 'true'
     concurrency:
       group: codspeed-base-${{ github.ref }}
       cancel-in-progress: true
@@ -127,6 +135,7 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Resolve immutable runtime image
         id: image
         env:
@@ -197,6 +206,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container:
       image: ${{ needs.codspeed-image.outputs.image }} # zizmor: ignore[unpinned-images] output is digest-pinned
+      # CodSpeed's Valgrind runner uses setarch; Docker's default seccomp profile blocks personality.
+      options: --security-opt seccomp=unconfined
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
@@ -220,6 +231,8 @@ jobs:
       # thin LTO for the benchmark build only, so it parallelises, fits memory, and caches
       # incrementally. Production and dist builds keep fat LTO; only relative measurement matters here.
       CARGO_PROFILE_RELEASE_LTO: thin
+      # A workflow repair validates the runner but cannot compare against results from the old runtime.
+      CODSPEED_SKIP_UPLOAD: ${{ needs.changes.outputs.workflow_changed }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -227,6 +240,7 @@ jobs:
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
+          shared-key: codspeed-v2
           cache-bin: false
           cache-on-failure: true
           cache-workspace-crates: true

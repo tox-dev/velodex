@@ -11,4 +11,8 @@ esac
 
 cargo codspeed build --locked -j "$jobs" -m simulation -p "$package"
 sha256sum "target/codspeed/analysis/$package"/*
-codspeed run --mode simulation -- cargo codspeed run -p "$package"
+codspeed_args=(run --mode simulation)
+if [[ ${CODSPEED_SKIP_UPLOAD:-false} == true ]]; then
+  codspeed_args+=(--skip-upload)
+fi
+codspeed "${codspeed_args[@]}" -- cargo codspeed run -p "$package"
