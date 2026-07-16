@@ -19,7 +19,7 @@ env:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   # Path-based gating lets pull requests and merge groups run only affected jobs. Pushes, schedules,

@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: codspeed-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codspeed-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   # Pull requests and merge groups build affected benchmark legs. Pushes and manual runs refresh the
