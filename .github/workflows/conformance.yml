@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -20,8 +18,8 @@ env:
   DISTRIBUTION_SPEC_REF: fcfba1ec55526073f48b2f6d4e3d7eef410ddcbc
 
 jobs:
-  # Pull requests and merge groups run conformance only for OCI or shared changes. Pushes and manual
-  # runs exercise it unconditionally.
+  # Pull requests run conformance only for OCI or shared changes. Pushes and manual runs exercise it
+  # unconditionally.
   changes:
     runs-on: ubuntu-24.04
     outputs:

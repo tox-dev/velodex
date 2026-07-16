@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  merge_group:
-    types: [checks_requested]
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
@@ -22,8 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
-  # Path-based gating lets pull requests and merge groups run only affected jobs. Pushes, schedules,
-  # and manual runs exercise the complete suite.
+  # Path-based gating lets pull requests run only affected jobs. Pushes, schedules, and manual runs
+  # exercise the complete suite.
   changes:
     runs-on: ubuntu-24.04
     outputs:
