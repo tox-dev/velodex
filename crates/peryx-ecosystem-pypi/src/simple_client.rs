@@ -12,7 +12,7 @@ use std::future::Future;
 use bytes::Bytes;
 use futures_util::Stream;
 use peryx_upstream::retry::{MAX_RETRIES, should_retry_error, sleep_before_retry};
-use peryx_upstream::{UpstreamClient, UpstreamError, UpstreamRouter};
+use peryx_upstream::{NamedUpstream, UpstreamClient, UpstreamError, UpstreamRouter};
 use reqwest::StatusCode;
 use reqwest::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderMap, HeaderName};
 use url::Url;
@@ -112,6 +112,7 @@ impl SimpleClientExt for UpstreamRouter {
         loop {
             let upstream = candidates.next().expect("an upstream route always has a candidate");
             let result = SimpleClientExt::fetch_project(upstream.client(), project, None).await;
+            record_health(upstream, &result);
             if fallback_result(&result) && candidates.peek().is_some() {
                 tracing::warn!(project, upstream = upstream.name(), "trying fallback");
                 continue;
@@ -125,6 +126,7 @@ impl SimpleClientExt for UpstreamRouter {
         loop {
             let upstream = candidates.next().expect("an upstream route always has a candidate");
             let result = SimpleClientExt::fetch_index(upstream.client()).await;
+            record_health(upstream, &result);
             if fallback_result(&result) && candidates.peek().is_some() {
                 tracing::warn!(upstream = upstream.name(), "upstream unavailable, trying fallback");
                 continue;
@@ -138,12 +140,21 @@ impl SimpleClientExt for UpstreamRouter {
         loop {
             let upstream = candidates.next().expect("an upstream route always has a candidate");
             let result = upstream.client().head_project(project, None).await;
+            record_health(upstream, &result);
             if fallback_result(&result) && candidates.peek().is_some() {
                 tracing::warn!(project, upstream = upstream.name(), "trying fallback");
                 continue;
             }
             return result;
         }
+    }
+}
+
+fn record_health<T: SimpleStatus>(upstream: &NamedUpstream, result: &Result<T, UpstreamError>) {
+    if matches!(result, Ok(response) if matches!(response.status(), 200 | 304 | 404)) {
+        upstream.mark_healthy();
+    } else {
+        upstream.mark_unhealthy();
     }
 }
 

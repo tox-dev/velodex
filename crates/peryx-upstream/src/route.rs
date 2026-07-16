@@ -1,12 +1,46 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::UpstreamClient;
+
+/// The result of the latest completed request to one configured source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamHealth {
+    /// No request has completed since process start.
+    Configured,
+    /// The latest request found a usable source.
+    Healthy,
+    /// The latest request found a transport, protocol, authentication, rate-limit, or server failure.
+    Unhealthy,
+}
+
+impl UpstreamHealth {
+    const fn value(self) -> u8 {
+        match self {
+            Self::Configured => 0,
+            Self::Healthy => 1,
+            Self::Unhealthy => 2,
+        }
+    }
+
+    /// Stable status text for operator surfaces.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Healthy => "healthy",
+            Self::Unhealthy => "unhealthy",
+        }
+    }
+}
 
 /// One configured upstream and the name recorded as its source.
 #[derive(Debug, Clone)]
 pub struct NamedUpstream {
     name: String,
     client: UpstreamClient,
+    health: Arc<AtomicU8>,
 }
 
 impl NamedUpstream {
@@ -16,6 +50,7 @@ impl NamedUpstream {
         Self {
             name: name.into(),
             client,
+            health: Arc::new(AtomicU8::new(UpstreamHealth::Configured.value())),
         }
     }
 
@@ -29,6 +64,26 @@ impl NamedUpstream {
     #[must_use]
     pub const fn client(&self) -> &UpstreamClient {
         &self.client
+    }
+
+    /// Read the result of the latest completed request to this source.
+    #[must_use]
+    pub fn health(&self) -> UpstreamHealth {
+        match self.health.load(Ordering::Acquire) {
+            1 => UpstreamHealth::Healthy,
+            2 => UpstreamHealth::Unhealthy,
+            _ => UpstreamHealth::Configured,
+        }
+    }
+
+    /// Record a request that found a usable source.
+    pub fn mark_healthy(&self) {
+        self.health.store(UpstreamHealth::Healthy.value(), Ordering::Release);
+    }
+
+    /// Record a request that could not use this source.
+    pub fn mark_unhealthy(&self) {
+        self.health.store(UpstreamHealth::Unhealthy.value(), Ordering::Release);
     }
 }
 
@@ -132,5 +187,10 @@ impl UpstreamRouter {
             .enumerate()
             .filter(move |(position, _)| pinned.map_or(fallback || *position == 0, |pin| *position == pin))
             .map(|(_, upstream)| upstream)
+    }
+
+    /// Every configured source in operator order, independent of package routing rules.
+    pub fn sources(&self) -> impl Iterator<Item = &NamedUpstream> {
+        self.upstreams.iter()
     }
 }

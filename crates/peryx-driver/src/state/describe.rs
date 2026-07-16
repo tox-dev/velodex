@@ -2,6 +2,7 @@
 
 use peryx_identity::Action;
 use peryx_index::{Index, IndexKind, shadow_order};
+use peryx_upstream::{UpstreamHealth, UpstreamRouter};
 
 /// Describe every runtime index without touching storage or upstream state.
 #[must_use]
@@ -45,6 +46,8 @@ pub fn describe_index(indexes: &[Index], position: usize) -> IndexDescription {
                 url: client.redacted_base_url(),
                 auth: client.auth_status().as_str(),
                 offline: *offline,
+                status: "configured",
+                sources: Vec::new(),
             }),
             None,
         ),
@@ -129,6 +132,44 @@ pub struct UpstreamDescription {
     pub url: String,
     pub auth: &'static str,
     pub offline: bool,
+    pub status: &'static str,
+    pub sources: Vec<UpstreamSourceDescription>,
+}
+
+/// One named source in a cached index's upstream route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamSourceDescription {
+    pub name: String,
+    pub url: String,
+    pub auth: &'static str,
+    pub status: &'static str,
+}
+
+pub(super) fn describe_upstream_route(router: &UpstreamRouter) -> (&'static str, Vec<UpstreamSourceDescription>) {
+    let sources = router
+        .sources()
+        .map(|source| UpstreamSourceDescription {
+            name: source.name().to_owned(),
+            url: source.client().redacted_base_url(),
+            auth: source.client().auth_status().as_str(),
+            status: source.health().as_str(),
+        })
+        .collect::<Vec<_>>();
+    let healthy = sources
+        .iter()
+        .filter(|source| source.status == UpstreamHealth::Healthy.as_str())
+        .count();
+    let unhealthy = sources
+        .iter()
+        .filter(|source| source.status == UpstreamHealth::Unhealthy.as_str())
+        .count();
+    let status = match (healthy, unhealthy) {
+        (0, 0) => "configured",
+        (0, _) => "unhealthy",
+        (_, 0) => "healthy",
+        _ => "degraded",
+    };
+    (status, sources)
 }
 
 /// A hosted store's status, with upload-token values excluded.
@@ -157,12 +198,12 @@ impl SecretDescription {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemberDescription, describe_index};
+    use super::{MemberDescription, describe_index, describe_upstream_route};
     use peryx_core::Ecosystem;
     use peryx_identity::IndexAcl;
     use peryx_index::{Index, IndexKind};
     use peryx_policy::Policy;
-    use peryx_upstream::UpstreamClient;
+    use peryx_upstream::{NamedUpstream, UpstreamClient, UpstreamRouter};
 
     fn index(name: &str, kind: IndexKind, acl: IndexAcl) -> Index {
         Index {
@@ -187,6 +228,21 @@ mod tests {
             name: name.to_owned(),
             role,
         }
+    }
+
+    fn route() -> UpstreamRouter {
+        UpstreamRouter::new(
+            ["first", "second"]
+                .into_iter()
+                .map(|name| {
+                    NamedUpstream::new(
+                        name,
+                        UpstreamClient::new(&format!("https://{name}.example/simple/")).unwrap(),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -255,5 +311,20 @@ mod tests {
         assert!(described.volatile_deletes);
         assert_eq!(described.upload_to.as_deref(), Some("store"));
         assert_eq!(described.precedence, vec![member("store", "hosted")]);
+    }
+
+    #[test]
+    fn test_upstream_route_status_tracks_each_aggregate_state() {
+        let route = route();
+        assert_eq!(describe_upstream_route(&route).0, "configured");
+
+        route.sources().next().unwrap().mark_healthy();
+        assert_eq!(describe_upstream_route(&route).0, "healthy");
+
+        route.sources().nth(1).unwrap().mark_unhealthy();
+        assert_eq!(describe_upstream_route(&route).0, "degraded");
+
+        route.sources().next().unwrap().mark_unhealthy();
+        assert_eq!(describe_upstream_route(&route).0, "unhealthy");
     }
 }

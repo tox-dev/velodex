@@ -1,4 +1,4 @@
-use peryx_upstream::{Auth, NamedUpstream, UpstreamClient, UpstreamError, UpstreamRouter};
+use peryx_upstream::{Auth, NamedUpstream, UpstreamClient, UpstreamError, UpstreamHealth, UpstreamRouter};
 use rstest::rstest;
 use wiremock::matchers::{header, header_regex, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -67,10 +67,19 @@ async fn test_routed_project_falls_back_on_retryable_status(#[case] status: u16)
     )
     .await;
 
-    let response = route(&first, &second).fetch_project("flask", None).await.unwrap();
+    let route = route(&first, &second);
+    let response = route.fetch_project("flask", None).await.unwrap();
 
     assert_eq!(response.status, 200);
     assert!(response.url.as_str().starts_with(&second.uri()));
+    assert_eq!(
+        route.sources().map(NamedUpstream::health).collect::<Vec<_>>(),
+        if status == 404 {
+            vec![UpstreamHealth::Healthy, UpstreamHealth::Healthy]
+        } else {
+            vec![UpstreamHealth::Unhealthy, UpstreamHealth::Healthy]
+        }
+    );
 }
 
 #[tokio::test]
@@ -98,6 +107,10 @@ async fn test_routed_project_falls_back_after_a_transport_error() {
 
     assert_eq!(response.status, 200);
     assert!(response.url.as_str().starts_with(&second.uri()));
+    assert_eq!(
+        route.sources().map(NamedUpstream::health).collect::<Vec<_>>(),
+        [UpstreamHealth::Unhealthy, UpstreamHealth::Healthy]
+    );
 }
 
 #[tokio::test]
@@ -139,10 +152,15 @@ async fn test_routed_project_does_not_fall_back_on_an_invalid_response() {
     )
     .await;
 
-    let err = route(&first, &second).fetch_project("flask", None).await.unwrap_err();
+    let route = route(&first, &second);
+    let err = route.fetch_project("flask", None).await.unwrap_err();
 
     assert!(matches!(err, UpstreamError::MissingContentType { .. }));
     assert!(second.received_requests().await.unwrap().is_empty());
+    assert_eq!(
+        route.sources().map(NamedUpstream::health).collect::<Vec<_>>(),
+        [UpstreamHealth::Unhealthy, UpstreamHealth::Configured]
+    );
 }
 
 #[tokio::test]

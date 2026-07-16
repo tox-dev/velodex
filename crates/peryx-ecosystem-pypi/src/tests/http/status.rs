@@ -2,6 +2,7 @@
 
 use super::support::*;
 use peryx_identity::IndexAcl;
+use peryx_upstream::{NamedUpstream, UpstreamRouter};
 
 #[tokio::test]
 async fn test_status_lists_routes() {
@@ -78,6 +79,71 @@ async fn test_status_redacts_upstream_and_upload_secrets() {
         assert!(!body.contains(secret));
     }
 }
+
+#[tokio::test]
+async fn test_status_reports_routed_upstream_health() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+    let blobs = BlobStore::new(dir.path().join("blobs"));
+    let primary = NamedUpstream::new(
+        "primary",
+        UpstreamClient::with_auth(
+            "https://user:pass@primary.example/simple/?token=url-secret#frag",
+            Auth::Bearer("bearer-secret".to_owned()),
+        )
+        .unwrap(),
+    );
+    primary.mark_unhealthy();
+    let fallback = NamedUpstream::new(
+        "fallback",
+        UpstreamClient::new("https://fallback.example/simple/").unwrap(),
+    );
+    fallback.mark_healthy();
+    let mut state = AppState::new(
+        meta,
+        blobs,
+        60,
+        vec![Index {
+            name: "pypi".to_owned(),
+            route: "pypi".to_owned(),
+            ecosystem: peryx_core::Ecosystem::Pypi,
+            kind: IndexKind::Cached {
+                client: primary.client().clone(),
+                offline: false,
+            },
+            policy: Policy::default(),
+            acl: IndexAcl::default(),
+        }],
+    );
+    state
+        .upstream_routes
+        .insert("pypi".to_owned(), UpstreamRouter::new(vec![primary, fallback]).unwrap());
+    let state = crate::tests::wired(state);
+
+    let (status, _, body) = get(&state, "/+status", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let upstream = &body["indexes"][0]["upstream"];
+    assert_eq!(upstream["status"], "degraded");
+    assert_eq!(
+        upstream["sources"],
+        serde_json::json!([
+            {
+                "name": "primary",
+                "url": "https://primary.example/simple/",
+                "auth": {"kind": "bearer", "redacted": "<redacted>"},
+                "status": "unhealthy",
+            },
+            {
+                "name": "fallback",
+                "url": "https://fallback.example/simple/",
+                "auth": {"kind": "none", "redacted": null},
+                "status": "healthy",
+            },
+        ])
+    );
+}
+
 #[tokio::test]
 async fn test_metrics_exposes_counters() {
     let h = harness().await;

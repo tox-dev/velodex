@@ -1,4 +1,4 @@
-use crate::{NamedUpstream, RouteError, UpstreamClient, UpstreamRouter};
+use crate::{NamedUpstream, RouteError, UpstreamClient, UpstreamHealth, UpstreamRouter};
 
 fn upstream(name: &str) -> NamedUpstream {
     NamedUpstream::new(
@@ -47,6 +47,29 @@ fn test_upstream_router_exposes_the_selected_client() {
     let router = router().pin("demo", "mirror").unwrap();
     let selected = router.candidates("demo").next().unwrap();
     assert_eq!(selected.client().redacted_base_url(), "https://mirror.example/simple/");
+}
+
+#[test]
+fn test_named_upstream_health_is_shared_between_router_clones() {
+    let router = router();
+    let cloned = router.clone();
+    assert_eq!(
+        router.sources().map(NamedUpstream::health).collect::<Vec<_>>(),
+        [UpstreamHealth::Configured; 3]
+    );
+
+    router.sources().next().unwrap().mark_unhealthy();
+    cloned.sources().nth(1).unwrap().mark_healthy();
+
+    assert_eq!(
+        router.sources().map(NamedUpstream::health).collect::<Vec<_>>(),
+        [
+            UpstreamHealth::Unhealthy,
+            UpstreamHealth::Healthy,
+            UpstreamHealth::Configured
+        ]
+    );
+    assert_eq!(UpstreamHealth::Unhealthy.as_str(), "unhealthy");
 }
 
 #[test]

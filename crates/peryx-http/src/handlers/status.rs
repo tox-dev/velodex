@@ -67,7 +67,15 @@ pub async fn status(State(state): State<Arc<AppState>>, Query(query): Query<Stat
                             "redacted": (upstream.auth != "none").then_some("<redacted>"),
                         },
                         "offline": upstream.offline,
-                        "status": "configured",
+                        "status": upstream.status,
+                        "sources": upstream.sources.into_iter().map(|source| serde_json::json!({
+                            "name": source.name, "url": source.url,
+                            "auth": {
+                                "kind": source.auth,
+                                "redacted": (source.auth != "none").then_some("<redacted>"),
+                            },
+                            "status": source.status,
+                        })).collect::<Vec<_>>(),
                     }))),
                 ),
                 (

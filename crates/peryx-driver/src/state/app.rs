@@ -11,7 +11,7 @@ use peryx_upstream::UpstreamRouter;
 
 use peryx_index::Index;
 
-use super::describe::{IndexDescription, describe_indexes};
+use super::describe::{IndexDescription, describe_indexes, describe_upstream_route};
 use crate::rate_limit::{RateLimiter, UpstreamLimits};
 use peryx_events::metrics::Metrics;
 use peryx_events::webhook::WebhookRuntime;
@@ -167,7 +167,16 @@ impl ServingState {
     /// access, and delete policy. Shared by `/+status` and the web UI.
     #[must_use]
     pub fn describe_indexes(&self) -> Vec<IndexDescription> {
-        describe_indexes(&self.indexes)
+        let mut descriptions = describe_indexes(&self.indexes);
+        for description in &mut descriptions {
+            if let (Some(router), Some(upstream)) = (
+                self.upstream_routes.get(&description.name),
+                description.upstream.as_mut(),
+            ) {
+                (upstream.status, upstream.sources) = describe_upstream_route(router);
+            }
+        }
+        descriptions
     }
 }
 
