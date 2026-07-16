@@ -45,6 +45,8 @@ pub enum ConfigError {
     Auth { reason: &'static str },
     #[error("replication: {reason}")]
     Replication { reason: &'static str },
+    #[error("writer identity: {reason}")]
+    WriterIdentity { reason: &'static str },
     #[error("secret file {path} holds no secret")]
     EmptySecret { path: PathBuf },
     #[error("webhook {name}: {reason}")]

@@ -44,6 +44,7 @@ pub fn build_router(config: &Config) -> anyhow::Result<Router> {
 /// Returns an error if the data directory or stores cannot be opened, an upstream URL is invalid,
 /// or a virtual index references an unknown or non-hosted index.
 pub fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
+    config.validate().context("validate configuration")?;
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
     let meta_path = config.data_dir.join("peryx.redb");

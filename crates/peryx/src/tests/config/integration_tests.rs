@@ -28,3 +28,14 @@ fn test_env_overrides_file_when_cli_is_silent() {
         .unwrap();
     assert_eq!(resolved.port, 2000);
 }
+
+#[test]
+fn test_replica_validation_uses_the_identity_from_a_later_overlay() {
+    let resolved = Config::default()
+        .apply(config::from_toml(PathBuf::from("x.toml"), "read_only = true\n").unwrap())
+        .unwrap()
+        .apply(env_partial(&[("PERYX_WRITER_IDENTITY", "writer-a")]).unwrap())
+        .unwrap();
+
+    resolved.validate().unwrap();
+}

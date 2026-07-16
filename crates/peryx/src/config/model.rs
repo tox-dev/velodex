@@ -64,6 +64,25 @@ pub enum ReplicationConfig {
     },
 }
 
+impl Config {
+    /// Validate settings that depend on the fully resolved configuration.
+    ///
+    /// # Errors
+    /// Returns [`ConfigError::WriterIdentity`] when an identity is blank or replica mode has no
+    /// identity to use during promotion.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        match self.writer_identity.as_deref() {
+            Some(identity) if identity.trim().is_empty() => Err(ConfigError::WriterIdentity {
+                reason: "must not be blank",
+            }),
+            None if self.read_only => Err(ConfigError::WriterIdentity {
+                reason: "required in read replica mode",
+            }),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// The `[auth]` table: the settings every index's access rules share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthConfig {
