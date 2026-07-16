@@ -84,6 +84,13 @@ fn virtual_index(layers: &[&str], upload: Option<&str>) -> IndexConfig {
     }
 }
 
+fn claim_writer(dir: &tempfile::TempDir, identity: &str) {
+    MetaStore::open(dir.path().join("peryx.redb"))
+        .unwrap()
+        .claim_writer_identity(identity)
+        .unwrap();
+}
+
 #[tokio::test]
 async fn test_build_router_serves_status() {
     let dir = tempfile::tempdir().unwrap();
@@ -205,6 +212,7 @@ fn test_build_state_rejects_a_competing_writer_identity() {
 #[test]
 fn test_build_state_makes_replica_upstreams_offline() {
     let dir = tempfile::tempdir().unwrap();
+    claim_writer(&dir, "writer-a");
     let state = build_state(&Config {
         data_dir: dir.path().to_path_buf(),
         writer_identity: Some("writer-a".to_owned()),
@@ -242,13 +250,11 @@ fn test_build_state_rejects_a_replica_without_writer_identity() {
 #[test]
 fn test_build_state_replica_does_not_claim_writer_identity() {
     let dir = tempfile::tempdir().unwrap();
-    let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
-    meta.claim_writer_identity("writer-a").unwrap();
-    drop(meta);
+    claim_writer(&dir, "writer-a");
 
     let state = build_state(&Config {
         data_dir: dir.path().to_path_buf(),
-        writer_identity: Some("writer-b".to_owned()),
+        writer_identity: Some("writer-a".to_owned()),
         read_only: true,
         ..Config::default()
     })
@@ -256,6 +262,31 @@ fn test_build_state_replica_does_not_claim_writer_identity() {
 
     assert!(state.read_only);
     assert_eq!(state.meta.writer_identity().unwrap().as_deref(), Some("writer-a"));
+}
+
+#[rstest]
+#[case::missing(None, "None")]
+#[case::different(Some("writer-b"), "Some(\"writer-b\")")]
+fn test_build_state_rejects_a_replica_with_an_unmatched_writer(#[case] active: Option<&str>, #[case] expected: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    if let Some(active) = active {
+        claim_writer(&dir, active);
+    }
+    let config = Config {
+        data_dir: dir.path().to_path_buf(),
+        writer_identity: Some("writer-a".to_owned()),
+        read_only: true,
+        ..Config::default()
+    };
+
+    let Err(error) = build_state(&config) else {
+        panic!("expected replica writer identity conflict");
+    };
+
+    assert_eq!(
+        error.to_string(),
+        format!("configured replica writer Some(\"writer-a\") does not match metadata store writer {expected}")
+    );
 }
 
 #[test]

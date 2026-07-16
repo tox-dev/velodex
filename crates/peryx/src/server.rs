@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, bail, ensure};
 use axum::Router;
 use peryx_core::{Ecosystem, path};
 use peryx_driver::state::RuntimeOptions;
@@ -49,9 +49,14 @@ pub fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
     let meta_path = config.data_dir.join("peryx.redb");
     let meta = MetaStore::open(&meta_path).with_context(|| format!("open metadata store {}", meta_path.display()))?;
-    if !config.read_only
-        && let Some(identity) = &config.writer_identity
-    {
+    if config.read_only {
+        let active = meta.writer_identity().context("read metadata store writer identity")?;
+        ensure!(
+            active.as_deref() == config.writer_identity.as_deref(),
+            "configured replica writer {:?} does not match metadata store writer {active:?}",
+            config.writer_identity
+        );
+    } else if let Some(identity) = &config.writer_identity {
         meta.claim_writer_identity(identity)
             .with_context(|| format!("claim writer identity {identity:?}"))?;
     }
