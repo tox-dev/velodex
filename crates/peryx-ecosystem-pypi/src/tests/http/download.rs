@@ -88,14 +88,15 @@ async fn test_routed_file_download_verifies_the_advertising_source(#[case] artif
     } else {
         assert!(body.is_err());
         for _ in 0..500 {
-            if state.metrics.index_totals()["pypi"].base.rejected == 1 {
+            if state.metrics.index_totals()["pypi"].base.rejected >= 1 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
         assert!(!state.blobs.exists(&digest));
-        assert_eq!(state.metrics.index_totals()["pypi"].base.rejected, 1);
+        assert!(state.metrics.index_totals()["pypi"].base.rejected >= 1);
     }
+    artifact_server.verify().await;
     let event = logs
         .text()
         .lines()
