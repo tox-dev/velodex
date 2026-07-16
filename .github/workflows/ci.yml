@@ -296,7 +296,6 @@ jobs:
         run: |
           curl -sL "https://github.com/leptos-rs/cargo-leptos/releases/download/v${CARGO_LEPTOS_VERSION}/cargo-leptos-x86_64-unknown-linux-musl.tar.gz" | tar xz --strip-components=1
           sudo mv cargo-leptos /usr/local/bin/
-      - run: cargo build -p peryx
       - run: cargo leptos build
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

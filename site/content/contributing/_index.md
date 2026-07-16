@@ -63,7 +63,6 @@ proof, so assert on peryx's own state or metrics.
 drives the hydrated UI against a real peryx with an uploaded fixture package:
 
 ```shell
-cargo build -p peryx
 cargo leptos build
 cd tests/frontend
 npm ci

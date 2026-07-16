@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
 const binary = ["release", "debug"].map((profile) => join(repo, "target", profile, "peryx")).find(existsSync);
 if (!binary) {
-  console.error("build peryx first: cargo build -p peryx");
+  console.error("build the server and web bundle first: cargo leptos build");
   process.exit(1);
 }
 
@@ -57,7 +57,7 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
 }
 
 const wheel = readFileSync(join(here, "fixtures", "veloxdemo-1.0.0-py3-none-any.whl"));
-for (let attempt = 0; attempt < 100; attempt += 1) {
+for (let attempt = 0; attempt < 600; attempt += 1) {
   try {
     const form = new FormData();
     form.set(":action", "file_upload");
@@ -73,7 +73,8 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
     if (response.ok) break;
     console.error(`upload rejected: ${response.status} ${await response.text()}`);
     process.exit(1);
-  } catch {
+  } catch (error) {
+    if (attempt === 599) throw error;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
