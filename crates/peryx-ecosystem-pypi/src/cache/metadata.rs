@@ -430,6 +430,52 @@ mod tests {
         assert!(state.meta.get_metadata(digest.as_str()).unwrap().is_some());
     }
 
+    #[tokio::test]
+    async fn test_spawn_metadata_backfill_synthesizes_registered_wheels_and_logs_failures() {
+        let (_dir, state) = test_state();
+        let unfetchable = Digest::of(b"unfetchable");
+        let wheel = test_wheel(b"Metadata-Version: 2.1\nName: pkg\nVersion: 1.0\n");
+        let cached = state.blobs.put_bytes(&wheel).await.unwrap();
+        // The first candidate has no stored blob and no file URL, so its synthesis fails and is
+        // logged; the second reads its cached blob and registers. Both are wheels advertising no
+        // metadata, so the candidate filter keeps them. The candidates run in order, so polling the
+        // second awaits the spawned task past the first.
+        spawn_metadata_backfill(
+            state.clone(),
+            "pypi".to_owned(),
+            &[
+                Registration {
+                    filename: "broken-1.0-py3-none-any.whl".to_owned(),
+                    sha256: unfetchable.as_str().to_owned(),
+                    url: "https://example.invalid/broken.whl".to_owned(),
+                    size: None,
+                    metadata: None,
+                },
+                Registration {
+                    filename: "pkg-1.0-py3-none-any.whl".to_owned(),
+                    sha256: cached.as_str().to_owned(),
+                    url: "https://example.invalid/pkg.whl".to_owned(),
+                    size: None,
+                    metadata: None,
+                },
+            ],
+        );
+
+        let mut registered = None;
+        for _ in 0..1000 {
+            if let Some(record) = state.meta.get_metadata(cached.as_str()).unwrap() {
+                registered = Some(record);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        assert!(
+            registered.is_some(),
+            "the spawned backfill registers the cached wheel's metadata"
+        );
+        assert!(state.meta.get_metadata(unfetchable.as_str()).unwrap().is_none());
+    }
+
     fn test_state() -> (tempfile::TempDir, Arc<ServingState>) {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
