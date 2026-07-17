@@ -1,8 +1,71 @@
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use peryx_driver::rate_limit::RateLimitConfig;
 
 use crate::config::{Config, IndexKind, LogConfig, ReplicationConfig, SecretSource};
+
+#[test]
+fn test_secret_source_file_returns_trimmed_contents() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(b"  s3cr3t\n").unwrap();
+    assert_eq!(SecretSource::File(file.path().to_owned()).read().unwrap(), "s3cr3t");
+}
+
+#[test]
+fn test_secret_source_file_missing_reports_path_without_value() {
+    let err = SecretSource::File(PathBuf::from("/nonexistent/peryx/secret"))
+        .read()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.starts_with("failed to read config file /nonexistent/peryx/secret:"),
+        "{err}"
+    );
+}
+
+#[test]
+fn test_secret_source_empty_file_is_rejected() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(b"   \n").unwrap();
+    assert_eq!(
+        SecretSource::File(file.path().to_owned())
+            .read()
+            .unwrap_err()
+            .to_string(),
+        format!("secret file {} holds no secret", file.path().display())
+    );
+}
+
+#[test]
+fn test_secret_source_oversize_file_is_rejected_without_value() {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(&vec![b'a'; (1 << 20) + 1]).unwrap();
+    assert_eq!(
+        SecretSource::File(file.path().to_owned())
+            .read()
+            .unwrap_err()
+            .to_string(),
+        format!("secret file {} exceeds the 1048576-byte limit", file.path().display())
+    );
+}
+
+#[test]
+fn test_secret_source_env_reads_a_present_variable() {
+    let path = std::env::var("PATH").expect("PATH is set for the test process");
+    assert_eq!(SecretSource::Env("PATH".to_owned()).read().unwrap(), path.trim());
+}
+
+#[test]
+fn test_secret_source_env_missing_reports_variable_without_value() {
+    assert_eq!(
+        SecretSource::Env("PERYX_TEST_ABSENT_CREDENTIAL".to_owned())
+            .read()
+            .unwrap_err()
+            .to_string(),
+        "credential environment variable PERYX_TEST_ABSENT_CREDENTIAL is unset, empty, or not valid UTF-8"
+    );
+}
 
 #[test]
 fn test_default_config() {

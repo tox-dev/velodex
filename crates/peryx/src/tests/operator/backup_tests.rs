@@ -402,3 +402,27 @@ fn test_backup_snapshots_upstream_secret_paths(#[case] expected: &str) {
     let snapshot = std::fs::read_to_string(backup.join("config.toml")).unwrap();
     assert!(snapshot.contains(expected), "{snapshot}");
 }
+
+#[test]
+fn test_backup_snapshots_upstream_env_references_not_values() {
+    let root = tempfile::tempdir().unwrap();
+    let data_dir = root.path().join("data");
+    std::fs::create_dir(&data_dir).unwrap();
+    drop(MetaStore::open(data_dir.join("peryx.redb")).unwrap());
+    let backup = root.path().join("backup");
+    let mut config = Config {
+        data_dir,
+        ..Config::default()
+    };
+    let IndexKind::Cached { password, token, .. } = &mut config.indexes[0].kind else {
+        panic!("expected a cached index");
+    };
+    *password = Some(SecretSource::Env("CORP_PASSWORD".to_owned()));
+    *token = Some(SecretSource::Env("CORP_TOKEN".to_owned()));
+
+    operator::backup_create(&config, &backup, &mut Vec::new()).unwrap();
+
+    let snapshot = std::fs::read_to_string(backup.join("config.toml")).unwrap();
+    assert!(snapshot.contains("password_env = \"CORP_PASSWORD\""), "{snapshot}");
+    assert!(snapshot.contains("token_env = \"CORP_TOKEN\""), "{snapshot}");
+}

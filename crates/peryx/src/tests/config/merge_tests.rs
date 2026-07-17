@@ -416,21 +416,60 @@ fn test_upstream_password_and_token_read_from_files() {
     ));
 }
 
+#[test]
+fn test_upstream_password_and_token_read_from_env() {
+    let c = toml_config(
+        "[[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\n\
+         password_env = \"CORP_PASSWORD\"\ntoken_env = \"CORP_TOKEN\"\n",
+    );
+    assert!(matches!(
+        &c.indexes[0].kind,
+        IndexKind::Cached {
+            password: Some(SecretSource::Env(pw)),
+            token: Some(SecretSource::Env(tok)),
+            ..
+        } if pw == "CORP_PASSWORD" && tok == "CORP_TOKEN"
+    ));
+}
+
+#[test]
+fn test_ordered_upstream_password_reads_from_env() {
+    let c = toml_config(
+        "[[index]]\nname = \"corp\"\n\
+         [[index.upstream]]\nname = \"primary\"\nurl = \"https://corp/simple/\"\npassword_env = \"CORP_PASSWORD\"\n",
+    );
+    let IndexKind::Cached {
+        routing: Some(routing), ..
+    } = &c.indexes[0].kind
+    else {
+        panic!("expected a routed cached index");
+    };
+    assert!(matches!(
+        &routing.upstreams[0].password,
+        Some(SecretSource::Env(var)) if var == "CORP_PASSWORD"
+    ));
+}
+
 #[rstest]
-#[case::password("password = \"p\"\npassword_file = \"/run/secrets/pw\"\n")]
-#[case::token("token = \"t\"\ntoken_file = \"/run/secrets/tok\"\n")]
+#[case::password_and_file("password = \"p\"\npassword_file = \"/run/secrets/pw\"\n")]
+#[case::password_and_env("password = \"p\"\npassword_env = \"CORP_PASSWORD\"\n")]
+#[case::file_and_env("password_file = \"/run/secrets/pw\"\npassword_env = \"CORP_PASSWORD\"\n")]
+#[case::token_and_file("token = \"t\"\ntoken_file = \"/run/secrets/tok\"\n")]
+#[case::token_and_env("token = \"t\"\ntoken_env = \"CORP_TOKEN\"\n")]
 fn test_an_upstream_credential_may_not_have_two_sources(#[case] credential: &str) {
     let text = format!("[[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\n{credential}");
     let err = toml_error(&text).to_string();
     assert!(
-        err.contains("index corp: set at most one of a secret and its `_file` sibling"),
+        err.contains("index corp: set at most one of a secret, its `_file` sibling, and its `_env` sibling"),
         "{err}"
     );
 }
 
 #[rstest]
-#[case::password("password = \"p\"\npassword_file = \"/run/secrets/pw\"\n")]
-#[case::token("token = \"t\"\ntoken_file = \"/run/secrets/tok\"\n")]
+#[case::password_and_file("password = \"p\"\npassword_file = \"/run/secrets/pw\"\n")]
+#[case::password_and_env("password = \"p\"\npassword_env = \"CORP_PASSWORD\"\n")]
+#[case::token_and_file("token = \"t\"\ntoken_file = \"/run/secrets/tok\"\n")]
+#[case::token_and_env("token = \"t\"\ntoken_env = \"CORP_TOKEN\"\n")]
 fn test_an_ordered_upstream_credential_may_not_have_two_sources(#[case] credential: &str) {
     let text = format!(
         "[[index]]\nname = \"corp\"\n\
@@ -438,8 +477,18 @@ fn test_an_ordered_upstream_credential_may_not_have_two_sources(#[case] credenti
     );
     let err = toml_error(&text).to_string();
     assert!(
-        err.contains("index corp: set at most one of a secret and its `_file` sibling"),
+        err.contains("index corp: set at most one of a secret, its `_file` sibling, and its `_env` sibling"),
         "{err}"
+    );
+}
+
+#[test]
+fn test_an_upstream_env_credential_may_not_be_empty() {
+    let err =
+        toml_error("[[index]]\nname = \"corp\"\ncached = \"https://corp/simple/\"\npassword_env = \"\"\n").to_string();
+    assert_eq!(
+        err,
+        "index corp: `_env` names an environment variable and must not be empty"
     );
 }
 

@@ -31,6 +31,23 @@ password = "<token>"
 
 Start peryx with `--config` and install through `http://<host>:<port>/corp/simple/`.
 
+## Keep the token out of the config file
+
+A `password` or `token` can read from a `*_file` or `*_env` sibling instead of an inline value, so the secret lives in a
+mounted file or an injected environment variable rather than `peryx.toml`:
+
+```toml
+[[index]]
+name = "corp"
+cached = "https://private.example/simple/"
+username = "__token__"
+password_file = "/run/secrets/corp-token"  # or password_env = "PERYX_CORP_TOKEN"
+```
+
+peryx reads the source once at startup and reports a missing, empty, or oversized file or an unset variable without
+printing the value. The [configuration reference](@/core/configuration.md#upstream-credential-sources) covers systemd
+and Kubernetes secret layouts, precedence, redaction, and migrating an inline credential.
+
 ## Read Basic credentials from netrc
 
 One opt-in netrc file can hold Basic credentials outside `peryx.toml`. This uses the same `machine`, `login`, and

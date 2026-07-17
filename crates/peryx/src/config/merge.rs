@@ -240,8 +240,10 @@ fn validate_index_kind(raw: &RawIndex) -> Result<(), ConfigError> {
         && (raw.username.is_some()
             || raw.password.is_some()
             || raw.password_file.is_some()
+            || raw.password_env.is_some()
             || raw.token.is_some()
-            || raw.token_file.is_some())
+            || raw.token_file.is_some()
+            || raw.token_env.is_some())
     {
         return Err(ConfigError::Index {
             name: raw.name.clone(),
@@ -269,16 +271,17 @@ fn classify_legacy_cached(raw: &mut RawIndex, upstream: String) -> Result<IndexK
     Ok(IndexKind::Cached {
         upstream,
         username: raw.username.take(),
-        password: secret_source(raw.password.take(), raw.password_file.take()).map_err(|reason| {
-            ConfigError::Index {
+        password: upstream_secret_source(raw.password.take(), raw.password_file.take(), raw.password_env.take())
+            .map_err(|reason| ConfigError::Index {
                 name: raw.name.clone(),
                 reason,
-            }
-        })?,
-        token: secret_source(raw.token.take(), raw.token_file.take()).map_err(|reason| ConfigError::Index {
-            name: raw.name.clone(),
-            reason,
-        })?,
+            })?,
+        token: upstream_secret_source(raw.token.take(), raw.token_file.take(), raw.token_env.take()).map_err(
+            |reason| ConfigError::Index {
+                name: raw.name.clone(),
+                reason,
+            },
+        )?,
         tls,
         routing: None,
         upstream_concurrency: raw.upstream_concurrency.unwrap_or(DEFAULT_UPSTREAM_CONCURRENCY),
@@ -317,13 +320,17 @@ fn classify_upstream(index: &str, raw: RawUpstream) -> Result<UpstreamConfig, Co
         url: raw.url,
         artifact_url: raw.artifact_url,
         username: raw.username,
-        password: secret_source(raw.password, raw.password_file).map_err(|reason| ConfigError::Index {
-            name: index.to_owned(),
-            reason,
+        password: upstream_secret_source(raw.password, raw.password_file, raw.password_env).map_err(|reason| {
+            ConfigError::Index {
+                name: index.to_owned(),
+                reason,
+            }
         })?,
-        token: secret_source(raw.token, raw.token_file).map_err(|reason| ConfigError::Index {
-            name: index.to_owned(),
-            reason,
+        token: upstream_secret_source(raw.token, raw.token_file, raw.token_env).map_err(|reason| {
+            ConfigError::Index {
+                name: index.to_owned(),
+                reason,
+            }
         })?,
         tls: upstream_tls(index, raw.ca_file, raw.client_cert_file, raw.client_key_file)?,
     })
@@ -408,6 +415,23 @@ fn secret_source(literal: Option<String>, file: Option<PathBuf>) -> Result<Optio
         (Some(secret), None) => Ok(Some(SecretSource::Literal(secret))),
         (None, Some(path)) => Ok(Some(SecretSource::File(path))),
         (None, None) => Ok(None),
+    }
+}
+
+/// An upstream credential from exactly one of its literal key, its `*_file` sibling, or its `*_env`
+/// sibling. Upstream credentials add the environment source that file-only secrets do not offer.
+fn upstream_secret_source(
+    literal: Option<String>,
+    file: Option<PathBuf>,
+    env: Option<String>,
+) -> Result<Option<SecretSource>, &'static str> {
+    match (literal, file, env) {
+        (None, None, None) => Ok(None),
+        (Some(secret), None, None) => Ok(Some(SecretSource::Literal(secret))),
+        (None, Some(path), None) => Ok(Some(SecretSource::File(path))),
+        (None, None, Some(var)) if !var.trim().is_empty() => Ok(Some(SecretSource::Env(var))),
+        (None, None, Some(_)) => Err("`_env` names an environment variable and must not be empty"),
+        _ => Err("set at most one of a secret, its `_file` sibling, and its `_env` sibling"),
     }
 }
 

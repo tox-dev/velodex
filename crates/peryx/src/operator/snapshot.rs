@@ -74,9 +74,13 @@ enum SnapshotIndexKind<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         password_file: Option<&'a Path>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        password_env: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         token: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         token_file: Option<&'a Path>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_env: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ca_file: Option<&'a Path>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,9 +129,13 @@ struct SnapshotUpstream<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     password_file: Option<&'a Path>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    password_env: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     token: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     token_file: Option<&'a Path>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_env: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ca_file: Option<&'a Path>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,7 +302,7 @@ pub(super) fn config_snapshot(config: &Config) -> anyhow::Result<String> {
         trusted_publishers,
     } = auth;
     let (tls, acme) = snapshot_tls(tls.as_ref());
-    let (signing_key, signing_key_file) = secret_parts(signing_key.as_ref());
+    let (signing_key, signing_key_file, _) = secret_parts(signing_key.as_ref());
     let snapshot = SnapshotConfig {
         host,
         port: *port,
@@ -342,7 +350,7 @@ pub(super) fn config_snapshot(config: &Config) -> anyhow::Result<String> {
 fn snapshot_replication(replication: Option<&ReplicationConfig>) -> Option<SnapshotReplication<'_>> {
     match replication {
         Some(ReplicationConfig::Primary { source, token }) => {
-            let (token, token_file) = secret_parts(Some(token));
+            let (token, token_file, _) = secret_parts(Some(token));
             Some(SnapshotReplication::Primary {
                 source,
                 token,
@@ -355,7 +363,7 @@ fn snapshot_replication(replication: Option<&ReplicationConfig>) -> Option<Snaps
             poll_interval,
             page_size,
         }) => {
-            let (token, token_file) = secret_parts(Some(token));
+            let (token, token_file, _) = secret_parts(Some(token));
             Some(SnapshotReplication::Replica {
                 upstream,
                 token,
@@ -394,15 +402,17 @@ fn snapshot_index(index: &IndexConfig) -> anyhow::Result<SnapshotIndex<'_>> {
             prefetch,
         } => routing.as_ref().map_or_else(
             || {
-                let (password, password_file) = secret_parts(password.as_ref());
-                let (token, token_file) = secret_parts(token.as_ref());
+                let (password, password_file, password_env) = secret_parts(password.as_ref());
+                let (token, token_file, token_env) = secret_parts(token.as_ref());
                 SnapshotIndexKind::Cached {
                     cached: upstream,
                     username: username.as_deref(),
                     password,
                     password_file,
+                    password_env,
                     token,
                     token_file,
+                    token_env,
                     ca_file: tls.ca_file.as_deref(),
                     client_cert_file: tls.client_cert_file.as_deref(),
                     client_key_file: tls.client_key_file.as_deref(),
@@ -422,7 +432,7 @@ fn snapshot_index(index: &IndexConfig) -> anyhow::Result<SnapshotIndex<'_>> {
             },
         ),
         IndexKind::Hosted { upload_token, volatile } => {
-            let (upload_token, upload_token_file) = secret_parts(upload_token.as_ref());
+            let (upload_token, upload_token_file, _) = secret_parts(upload_token.as_ref());
             SnapshotIndexKind::Hosted {
                 hosted: true,
                 upload_token,
@@ -449,8 +459,8 @@ fn snapshot_index(index: &IndexConfig) -> anyhow::Result<SnapshotIndex<'_>> {
 }
 
 fn snapshot_upstream(upstream: &crate::config::UpstreamConfig) -> SnapshotUpstream<'_> {
-    let (password, password_file) = secret_parts(upstream.password.as_ref());
-    let (token, token_file) = secret_parts(upstream.token.as_ref());
+    let (password, password_file, password_env) = secret_parts(upstream.password.as_ref());
+    let (token, token_file, token_env) = secret_parts(upstream.token.as_ref());
     SnapshotUpstream {
         name: &upstream.name,
         url: &upstream.url,
@@ -458,8 +468,10 @@ fn snapshot_upstream(upstream: &crate::config::UpstreamConfig) -> SnapshotUpstre
         username: upstream.username.as_deref(),
         password,
         password_file,
+        password_env,
         token,
         token_file,
+        token_env,
         ca_file: upstream.tls.ca_file.as_deref(),
         client_cert_file: upstream.tls.client_cert_file.as_deref(),
         client_key_file: upstream.tls.client_key_file.as_deref(),
@@ -534,7 +546,7 @@ fn snapshot_token(token: &TokenConfig) -> anyhow::Result<SnapshotToken<'_>> {
         actions,
         expires_at,
     } = token;
-    let (secret, secret_file) = secret_parts(Some(secret));
+    let (secret, secret_file, _) = secret_parts(Some(secret));
     Ok(SnapshotToken {
         name,
         secret,
@@ -622,12 +634,13 @@ const fn snapshot_route_limit(limit: RouteLimit) -> SnapshotRouteLimit {
     SnapshotRouteLimit { requests, window_secs }
 }
 
-// Preserve file-backed secret references so snapshots do not expose secret contents.
-fn secret_parts(source: Option<&SecretSource>) -> (Option<&str>, Option<&Path>) {
+// Preserve file- and env-backed secret references so snapshots hold the location, never the contents.
+fn secret_parts(source: Option<&SecretSource>) -> (Option<&str>, Option<&Path>, Option<&str>) {
     match source {
-        Some(SecretSource::Literal(secret)) => (Some(secret), None),
-        Some(SecretSource::File(path)) => (None, Some(path)),
-        None => (None, None),
+        Some(SecretSource::Literal(secret)) => (Some(secret), None, None),
+        Some(SecretSource::File(path)) => (None, Some(path), None),
+        Some(SecretSource::Env(var)) => (None, None, Some(var)),
+        None => (None, None, None),
     }
 }
 

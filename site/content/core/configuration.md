@@ -69,6 +69,45 @@ another configured identity cannot start against that store. Replica mode does n
 snapshot may retain the writer's value while serving read-only. See [High availability](@/core/high-availability.md) for
 promotion.
 
+## Upstream credential sources
+
+An upstream `password` or `token` reads from one of three places: the value inlined in the config, a `*_file` sibling,
+or a `*_env` sibling. Set at most one per credential; naming two fails startup. The same three sources apply to both a
+legacy `cached = URL` index and each `[[index.upstream]]` source, and to both PyPI and OCI upstreams. A bearer `token`
+still takes precedence over `username` plus `password`, and both still precede any [netrc](#upstream-netrc-credentials)
+match, so adding a `_file` or `_env` source changes where the secret comes from, never which credential wins.
+
+```toml
+[[index]]
+name = "corp"
+cached = "https://packages.corp.example/simple/"
+username = "peryx"
+password_env = "PERYX_CORP_PASSWORD"             # from the environment the process manager injects
+
+[[index]]
+name = "registry"
+ecosystem = "oci"
+cached = "https://registry.corp.example"
+token_file = "/run/credentials/peryx.service/registry-token" # from a systemd credential
+```
+
+`password_file`/`token_file` fit secret files mounted read-only by the process manager: a
+[systemd credential](https://systemd.io/CREDENTIALS/) under `$CREDENTIALS_DIRECTORY` (`LoadCredential=` or
+`SetCredential=`), a [Kubernetes Secret](https://kubernetes.io/docs/concepts/configuration/secret/) projected under
+`/run/secrets`, or a Docker secret. peryx trims surrounding whitespace, so a file that a `kubectl create secret` mount
+or an `echo` left with a trailing newline still resolves. `password_env`/`token_env` fit a value the manager passes as
+an environment variable, including systemd's `%d`-free `Environment=`/`EnvironmentFile=` and a Kubernetes
+`secretKeyRef`.
+
+peryx resolves every source once, when it builds the cached index at startup, and holds the value for the process
+lifetime, so it never rereads the file or variable per artifact request. A missing, unreadable, empty, or oversized file
+and an unset, non-UTF-8, or empty environment variable each stop startup with an error that names only the file path or
+variable, never the secret. The one-mebibyte file ceiling rejects a path pointed at a log or device before it is read
+into memory. Config snapshots (`peryx backup`) keep the `_file`/`_env` reference, not the resolved secret.
+
+To migrate an inlined credential, move the value into a file or environment variable and replace `password`/`token` with
+its `_file`/`_env` sibling; the inline keys keep working, so migrate one upstream at a time.
+
 ## Upstream netrc credentials
 
 Set `netrc` to opt into one shared file of Basic credentials for cached upstreams. peryx reads and parses the file once
@@ -213,8 +252,10 @@ the role. peryx rejects unknown keys.
 | `username`             | cached  | Basic-auth username for the upstream                                  | (none)             |
 | `password`             | cached  | Basic-auth password for the upstream                                  | (none)             |
 | `password_file`        | cached  | Path to read `password` from instead of inlining it                   | (none)             |
+| `password_env`         | cached  | Environment variable to read `password` from instead of inlining it   | (none)             |
 | `token`                | cached  | Bearer token; takes precedence over username/password                 | (none)             |
 | `token_file`           | cached  | Path to read `token` from instead of inlining it                      | (none)             |
+| `token_env`            | cached  | Environment variable to read `token` from instead of inlining it      | (none)             |
 | `ca_file`              | cached  | PEM CA bundle added to platform trust for this upstream               | (none)             |
 | `client_cert_file`     | cached  | PEM client certificate chain; requires `client_key_file`              | (none)             |
 | `client_key_file`      | cached  | Matching unencrypted PEM client key; requires `client_cert_file`      | (none)             |
