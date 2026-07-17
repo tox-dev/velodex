@@ -387,6 +387,54 @@ fn test_build_state_prefers_explicit_upstream_credentials(
 }
 
 #[test]
+fn test_build_state_reads_an_upstream_token_from_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = cached("corp", "https://corp.example/simple/");
+    let IndexKind::Cached { token, .. } = &mut index.kind else {
+        panic!("expected cached index");
+    };
+    *token = Some(SecretSource::Env("PATH".to_owned()));
+    let state = build_state(&Config {
+        data_dir: dir.path().join("data"),
+        indexes: vec![index],
+        ..Config::default()
+    })
+    .unwrap();
+    let RuntimeKind::Cached { client, .. } = &state.indexes[0].kind else {
+        panic!("expected cached index");
+    };
+
+    assert_eq!(
+        client.auth(),
+        &Auth::Bearer(std::env::var("PATH").unwrap().trim().to_owned())
+    );
+}
+
+#[test]
+fn test_build_state_reports_a_missing_upstream_credential_environment_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut index = cached("corp", "https://corp.example/simple/");
+    let IndexKind::Cached { token, .. } = &mut index.kind else {
+        panic!("expected cached index");
+    };
+    *token = Some(SecretSource::Env("PERYX_TEST_ABSENT_CREDENTIAL".to_owned()));
+    let Err(error) = build_state(&Config {
+        data_dir: dir.path().join("data"),
+        indexes: vec![index],
+        ..Config::default()
+    }) else {
+        panic!("expected a missing environment variable to fail startup");
+    };
+    let chain = format!("{error:#}");
+    assert!(
+        chain.contains(
+            "credential environment variable PERYX_TEST_ABSENT_CREDENTIAL is unset, empty, or not valid UTF-8"
+        ),
+        "{chain}"
+    );
+}
+
+#[test]
 fn test_build_state_leaves_missing_netrc_entries_anonymous() {
     let dir = tempfile::tempdir().unwrap();
     let netrc = dir.path().join("credentials.netrc");

@@ -52,6 +52,10 @@ pub enum ConfigError {
     WriterIdentity { reason: &'static str },
     #[error("secret file {path} holds no secret")]
     EmptySecret { path: PathBuf },
+    #[error("secret file {path} exceeds the {limit}-byte limit")]
+    OversizeSecret { path: PathBuf, limit: u64 },
+    #[error("credential environment variable {var} is unset, empty, or not valid UTF-8")]
+    EnvSecret { var: String },
     #[error("webhook {name}: {reason}")]
     Webhook { name: String, reason: &'static str },
     #[error("tls: {reason}")]

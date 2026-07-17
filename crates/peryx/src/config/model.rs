@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use peryx_core::Ecosystem;
@@ -151,38 +151,69 @@ pub struct TrustedPublisherConfig {
     pub claims: BTreeMap<String, String>,
 }
 
-/// Where a secret's value comes from. A `*_file` sibling keeps the value out of the config file, so a
-/// mounted Docker or Kubernetes secret, a systemd credential, or a Vault-rendered file can hold it.
+/// A secret file above this size is a misconfiguration, not a credential: a systemd credential or a
+/// Kubernetes secret holds a token, never a megabyte. Capping the read keeps a wrong path (a log, a
+/// device) from being slurped into memory before it fails.
+const MAX_SECRET_FILE_BYTES: u64 = 1 << 20;
+
+/// Where a secret's value comes from.
+///
+/// A `*_file` sibling keeps the value out of the config file, so a mounted Docker or Kubernetes secret,
+/// a systemd credential, or a Vault-rendered file can hold it; an `*_env` sibling reads it from an
+/// environment variable the process manager injects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretSource {
     Literal(String),
     File(PathBuf),
+    Env(String),
 }
 
 impl SecretSource {
-    /// The secret's value, reading the file when that is where it lives. Surrounding whitespace goes:
-    /// a secret file written by `echo` or a Kubernetes mount ends in a newline that is not part of it.
+    /// The secret's value, reading the file or environment variable when that is where it lives.
+    /// Surrounding whitespace goes: a secret file written by `echo` or a Kubernetes mount ends in a
+    /// newline that is not part of it. Every error path names only the location, never the value.
     ///
     /// # Errors
-    /// Returns [`ConfigError::Read`] when the file cannot be read and [`ConfigError::EmptySecret`] when
-    /// it holds nothing but whitespace.
+    /// Returns [`ConfigError::Read`] when a file cannot be read, [`ConfigError::OversizeSecret`] when it
+    /// exceeds [`MAX_SECRET_FILE_BYTES`], [`ConfigError::EmptySecret`] when a file holds only whitespace,
+    /// and [`ConfigError::EnvSecret`] when the variable is unset, empty, or not valid UTF-8.
     pub fn read(&self) -> Result<String, ConfigError> {
         match self {
             Self::Literal(secret) => Ok(secret.clone()),
-            Self::File(path) => {
-                let secret = std::fs::read_to_string(path)
-                    .map_err(|source| ConfigError::Read {
-                        path: path.clone(),
-                        source,
-                    })?
-                    .trim()
-                    .to_owned();
-                if secret.is_empty() {
-                    return Err(ConfigError::EmptySecret { path: path.clone() });
-                }
-                Ok(secret)
-            }
+            Self::File(path) => Self::read_file(path),
+            Self::Env(var) => Self::read_env(var),
         }
+    }
+
+    fn read_file(path: &Path) -> Result<String, ConfigError> {
+        use std::io::Read as _;
+
+        let mut buf = String::new();
+        let read = std::fs::File::open(path)
+            .and_then(|file| file.take(MAX_SECRET_FILE_BYTES + 1).read_to_string(&mut buf))
+            .map_err(|source| ConfigError::Read {
+                path: path.to_owned(),
+                source,
+            })?;
+        if read as u64 > MAX_SECRET_FILE_BYTES {
+            return Err(ConfigError::OversizeSecret {
+                path: path.to_owned(),
+                limit: MAX_SECRET_FILE_BYTES,
+            });
+        }
+        let secret = buf.trim();
+        if secret.is_empty() {
+            return Err(ConfigError::EmptySecret { path: path.to_owned() });
+        }
+        Ok(secret.to_owned())
+    }
+
+    fn read_env(var: &str) -> Result<String, ConfigError> {
+        std::env::var(var)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|secret| !secret.is_empty())
+            .ok_or_else(|| ConfigError::EnvSecret { var: var.to_owned() })
     }
 }
 
