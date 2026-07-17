@@ -162,6 +162,22 @@ fn test_policy_decision_failed_catalog_publication_rolls_back_generation() {
 }
 
 #[test]
+fn test_policy_catalog_generation_captures_repository_serial() {
+    let (_dir, meta) = store();
+    meta.next_serial().unwrap();
+    publish_catalog(&meta, 1);
+
+    assert_eq!(
+        meta.policy_input_generation("private").unwrap(),
+        crate::meta::PolicyInputGeneration {
+            repository: 1,
+            catalog: 1,
+            policy: 0,
+        }
+    );
+}
+
+#[test]
 fn test_policy_decision_query_filters_and_paginates() {
     let (_dir, meta) = store();
     for (project, state, evaluated_at_unix) in [
@@ -315,6 +331,21 @@ fn test_policy_generation_initializes_an_unknown_repository() {
             },
             crate::meta::PolicyInputGeneration::default(),
         )
+    );
+}
+
+#[test]
+fn test_policy_generation_captures_repository_serial() {
+    let (_dir, meta) = store();
+    meta.next_serial().unwrap();
+
+    assert_eq!(
+        meta.advance_policy_generation("private").unwrap(),
+        crate::meta::PolicyInputGeneration {
+            repository: 1,
+            catalog: 0,
+            policy: 1,
+        }
     );
 }
 

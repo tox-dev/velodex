@@ -190,7 +190,7 @@ impl PolicyDecisionRecorder for StoredPolicyDecisionRecorder {
 fn attach_policy_decision_recorders(meta: &MetaStore, indexes: &mut [Index]) -> anyhow::Result<()> {
     for index in indexes {
         meta.advance_policy_generation(&index.name)
-            .with_context(|| format!("advance policy generation for {}", index.name))?;
+            .context(format!("advance policy generation for {}", index.name))?;
         index.policy =
             std::mem::take(&mut index.policy).with_decision_recorder(Arc::new(StoredPolicyDecisionRecorder {
                 meta: meta.clone(),
