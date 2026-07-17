@@ -44,10 +44,7 @@ impl JobLimits {
     #[must_use]
     pub const fn node_local() -> Self {
         const fn nz(value: usize) -> NonZeroUsize {
-            match NonZeroUsize::new(value) {
-                Some(value) => value,
-                None => unreachable!(),
-            }
+            NonZeroUsize::new(value).expect("literal is non-zero")
         }
         Self {
             workers: nz(4),
