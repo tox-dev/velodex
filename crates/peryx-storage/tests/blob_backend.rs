@@ -453,6 +453,16 @@ async fn test_materialize_falls_back_when_a_hard_link_is_unavailable() {
 }
 
 #[tokio::test]
+async fn test_materialize_reports_a_missing_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = BlobStorage::filesystem(dir.path());
+    let digest = Digest::of(b"absent");
+    let err = storage.materialize(&digest).await.unwrap_err();
+    assert_eq!(err.kind(), BlobErrorKind::NotFound);
+    assert_eq!(err.context().unwrap().digest.as_deref(), Some(digest.as_str()));
+}
+
+#[tokio::test]
 async fn test_stream_payload_collects_without_a_file_path() {
     let read = BlobRead::new(
         "stream",
