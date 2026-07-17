@@ -221,15 +221,13 @@ fn status() -> OperationBuilder {
 fn health() -> OperationBuilder {
     OperationBuilder::new()
         .tag("operations")
-        .summary(Some("Local store health"))
-        .description(Some("Checks that the metadata and blob stores remain available."))
+        .summary(Some("Process liveness"))
+        .description(Some(
+            "Returns a fixed public document while the HTTP process can answer requests. Local-store and upstream failures do not fail liveness.",
+        ))
         .response(
             "200",
-            ResponseBuilder::new().description("Both local stores are healthy"),
-        )
-        .response(
-            "503",
-            ResponseBuilder::new().description("The metadata or blob store is unavailable"),
+            api_json_response("The process is live", json!({"status": "live"})),
         )
 }
 
@@ -238,7 +236,7 @@ fn readiness() -> OperationBuilder {
         .tag("operations")
         .summary(Some("Read or write readiness"))
         .description(Some(
-            "Checks read readiness by default. Set `writes=true` for a probe that accepts only a healthy writer.",
+            "Checks the bounded local metadata and blob-store dependencies used to serve package requests. Set `writes=true` to require a writer. The probe does not enumerate repositories or contact upstreams.",
         ))
         .parameter(
             ParameterBuilder::new()
@@ -249,11 +247,14 @@ fn readiness() -> OperationBuilder {
         )
         .response(
             "200",
-            ResponseBuilder::new().description("The requested traffic class is ready"),
+            api_json_response("The requested traffic class is ready", json!({"status": "ready"})),
         )
         .response(
             "503",
-            ResponseBuilder::new().description("The requested traffic class is not ready"),
+            api_json_response(
+                "A required local dependency is unavailable or write traffic reached a replica",
+                json!({"status": "not_ready"}),
+            ),
         )
 }
 

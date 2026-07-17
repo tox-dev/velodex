@@ -185,14 +185,18 @@
         "tags": [
           "operations"
         ],
-        "summary": "Local store health",
-        "description": "Checks that the metadata and blob stores remain available.",
+        "summary": "Process liveness",
+        "description": "Returns a fixed public document while the HTTP process can answer requests. Local-store and upstream failures do not fail liveness.",
         "responses": {
           "200": {
-            "description": "Both local stores are healthy"
-          },
-          "503": {
-            "description": "The metadata or blob store is unavailable"
+            "description": "The process is live",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "live"
+                }
+              }
+            }
           }
         }
       }
@@ -338,7 +342,7 @@
           "operations"
         ],
         "summary": "Read or write readiness",
-        "description": "Checks read readiness by default. Set `writes=true` for a probe that accepts only a healthy writer.",
+        "description": "Checks the bounded local metadata and blob-store dependencies used to serve package requests. Set `writes=true` to require a writer. The probe does not enumerate repositories or contact upstreams.",
         "parameters": [
           {
             "name": "writes",
@@ -350,10 +354,24 @@
         ],
         "responses": {
           "200": {
-            "description": "The requested traffic class is ready"
+            "description": "The requested traffic class is ready",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ready"
+                }
+              }
+            }
           },
           "503": {
-            "description": "The requested traffic class is not ready"
+            "description": "A required local dependency is unavailable or write traffic reached a replica",
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "not_ready"
+                }
+              }
+            }
           }
         }
       }

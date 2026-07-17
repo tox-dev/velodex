@@ -148,6 +148,12 @@ impl std::ops::DerefMut for AppState {
 }
 
 impl ServingState {
+    /// Whether the local stores and process role permit the requested traffic class.
+    #[must_use]
+    pub fn is_ready(&self, writes: bool) -> bool {
+        self.meta.current_serial().is_ok() && self.blobs.health_check().is_ok() && (!writes || !self.read_only)
+    }
+
     /// Find the index whose route is the longest segment-aligned prefix of `path` (which has no
     /// leading slash), and the path remainder after `route/`. Returns `None` if no route matches.
     #[must_use]

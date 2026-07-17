@@ -117,6 +117,28 @@ async fn test_default_rate_limiter_bypasses_requests() {
 }
 
 #[tokio::test]
+async fn test_public_probes_bypass_the_admin_rate_limit() {
+    let h = harness(
+        RateLimitConfig {
+            admin: RouteLimit::new(1, 60),
+            ..RateLimitConfig::enabled_defaults()
+        },
+        DEFAULT_UPSTREAM_CONCURRENCY,
+    )
+    .await;
+
+    let first_status = request(&h.state, "/+status", &[]).await.0;
+    let health = request(&h.state, "/+health", &[]).await.0;
+    let readiness = request(&h.state, "/+ready", &[]).await.0;
+    let second_status = request(&h.state, "/+status", &[]).await.0;
+
+    assert_eq!(first_status, StatusCode::OK);
+    assert_eq!(health, StatusCode::OK);
+    assert_eq!(readiness, StatusCode::OK);
+    assert_eq!(second_status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn test_trusted_proxy_separates_clients() {
     let (harness, peer) = trusted_proxy_harness().await;
 

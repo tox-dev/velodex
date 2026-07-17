@@ -412,6 +412,9 @@ pub struct UpstreamLimited {
 
 pub async fn enforce(State(state): State<Arc<AppState>>, request: axum::extract::Request, next: Next) -> Response {
     let path = request.uri().path();
+    if matches!(path, "/+health" | "/+ready") {
+        return next.run(request).await;
+    }
     let service_post_class = if *request.method() == Method::POST {
         state
             .drivers()

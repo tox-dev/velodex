@@ -50,6 +50,22 @@ fn pypi_index(route: &str) -> peryx_driver::state::Index {
     }
 }
 
+#[rstest]
+#[case::liveness("/+health", r#"{"status":"live"}"#)]
+#[case::readiness("/+ready", r#"{"status":"ready"}"#)]
+#[tokio::test]
+async fn test_unwired_state_serves_public_probes(#[case] uri: &str, #[case] expected: &str) {
+    let (_dir, state) = unwired_state_with(vec![pypi_index("private-route")]);
+    let response = crate::router(state)
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[axum::http::header::CACHE_CONTROL], "no-store");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), expected.as_bytes());
+}
+
 #[tokio::test]
 async fn test_unwired_state_serves_503_when_a_driver_is_missing() {
     // A configured index with no ecosystem driver wired in: resolvable, so the request reaches the
