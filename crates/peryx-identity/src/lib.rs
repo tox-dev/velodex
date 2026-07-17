@@ -22,6 +22,7 @@
 mod acl;
 mod token;
 mod trusted_publisher;
+mod user;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -32,6 +33,7 @@ pub use acl::{
 };
 pub use token::{Signer, TokenError};
 pub use trusted_publisher::{PublishClaims, PublishDenial, TrustedPublisher, authorize_publish};
+pub use user::{ServerUser, UserId, UserLifecycleChange, UserLifecycleEvent, UserName, UserNameError, UserState};
 
 /// The user and password carried by an HTTP Basic `Authorization` header.
 #[derive(Debug, Clone, PartialEq, Eq)]

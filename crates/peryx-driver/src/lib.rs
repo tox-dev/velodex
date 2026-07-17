@@ -20,6 +20,7 @@ pub mod range;
 pub mod rate_limit;
 pub mod serving;
 pub mod state;
+pub mod users;
 
 pub use driver_set::DriverSet;
 pub use state::{
