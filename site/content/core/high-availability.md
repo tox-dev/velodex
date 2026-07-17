@@ -40,13 +40,51 @@ or coordinate a shared blob store.
 
 ## Load-balancer probes
 
-`GET /+health` checks the local metadata and blob stores. `GET /+ready` returns `200` when the process can serve reads.
-`GET /+ready?writes=true` returns `200` on a healthy writer and `503` on each replica. Configure the read pool with
-`/+ready` and the write pool with `/+ready?writes=true`.
+`GET /+health` is the liveness probe. It returns `200 OK` with `{"status":"live"}` while the HTTP process can answer.
+Metadata, blob-store, and upstream failures do not fail liveness because a restart cannot repair those dependencies.
 
-`GET /+status` reports `role` as `writer` or `replica`. Its `health` object shows whether the node can serve reads or
-accept writes, plus the state of both local stores. It also reports the last observed reachability of each configured
-upstream.
+`GET /+ready` checks the local metadata store and blob-store root used by package requests. It returns `200 OK` with
+`{"status":"ready"}` or `503 Service Unavailable` with `{"status":"not_ready"}`. It does not scan metadata, enumerate
+repositories, or contact an upstream. `GET /+ready?writes=true` also requires a writer; replicas return `503` for that
+query while remaining ready for reads.
+
+Both public probes are anonymous, bypass the hosted request limiter, and send `Cache-Control: no-store`. Their fixed
+documents contain no repository, upstream, user, topology, or failure details. `GET /+status` remains the detailed
+operator surface. It reports the process role, local-store state, and last observed upstream reachability. Restrict
+`/+status` at the ingress when that topology is sensitive.
+
+For [Kubernetes probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/), let readiness remove a pod from
+service before liveness restarts it:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /+health
+    port: 4433
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /+ready
+    port: 4433
+  periodSeconds: 5
+  failureThreshold: 2
+```
+
+A generic load balancer should use readiness to select backends. For example, an
+[HAProxy HTTP health check](https://www.haproxy.com/documentation/haproxy-configuration-tutorials/reliability/health-checks/)
+can use the same route for a read pool:
+
+```haproxy
+backend peryx-readers
+    option httpchk GET /+ready
+    http-check expect status 200
+    server peryx-1 10.0.0.11:4433 check
+    server peryx-2 10.0.0.12:4433 check
+```
+
+Use `/+ready?writes=true` for the writer pool. Do not use `/+health` for load balancing because it detects a process
+that cannot answer at all, so it remains successful during recoverable dependency failures.
 
 ## Manual promotion
 

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use futures_util::TryStreamExt as _;
 use http_body_util::BodyExt as _;
 use peryx_driver::IndexKind as RuntimeKind;
@@ -153,6 +153,34 @@ async fn test_build_router_serves_status() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("root/pypi"));
+}
+
+#[rstest]
+#[case::liveness("/+health", r#"{"status":"live"}"#)]
+#[case::readiness("/+ready", r#"{"status":"ready"}"#)]
+fn test_build_router_serves_public_probes(#[case] uri: &str, #[case] expected: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::task::LocalSet::new().block_on(
+        &tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap(),
+        async {
+            let router = build_router(&Config {
+                data_dir: dir.path().to_path_buf(),
+                ..Config::default()
+            })
+            .unwrap();
+            let response = router
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(body.as_ref(), expected.as_bytes());
+        },
+    );
 }
 
 #[tokio::test]

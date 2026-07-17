@@ -31,6 +31,9 @@ each endpoint down with copyable example requests and responses.
 - `GET /+api`: server discovery, global URLs plus every configured index.
 - `GET /+search`: search cached packages across every configured index.
 - `GET /api-docs/openapi.json`: the server's OpenAPI description.
+- `GET /+health`: fixed, redacted process liveness for restart probes.
+- `GET /+ready`: redacted local-store readiness for load balancers; add `?writes=true` to require a writer. See
+  [load-balancer probes](@/core/high-availability.md#load-balancer-probes) for response and deployment examples.
 - `GET /+status`: JSON health, version, counters, index descriptions.
 - `GET /+stats`: usage counters, drillable to project and file level.
 - `GET /metrics`: [Prometheus](https://prometheus.io/docs/instrumenting/exposition_formats/) text exposition.

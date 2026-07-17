@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use super::usage::{ecosystem_summaries, family_descriptors};
@@ -128,34 +128,30 @@ pub async fn status(State(state): State<Arc<AppState>>, Query(query): Query<Stat
     .into_response()
 }
 
-/// `GET /+health`: process and local-store health for liveness checks.
-pub async fn health(State(state): State<Arc<AppState>>) -> Response {
-    let metadata = state.meta.current_serial().is_ok();
-    let status = if metadata && blob_store_available(&state.blobs) {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-    (status, axum::Json(health_document(&state, metadata))).into_response()
+/// `GET /+health`: process liveness for restart decisions.
+pub async fn health() -> Response {
+    probe_response(StatusCode::OK, r#"{"status":"live"}"#)
 }
 
 /// `GET /+ready`: read readiness by default, or writer readiness with `?writes=true`.
 pub async fn readiness(State(state): State<Arc<AppState>>, Query(query): Query<ReadinessQuery>) -> Response {
-    let metadata = state.meta.current_serial().is_ok();
-    let document = health_document(&state, metadata);
-    let ready = document[if query.writes {
-        "accepting_writes"
+    if state.is_ready(query.writes) {
+        probe_response(StatusCode::OK, r#"{"status":"ready"}"#)
     } else {
-        "serving_reads"
-    }]
-    .as_bool()
-    .unwrap_or(false);
-    let status = if ready {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-    (status, axum::Json(document)).into_response()
+        probe_response(StatusCode::SERVICE_UNAVAILABLE, r#"{"status":"not_ready"}"#)
+    }
+}
+
+fn probe_response(status: StatusCode, body: &'static str) -> Response {
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 fn health_document(state: &AppState, metadata: bool) -> serde_json::Value {

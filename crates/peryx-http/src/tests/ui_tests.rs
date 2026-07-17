@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use rstest::rstest;
 use tower::ServiceExt as _;
 
@@ -181,6 +181,18 @@ async fn get_status(app: &axum::Router, uri: &str) -> StatusCode {
         .status()
 }
 
+async fn get_probe(app: &axum::Router, uri: &str) -> (StatusCode, HeaderMap, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, headers, serde_json::from_slice(&body).unwrap())
+}
+
 fn read_only_app() -> (tempfile::TempDir, axum::Router) {
     let dir = tempfile::tempdir().unwrap();
     let meta = peryx_storage::meta::MetaStore::open(dir.path().join("peryx.redb")).unwrap();
@@ -222,12 +234,22 @@ async fn test_replica_status_and_readiness_report_read_only_role() {
 }
 
 #[tokio::test]
-async fn test_health_reports_an_unavailable_blob_store_and_disabled_upstream() {
+async fn test_liveness_stays_successful_when_a_local_store_is_unavailable() {
     let (_dir, app) = unavailable_app();
-    let (status, document) = get_json(&app, "/+health").await;
+    let (status, headers, document) = get_probe(&app, "/+health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(document, serde_json::json!({"status": "live"}));
+}
+
+#[tokio::test]
+async fn test_readiness_redacts_an_unavailable_local_store() {
+    let (_dir, app) = unavailable_app();
+    let (status, headers, document) = get_probe(&app, "/+ready").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(document["blob_store"], "unhealthy");
-    assert_eq!(get_status(&app, "/+ready").await, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(document, serde_json::json!({"status": "not_ready"}));
 
     let (status, document) = get_json(&app, "/+status").await;
     assert_eq!(status, StatusCode::OK);

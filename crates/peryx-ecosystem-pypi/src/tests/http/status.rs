@@ -26,6 +26,19 @@ async fn test_status_lists_routes() {
     assert!(!body.contains("\"recent_uploads\""));
     assert!(!body.contains("s3cret"));
 }
+
+#[rstest]
+#[case::liveness("/+health", r#"{"status":"live"}"#)]
+#[case::readiness("/+ready", r#"{"status":"ready"}"#)]
+#[tokio::test]
+async fn test_public_probe_has_a_fixed_redacted_document(#[case] uri: &str, #[case] expected: &str) {
+    let h = harness().await;
+    let (status, headers, body) = get(&h.state, uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(body, expected);
+}
 #[tokio::test]
 async fn test_status_admin_details_include_bounded_summaries() {
     let h = harness().await;
