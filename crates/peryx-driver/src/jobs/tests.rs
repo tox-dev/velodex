@@ -411,3 +411,28 @@ async fn test_submit_maintenance_runs_one_job_per_driver_and_records_it() {
     assert_eq!(runs[0].items_processed, 2);
     assert_eq!(runs[0].items_changed, 1);
 }
+
+/// A job that leans on every default the trait provides, so the `persist_as` default is exercised.
+struct BareJob {
+    scope: String,
+}
+
+#[async_trait]
+impl NodeJob for BareJob {
+    fn kind(&self) -> &'static str {
+        "bare"
+    }
+
+    fn scope(&self) -> &str {
+        &self.scope
+    }
+
+    async fn run(&self, _ctx: &JobContext) -> Result<JobReport, String> {
+        Ok(JobReport::default())
+    }
+}
+
+#[test]
+fn test_a_job_defaults_to_running_without_a_persisted_record() {
+    assert_eq!(BareJob { scope: String::new() }.persist_as(), None);
+}
