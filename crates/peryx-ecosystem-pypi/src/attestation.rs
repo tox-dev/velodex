@@ -424,16 +424,54 @@ mod tests {
     }
 
     #[test]
-    fn test_error_messages_name_the_attestation_and_reason() {
-        assert!(
-            AttestationError::SubjectDigestMismatch(3)
-                .message()
-                .contains("attestation 3")
+    fn test_build_provenance_rejects_an_oversized_statement() {
+        let mut oversized = attestation(FILENAME, SHA);
+        let subject = json!({"subject": [{"name": "a".repeat(MAX_STATEMENT_BYTES + 1), "digest": {"sha256": SHA}}]});
+        oversized["envelope"]["statement"] = json!(STANDARD.encode(subject.to_string()));
+        let raw = field(&[oversized]);
+
+        assert_eq!(
+            build_provenance(&raw, SHA, FILENAME).unwrap_err(),
+            AttestationError::MalformedStatement(0)
         );
-        assert!(
-            AttestationError::TooMany(99)
-                .message()
-                .contains(&MAX_ATTESTATIONS.to_string())
-        );
+    }
+
+    #[test]
+    fn test_message_names_the_reason_for_every_variant() {
+        for (error, expected) in [
+            (AttestationError::Malformed("boom".to_owned()), "valid JSON array"),
+            (AttestationError::TooMany(99), "at most 32"),
+            (AttestationError::Empty, "empty array"),
+            (
+                AttestationError::TooLarge { index: 1, size: 5 },
+                "attestation 1 is 5 bytes",
+            ),
+            (AttestationError::NotObject(2), "attestation 2 is not a JSON object"),
+            (
+                AttestationError::UnsupportedVersion {
+                    index: 0,
+                    version: "9".to_owned(),
+                },
+                "unsupported version 9",
+            ),
+            (AttestationError::MissingStatement(0), "missing its envelope statement"),
+            (AttestationError::InvalidStatementEncoding(0), "not valid base64"),
+            (AttestationError::MalformedStatement(0), "not a valid in-toto statement"),
+            (AttestationError::EmptySubject(0), "names no subject"),
+            (
+                AttestationError::SubjectDigestMismatch(3),
+                "attestation 3 subject digest",
+            ),
+            (
+                AttestationError::SubjectNameMismatch {
+                    index: 0,
+                    expected: "a.whl".to_owned(),
+                    actual: "b.whl".to_owned(),
+                },
+                "subject names \"b.whl\"",
+            ),
+        ] {
+            assert!(error.message().contains(expected), "{error:?} -> {}", error.message());
+        }
     }
 }

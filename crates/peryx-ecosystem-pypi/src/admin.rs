@@ -559,12 +559,14 @@ mod tests {
             .unwrap();
         meta.put_override("pypi", "flask", "flask-1.0.whl", "yanked", 0)
             .unwrap();
+        meta.put_provenance(&"a".repeat(64), &"b".repeat(64), 16).unwrap();
         let counts: std::collections::HashMap<String, u64> = cache_record_counts(&meta).unwrap().into_iter().collect();
         assert_eq!(counts["file_url_records"], 1);
         assert_eq!(counts["metadata_records"], 1);
         assert_eq!(counts["project_records"], 1);
         assert_eq!(counts["upload_records"], 1);
         assert_eq!(counts["override_records"], 1);
+        assert_eq!(counts["provenance_records"], 1);
     }
 
     #[test]
@@ -593,6 +595,22 @@ mod tests {
     }
 
     #[test]
+    fn test_referenced_blob_digests_includes_the_provenance_blob() {
+        let (_dir, meta) = store();
+        let provenance_blob = "c".repeat(64);
+        meta.put_provenance(&"a".repeat(64), &provenance_blob, 16).unwrap();
+        assert!(referenced_blob_digests(&meta).unwrap().contains(&provenance_blob));
+    }
+
+    #[test]
+    fn test_referenced_blob_digests_rejects_a_corrupt_provenance_record() {
+        let (_dir, meta) = store();
+        // A provenance row keyed by a non-hex digest. `pypi\0a\0` is the provenance namespace.
+        meta.put_driver_value("pypi\u{0}a\u{0}not-hex", b"abc\n16").unwrap();
+        assert!(referenced_blob_digests(&meta).is_err());
+    }
+
+    #[test]
     fn test_fsck_metadata_reports_every_invalid_record_kind() {
         let (dir, meta) = store();
         let blobs = BlobStore::new(dir.path().join("blobs")).into();
@@ -602,9 +620,12 @@ mod tests {
         meta.put_driver_value("pypi\u{0}p\u{0}pypi/flask", b"").unwrap();
         meta.put_upload("pypi", "flask", "flask-1.0.whl", b"not json").unwrap();
         meta.put_override("pypi", "flask", "flask-1.0.whl", "bogus", 0).unwrap();
+        meta.put_driver_value("pypi\u{0}a\u{0}not-hex", b"abc\n16").unwrap();
+        // A valid provenance row exercises the fsck scan's accept path alongside the invalid one.
+        meta.put_provenance(&"a".repeat(64), &"b".repeat(64), 16).unwrap();
         let mut out = Vec::new();
         let problems = fsck_metadata(&meta, &blobs, &mut out).unwrap();
-        assert_eq!(problems, 6, "{}", String::from_utf8_lossy(&out));
+        assert_eq!(problems, 7, "{}", String::from_utf8_lossy(&out));
     }
 
     #[test]

@@ -314,6 +314,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_provenance_response_tags_the_integrity_media_type_and_maps_errors() {
+        let served = provenance_response(
+            Ok(bytes::Bytes::from_static(br#"{"version":1}"#)),
+            CacheContext::provenance("root/pypi", "abc", "pkg-1.0-py3-none-any.whl.provenance"),
+        );
+        assert_eq!(served.status(), StatusCode::OK);
+        assert_eq!(
+            served.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/vnd.pypi.integrity.v1+json"
+        );
+
+        let missing = provenance_response(
+            Err(CacheError::FileNotFound),
+            CacheContext::provenance("root/pypi", "abc", "pkg-1.0-py3-none-any.whl.provenance"),
+        );
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
     fn test_cache_error_status_maps_store_and_policy_errors() {
         let context = CacheContext::mutation("file removal");
         assert_eq!(

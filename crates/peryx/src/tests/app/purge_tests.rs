@@ -9,8 +9,8 @@ fn test_cache_purge_project_dry_run_keeps_records() {
     app::cache(&config, &purge_project_command(false), &mut out).unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
-        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\n\
-dry-run\tproject\tpypi\tflask\t1\t1\t1\t1\n"
+        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\tprovenance_records\n\
+dry-run\tproject\tpypi\tflask\t1\t1\t1\t1\t0\n"
     );
     let meta = MetaStore::open_existing(config.data_dir.join("peryx.redb")).unwrap();
     assert!(meta.get_index("pypi/flask").unwrap().is_some());
@@ -34,8 +34,8 @@ fn test_cache_purge_project_missing_target_is_empty() {
     .unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
-        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\n\
-dry-run\tproject\tpypi\tmissing\t0\t0\t0\t0\n"
+        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\tprovenance_records\n\
+dry-run\tproject\tpypi\tmissing\t0\t0\t0\t0\t0\n"
     );
 }
 
@@ -68,7 +68,7 @@ fn test_cache_purge_project_preserves_shared_and_uploaded_blobs() {
     assert!(
         String::from_utf8(out)
             .unwrap()
-            .contains("dry-run\tproject\tpypi\tflask\t1\t1\t0\t0\n")
+            .contains("dry-run\tproject\tpypi\tflask\t1\t1\t0\t0\t0\n")
     );
 }
 
@@ -177,7 +177,7 @@ fn test_cache_purge_project_ignores_files_without_sha256() {
     assert!(
         String::from_utf8(out)
             .unwrap()
-            .contains("dry-run\tproject\tpypi\tflask\t1\t0\t0\t0\n")
+            .contains("dry-run\tproject\tpypi\tflask\t1\t0\t0\t0\t0\n")
     );
 }
 
@@ -199,8 +199,8 @@ fn test_cache_purge_project_yes_removes_metadata_records() {
     app::cache(&config, &purge_project_command(true), &mut out).unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
-        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\n\
-removed\tproject\tpypi\tflask\t1\t1\t1\t1\n"
+        "action\ttarget\tindex\tproject\tindex_pages\tproject_records\tfile_url_records\tmetadata_records\tprovenance_records\n\
+removed\tproject\tpypi\tflask\t1\t1\t1\t1\t0\n"
     );
     let meta = MetaStore::open_existing(config.data_dir.join("peryx.redb")).unwrap();
     assert!(meta.get_index("pypi/flask").unwrap().is_none());

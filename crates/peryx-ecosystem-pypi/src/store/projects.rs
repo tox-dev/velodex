@@ -586,6 +586,20 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_project_cache_counts_and_removes_the_provenance_row() {
+        let (_dir, meta) = store();
+        let file_digest = "a".repeat(64);
+        meta.put_provenance(&file_digest, &"b".repeat(64), 16).unwrap();
+
+        let counts = meta
+            .delete_project_cache("pypi", "flask", std::slice::from_ref(&file_digest), &[])
+            .unwrap();
+
+        assert_eq!(counts.provenance_records, 1);
+        assert!(meta.get_provenance(&file_digest).unwrap().is_none());
+    }
+
+    #[test]
     fn test_delete_project_cache_removes_the_freshness_overlay() {
         let (_dir, meta) = store();
         let record = crate::store::CachedIndex {

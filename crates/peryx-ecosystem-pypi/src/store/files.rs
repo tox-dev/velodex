@@ -323,4 +323,38 @@ mod tests {
         .unwrap();
         assert_eq!(seen, vec!["good".to_owned()], "the non-UTF-8 record is skipped");
     }
+
+    #[test]
+    fn test_put_and_get_provenance_roundtrips_the_sibling() {
+        let (_dir, meta) = store();
+        assert_eq!(meta.get_provenance("wheelsha").unwrap(), None);
+        meta.put_provenance("wheelsha", "provsha", 16).unwrap();
+        assert_eq!(
+            meta.get_provenance("wheelsha").unwrap(),
+            Some(("provsha".to_owned(), 16))
+        );
+    }
+
+    #[test]
+    fn test_get_provenance_rejects_a_record_missing_its_size() {
+        let (_dir, meta) = store();
+        meta.put_driver_value(&super::provenance_key("wheelsha"), b"provsha")
+            .unwrap();
+        assert_eq!(meta.get_provenance("wheelsha").unwrap(), None);
+    }
+
+    #[test]
+    fn test_scan_provenance_records_visits_valid_and_skips_non_utf8() {
+        let (_dir, meta) = store();
+        meta.put_provenance("good", "provsha", 16).unwrap();
+        meta.put_driver_value(&super::provenance_key("bad"), &[0xff, 0xfe])
+            .unwrap();
+        let mut seen = Vec::new();
+        meta.scan_provenance_records(|digest, value| {
+            seen.push((digest.to_owned(), value.to_owned()));
+            Ok::<(), std::io::Error>(())
+        })
+        .unwrap();
+        assert_eq!(seen, vec![("good".to_owned(), "provsha\n16".to_owned())]);
+    }
 }
