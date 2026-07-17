@@ -120,7 +120,9 @@ fn anchor_to_project(tag: &HTMLTag, base: &Url, parser: &tl::Parser<'_>) -> Opti
     })
 }
 
-fn project_from_url(url: &Url) -> Option<String> {
+/// Decode the last non-empty path segment as a Simple project name.
+#[must_use]
+pub fn project_from_url(url: &Url) -> Option<String> {
     url.path()
         .trim_end_matches('/')
         .rsplit('/')

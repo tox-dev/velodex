@@ -292,6 +292,7 @@ async fn buffer_html_page(
     let url = head.url.clone();
     let content_type = head.content_type.clone();
     let (etag, last_serial) = (head.etag.clone(), head.last_serial);
+    let last_modified = head.last_modified.clone();
     let max_age = head.max_age;
     let source = head.source.clone();
     let body = head.bytes().await?;
@@ -301,6 +302,7 @@ async fn buffer_html_page(
         url,
         content_type,
         etag,
+        last_modified,
         last_serial,
         max_age,
         body,

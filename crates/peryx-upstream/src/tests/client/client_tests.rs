@@ -26,6 +26,61 @@ async fn test_fetch_bytes() {
 }
 
 #[tokio::test]
+async fn test_send_validated_uses_modification_time_without_etag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .respond_with(ResponseTemplate::new(304))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = simple_client(&server);
+
+    let response = client
+        .send_validated(
+            client.base().clone(),
+            "application/json",
+            None,
+            Some("Wed, 15 Jul 2026 12:00:00 GMT"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_MODIFIED);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests[0].headers.get("if-modified-since").unwrap().to_str().unwrap(),
+        "Wed, 15 Jul 2026 12:00:00 GMT"
+    );
+}
+
+#[tokio::test]
+async fn test_send_validated_prefers_etag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .and(header("if-none-match", "catalog-etag"))
+        .respond_with(ResponseTemplate::new(304))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = simple_client(&server);
+
+    client
+        .send_validated(
+            client.base().clone(),
+            "application/json",
+            Some("catalog-etag"),
+            Some("Wed, 15 Jul 2026 12:00:00 GMT"),
+        )
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests[0].headers.get("if-modified-since").is_none());
+}
+
+#[tokio::test]
 async fn test_fetch_bytes_limited_accepts_body_at_limit() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

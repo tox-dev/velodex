@@ -18,6 +18,8 @@ pub enum MetaError {
     Decode(#[from] serde_json::Error),
     #[error("replica serial conflict: expected {expected}, found {actual}")]
     ReplicaSerialConflict { expected: u64, actual: u64 },
+    #[error("driver precondition failed: {0}")]
+    DriverPrecondition(String),
 }
 
 /// A rejected writer-identity claim or promotion.

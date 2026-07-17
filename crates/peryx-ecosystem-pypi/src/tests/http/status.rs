@@ -172,8 +172,18 @@ async fn test_metrics_exposes_bounded_role_counters() {
         route: "hosted".to_owned(),
         project: "veloxpkg".to_owned(),
     });
+    h.state.metrics.record(peryx_events::metrics::Event::CatalogSync {
+        route: "pypi".to_owned(),
+        outcome: peryx_events::metrics::CatalogSyncOutcome::Published,
+        projects: Some(700_000),
+    });
     for _ in 0..500 {
-        if h.state.metrics.index_totals().len() == 2 {
+        let totals = h.state.metrics.index_totals();
+        if totals.len() == 2
+            && totals
+                .get("pypi")
+                .is_some_and(|counters| counters.cached.catalog_syncs == 1)
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -184,6 +194,9 @@ async fn test_metrics_exposes_bounded_role_counters() {
     assert!(body.contains("peryx_pages_served_total{ecosystem=\"pypi\",role=\"cached\"} 1"));
     assert!(body.contains("peryx_upstream_refreshes_total{ecosystem=\"pypi\",role=\"cached\"} 0"));
     assert!(body.contains("peryx_artifacts_rejected_total{ecosystem=\"pypi\",role=\"cached\"} 0"));
+    assert!(body.contains("# TYPE peryx_catalog_projects gauge"));
+    assert!(body.contains("peryx_catalog_syncs_total{ecosystem=\"pypi\",role=\"cached\"} 1"));
+    assert!(body.contains("peryx_catalog_projects{ecosystem=\"pypi\",role=\"cached\"} 700000"));
     // A caching-only counter never appears for the hosted index, and uploads never for the cache.
     assert!(!body.contains("peryx_upstream_refreshes_total{ecosystem=\"pypi\",role=\"hosted\""));
     assert!(!body.contains("peryx_artifacts_uploaded_total{ecosystem=\"pypi\",role=\"cached\""));

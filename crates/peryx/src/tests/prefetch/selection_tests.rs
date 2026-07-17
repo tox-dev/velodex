@@ -1,6 +1,11 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use peryx_ecosystem_pypi::store::{catalog_state, get_project, list_projects, put_project};
 use peryx_storage::blob::Digest;
+use peryx_storage::meta::MetaStore;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, ResponseTemplate};
+use wiremock::{Mock, Request, ResponseTemplate};
 
 use super::*;
 use crate::cli::PrefetchPlanArgs;
@@ -127,6 +132,136 @@ async fn test_mirror_sync_all_reads_html_project_list_and_filters_files() {
     assert!(text.contains("\tskipped\twheels disabled"));
     assert!(text.contains("\tskipped\tunsupported filename"));
     assert!(text.contains("\tskipped\tmissing sha256"));
+}
+
+#[tokio::test]
+async fn test_mirror_plan_all_reuses_not_modified_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let response_requests = Arc::clone(&requests);
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .respond_with(
+            move |_request: &Request| match response_requests.fetch_add(1, Ordering::Relaxed) {
+                1 => ResponseTemplate::new(304),
+                _ => ResponseTemplate::new(200)
+                    .insert_header("etag", "catalog-v1")
+                    .set_body_raw(
+                        br#"<html><body><a href="/simple/flask/">Flask</a></body></html>"#.to_vec(),
+                        "text/html",
+                    ),
+            },
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            detail_page(
+                "flask",
+                vec![file_entry(
+                    "flask-1.0-py3-none-any.whl",
+                    Digest::of(b"wheel").as_str(),
+                    5,
+                )],
+            ),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let mut options = command_options(dir.path(), Vec::new());
+    options.mode = Some(PrefetchMode::All);
+
+    for _ in 0..3 {
+        let text = run_ok(
+            &mirror(&dir, &server),
+            &PrefetchCommand::Plan(PrefetchPlanArgs {
+                options: options.clone(),
+            }),
+        )
+        .await;
+        assert!(text.contains("page\tpypi\tflask"));
+    }
+    assert_eq!(requests.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn test_mirror_plan_all_aborts_invalid_catalog_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = MockServer::start().await;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let response_requests = Arc::clone(&requests);
+    Mock::given(method("GET"))
+        .and(path("/simple/"))
+        .respond_with(move |_request: &Request| {
+            let project = if response_requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                "Flask"
+            } else {
+                "bad name"
+            };
+            ResponseTemplate::new(200).set_body_raw(
+                format!(r#"{{"meta":{{"api-version":"1.4"}},"projects":[{{"name":"{project}"}}]}}"#),
+                "application/vnd.pypi.simple.v1+json",
+            )
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            detail_page(
+                "flask",
+                vec![file_entry(
+                    "flask-1.0-py3-none-any.whl",
+                    Digest::of(b"wheel").as_str(),
+                    5,
+                )],
+            ),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut options = command_options(dir.path(), Vec::new());
+    options.mode = Some(PrefetchMode::All);
+    let command = PrefetchCommand::Plan(PrefetchPlanArgs {
+        options: options.clone(),
+    });
+    assert!(
+        run_ok(&mirror(&dir, &server), &command)
+            .await
+            .contains("page\tpypi\tflask")
+    );
+    let meta = MetaStore::open_existing(dir.path().join("peryx.redb")).unwrap();
+    let active_generation = catalog_state(&meta, "pypi").unwrap().active.unwrap().generation;
+    drop(meta);
+
+    let (_text, error) = run_err(
+        &mirror(&dir, &server),
+        &PrefetchCommand::Plan(PrefetchPlanArgs { options }),
+    )
+    .await;
+
+    assert!(error.to_string().contains("bad name"));
+    let meta = MetaStore::open_existing(dir.path().join("peryx.redb")).unwrap();
+    let state = catalog_state(&meta, "pypi").unwrap();
+    assert_eq!(state.active.as_ref().unwrap().generation, active_generation);
+    assert_eq!(state.staging, None);
+    assert!(
+        meta.driver_prefix_keys(&format!("pypi\0g\0pypi/{:020}/", state.next_generation))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(list_projects(&meta, "pypi").unwrap(), vec!["Flask"]);
+    put_project(&meta, "foreground", "probe", "Probe").unwrap();
+    assert_eq!(
+        get_project(&meta, "foreground", "probe").unwrap().as_deref(),
+        Some("Probe")
+    );
 }
 
 #[tokio::test]

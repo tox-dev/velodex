@@ -14,7 +14,7 @@ use futures_util::Stream;
 use peryx_upstream::retry::{MAX_RETRIES, should_retry_error, sleep_before_retry};
 use peryx_upstream::{NamedUpstream, UpstreamClient, UpstreamError, UpstreamRouter};
 use reqwest::StatusCode;
-use reqwest::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderMap, HeaderName};
+use reqwest::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG, HeaderMap, HeaderName, LAST_MODIFIED};
 use url::Url;
 
 /// The `Accept` header peryx sends upstream: PEP 691 JSON first, then PEP 503 HTML.
@@ -32,6 +32,7 @@ pub struct SimpleResponse {
     pub url: Url,
     pub content_type: Option<String>,
     pub etag: Option<String>,
+    pub last_modified: Option<String>,
     pub last_serial: Option<u64>,
     /// The freshness lifetime upstream granted via `Cache-Control`; `None` when the response
     /// carried no positive lifetime (absent header, `no-cache`, `no-store`, or zero).
@@ -49,6 +50,8 @@ pub struct SimpleHead {
     pub url: Url,
     pub content_type: Option<String>,
     pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
     pub last_serial: Option<u64>,
     /// The freshness lifetime upstream granted via `Cache-Control`; `None` when the response
     /// carried no positive lifetime (absent header, `no-cache`, `no-store`, or zero).
@@ -85,6 +88,14 @@ pub trait SimpleClientExt {
     /// Fetch the upstream root project list.
     fn fetch_index(&self) -> impl Future<Output = Result<SimpleResponse, UpstreamError>> + Send;
 
+    /// Start fetching the root project list with validators scoped to `source`.
+    fn head_index(
+        &self,
+        source: Option<&str>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> impl Future<Output = Result<SimpleHead, UpstreamError>> + Send;
+
     /// Start fetching a project's simple page, returning its headers and the open body, so callers
     /// can stream the bytes as they arrive instead of buffering the page.
     fn head_project(
@@ -102,6 +113,18 @@ impl SimpleClientExt for UpstreamClient {
 
     async fn fetch_index(&self) -> Result<SimpleResponse, UpstreamError> {
         fetch_simple(self, self.base().clone(), None).await
+    }
+
+    async fn head_index(
+        &self,
+        _source: Option<&str>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<SimpleHead, UpstreamError> {
+        simple_head(
+            self.send_validated(self.base().clone(), ACCEPT_SIMPLE, etag, last_modified)
+                .await?,
+        )
     }
 
     async fn head_project(&self, project: &str, etag: Option<&str>) -> Result<SimpleHead, UpstreamError> {
@@ -130,6 +153,33 @@ impl SimpleClientExt for UpstreamRouter {
         loop {
             let upstream = candidates.next().expect("an upstream route always has a candidate");
             let result = SimpleClientExt::fetch_index(upstream.client()).await;
+            record_health(upstream, &result);
+            if fallback_result(&result) && candidates.peek().is_some() {
+                tracing::warn!(upstream = upstream.name(), "upstream unavailable, trying fallback");
+                continue;
+            }
+            return attribute_source(upstream, result);
+        }
+    }
+
+    async fn head_index(
+        &self,
+        source: Option<&str>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<SimpleHead, UpstreamError> {
+        let mut candidates = self.candidates("").peekable();
+        loop {
+            let upstream = candidates.next().expect("an upstream route always has a candidate");
+            let matches_source = source == Some(upstream.name());
+            let result = upstream
+                .client()
+                .head_index(
+                    None,
+                    matches_source.then_some(etag).flatten(),
+                    matches_source.then_some(last_modified).flatten(),
+                )
+                .await;
             record_health(upstream, &result);
             if fallback_result(&result) && candidates.peek().is_some() {
                 tracing::warn!(upstream = upstream.name(), "upstream unavailable, trying fallback");
@@ -226,6 +276,7 @@ async fn fetch_simple(client: &UpstreamClient, url: Url, etag: Option<&str>) -> 
                     url: head.url,
                     content_type: head.content_type,
                     etag: head.etag,
+                    last_modified: head.last_modified,
                     last_serial: head.last_serial,
                     max_age: head.max_age,
                     body,
@@ -256,6 +307,8 @@ fn simple_head(response: reqwest::Response) -> Result<SimpleHead, UpstreamError>
         url: response.url().clone(),
         content_type,
         etag: header_str(headers, &ETAG),
+        last_modified: header_str(headers, &LAST_MODIFIED),
+        content_length: header_str(headers, &CONTENT_LENGTH).and_then(|value| value.parse().ok()),
         last_serial: header_str(headers, &HeaderName::from_static("x-pypi-last-serial"))
             .and_then(|value| value.parse().ok()),
         max_age: max_age(headers),

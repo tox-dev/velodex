@@ -28,8 +28,10 @@ pub(crate) use journal::{ChangelogReadError, read_changelog_page};
 pub use journal::{JournalEntry, JournalSnapshot, read_journal_entries};
 pub use peryx_driver::serving::{IndexSummary, RecentUpload};
 pub use projects::{
-    ProjectCachePurgeCounts, count_project_cache_purge, delete_project_cache, get_project, list_projects, put_project,
-    scan_project_records,
+    CatalogGeneration, CatalogState, ProjectCachePurgeCounts, abort_catalog_generation, begin_catalog_generation,
+    catalog_state, count_project_cache_purge, delete_project_cache, get_project, list_projects,
+    publish_catalog_generation, put_catalog_projects, put_project, recover_catalog_generations,
+    refresh_catalog_generation, scan_project_records,
 };
 pub use record::{CachedIndex, CachedIndexPage, CachedIndexSummary, FreshnessOverlay, ProjectStatusRecord};
 pub use summary::summarize_indexes;
@@ -50,6 +52,8 @@ const FILE_PREFIX: &str = "pypi\u{0}f\u{0}";
 const METADATA_PREFIX: &str = "pypi\u{0}d\u{0}";
 /// The former `projects` table: observed display names, keyed by `{index}/{normalized}`.
 const PROJECTS_PREFIX: &str = "pypi\u{0}p\u{0}";
+const CATALOG_PREFIX: &str = "pypi\u{0}c\u{0}";
+const CATALOG_GENERATION_PREFIX: &str = "pypi\u{0}g\u{0}";
 /// The former `project_status` table: explicit status markers, keyed by `{index}/{normalized}`.
 const PROJECT_STATUS_PREFIX: &str = "pypi\u{0}s\u{0}";
 /// The former `uploads` table: hosted file records, keyed by `{index}/{normalized}/{filename}`.

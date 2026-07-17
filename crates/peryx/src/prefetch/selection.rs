@@ -8,8 +8,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, bail};
 use peryx_ecosystem_pypi::store::PypiStore as _;
 use peryx_ecosystem_pypi::{
-    CoreMetadata, DistributionKind, File, ProjectDetail, SimpleClientExt as _, is_valid_name, normalize_name,
-    parse_distribution_filename, parse_index, parse_index_html, parse_version_specifiers,
+    CoreMetadata, DistributionKind, File, ProjectDetail, is_valid_name, normalize_name, parse_distribution_filename,
+    parse_version_specifiers,
 };
 use peryx_http::{AppState, Index, IndexKind};
 use peryx_upstream::UpstreamClient;
@@ -87,22 +87,41 @@ async fn all_projects(state: &Arc<AppState>, target: &Target, source: SelectionS
             .into_iter()
             .collect());
     }
-    let response = match state.upstream_routes.get(&target.cached) {
-        Some(router) => router.fetch_index().await?,
-        None => target.client.fetch_index().await?,
+    let sync = match state.upstream_routes.get(&target.cached) {
+        Some(router) => {
+            peryx_ecosystem_pypi::catalog::sync_catalog(router, &state.meta, &target.cached, target.client.base_url())
+                .await
+        }
+        None => {
+            peryx_ecosystem_pypi::catalog::sync_catalog(
+                &target.client,
+                &state.meta,
+                &target.cached,
+                target.client.base_url(),
+            )
+            .await
+        }
     };
-    if response.status != 200 {
-        bail!("upstream project list returned {}", response.status);
-    }
-    let list = if content_type_is_json(response.content_type.as_deref()) {
-        parse_index(&response.body)?
-    } else {
-        parse_index_html(&String::from_utf8_lossy(&response.body), &response.url)?
+    let (outcome, projects) = match &sync {
+        Ok(peryx_ecosystem_pypi::catalog::CatalogSyncOutcome::Published { projects }) => {
+            (peryx_events::metrics::CatalogSyncOutcome::Published, Some(*projects))
+        }
+        Ok(peryx_ecosystem_pypi::catalog::CatalogSyncOutcome::NotModified { projects }) => {
+            (peryx_events::metrics::CatalogSyncOutcome::NotModified, Some(*projects))
+        }
+        Err(_) => (peryx_events::metrics::CatalogSyncOutcome::Error, None),
     };
-    Ok(list
-        .projects
+    state.metrics.record(peryx_events::metrics::Event::CatalogSync {
+        route: target.cached.clone(),
+        outcome,
+        projects,
+    });
+    sync?;
+    Ok(state
+        .meta
+        .list_projects(&target.cached)?
         .into_iter()
-        .map(|entry| normalize_name(&entry.name))
+        .map(|name| normalize_name(&name))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect())

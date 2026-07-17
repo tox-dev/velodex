@@ -13,7 +13,8 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
 use reqwest::header::{
-    ACCEPT, ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderName, IF_NONE_MATCH, RANGE,
+    ACCEPT, ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderName, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    RANGE,
 };
 use url::Url;
 
@@ -443,12 +444,29 @@ impl UpstreamClient {
         accept: &str,
         etag: Option<&str>,
     ) -> Result<reqwest::Response, UpstreamError> {
+        self.send_validated(url, accept, etag, None).await
+    }
+
+    /// Send a conditional metadata request. `If-None-Match` takes precedence; modification time is
+    /// the fallback for upstreams that do not provide entity tags.
+    ///
+    /// # Errors
+    /// Returns [`UpstreamError::Http`] if the request fails after exhausting retries.
+    pub async fn send_validated(
+        &self,
+        url: Url,
+        accept: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<reqwest::Response, UpstreamError> {
         self.send_with_retry(|| {
             let mut request = self
                 .authenticate(self.http.get(url.clone()), &url)
                 .header(ACCEPT, accept);
             if let Some(etag) = etag {
                 request = request.header(IF_NONE_MATCH, etag);
+            } else if let Some(last_modified) = last_modified {
+                request = request.header(IF_MODIFIED_SINCE, last_modified);
             }
             request
         })

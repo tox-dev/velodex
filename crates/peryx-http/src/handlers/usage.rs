@@ -115,6 +115,7 @@ struct NeutralFamily {
     help: &'static str,
     role: Option<Role>,
     read: fn(&peryx_events::metrics::Counters) -> u64,
+    kind: &'static str,
 }
 
 /// The neutral per-index families: a base group every role reports, a caching group only a cached
@@ -125,54 +126,98 @@ const NEUTRAL_FAMILIES: &[NeutralFamily] = &[
         help: "Index listings served.",
         role: None,
         read: |c| c.base.pages,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_artifacts_served_total",
         help: "Artifacts served.",
         role: None,
         read: |c| c.base.downloads,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_artifacts_served_bytes_total",
         help: "Artifact bytes served.",
         role: None,
         read: |c| c.base.bytes,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_artifacts_rejected_total",
         help: "Downloads failing digest verification.",
         role: None,
         read: |c| c.base.rejected,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_upstream_refreshes_total",
         help: "Upstream revalidations.",
         role: Some(Role::Cached),
         read: |c| c.cached.refreshes,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_upstream_pages_changed_total",
         help: "Revalidations that found upstream changed.",
         role: Some(Role::Cached),
         read: |c| c.cached.changed,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_stale_pages_served_total",
         help: "Pages served stale with upstream down.",
         role: Some(Role::Cached),
         read: |c| c.cached.stale_served,
+        kind: "counter",
     },
     NeutralFamily {
         name: "peryx_upstream_errors_total",
         help: "Upstream failures with nothing cached.",
         role: Some(Role::Cached),
         read: |c| c.cached.upstream_errors,
+        kind: "counter",
+    },
+    NeutralFamily {
+        name: "peryx_catalog_syncs_total",
+        help: "Remote root-catalog synchronizations.",
+        role: Some(Role::Cached),
+        read: |c| c.cached.catalog_syncs,
+        kind: "counter",
+    },
+    NeutralFamily {
+        name: "peryx_catalog_published_total",
+        help: "Remote root-catalog generations published.",
+        role: Some(Role::Cached),
+        read: |c| c.cached.catalog_published,
+        kind: "counter",
+    },
+    NeutralFamily {
+        name: "peryx_catalog_not_modified_total",
+        help: "Remote root-catalog revalidations answered not modified.",
+        role: Some(Role::Cached),
+        read: |c| c.cached.catalog_not_modified,
+        kind: "counter",
+    },
+    NeutralFamily {
+        name: "peryx_catalog_errors_total",
+        help: "Failed remote root-catalog synchronizations.",
+        role: Some(Role::Cached),
+        read: |c| c.cached.catalog_errors,
+        kind: "counter",
+    },
+    NeutralFamily {
+        name: "peryx_catalog_projects",
+        help: "Projects in the current remote root catalog.",
+        role: Some(Role::Cached),
+        read: |c| c.cached.catalog_projects,
+        kind: "gauge",
     },
     NeutralFamily {
         name: "peryx_artifacts_uploaded_total",
         help: "Distributions uploaded.",
         role: Some(Role::Hosted),
         read: |c| c.hosted.uploads,
+        kind: "counter",
     },
 ];
 
@@ -192,7 +237,7 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     let totals = prometheus_totals(&state);
     for family in NEUTRAL_FAMILIES {
         let _ = writeln!(body, "# HELP {} {}", family.name, family.help);
-        let _ = writeln!(body, "# TYPE {} counter", family.name);
+        let _ = writeln!(body, "# TYPE {} {}", family.name, family.kind);
         for ((ecosystem, role), counters) in &totals {
             if family.role.is_none_or(|family_role| family_role.as_str() == *role) {
                 write_metric(&mut body, family.name, ecosystem, role, (family.read)(counters));
@@ -247,6 +292,11 @@ fn merge_counters(target: &mut peryx_events::metrics::Counters, source: peryx_ev
     target.cached.changed += source.cached.changed;
     target.cached.stale_served += source.cached.stale_served;
     target.cached.upstream_errors += source.cached.upstream_errors;
+    target.cached.catalog_syncs += source.cached.catalog_syncs;
+    target.cached.catalog_published += source.cached.catalog_published;
+    target.cached.catalog_not_modified += source.cached.catalog_not_modified;
+    target.cached.catalog_errors += source.cached.catalog_errors;
+    target.cached.catalog_projects += source.cached.catalog_projects;
     target.hosted.uploads += source.hosted.uploads;
     for (family, value) in source.ecosystem {
         *target.ecosystem.entry(family).or_default() += value;

@@ -50,6 +50,17 @@ impl MetaStore {
     /// # Errors
     /// Returns a store error if the read fails.
     pub fn driver_prefix_keys(&self, prefix: &str) -> Result<Vec<String>, MetaError> {
+        self.driver_prefix_keys_limited(prefix, usize::MAX)
+    }
+
+    /// Collect at most `limit` driver-owned keys that start with `prefix`, in key order.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn driver_prefix_keys_limited(&self, prefix: &str, limit: usize) -> Result<Vec<String>, MetaError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let txn = self.db.begin_read()?;
         let table = txn.open_table(DRIVER_KV)?;
         let mut keys = Vec::new();
@@ -59,8 +70,28 @@ impl MetaStore {
                 break;
             }
             keys.push(key.value().to_owned());
+            if keys.len() == limit {
+                break;
+            }
         }
         Ok(keys)
+    }
+
+    /// Visit driver-owned records that start with `prefix`, in key order, without collecting them.
+    ///
+    /// # Errors
+    /// Returns a store error if the read fails.
+    pub fn visit_driver_prefix(&self, prefix: &str, mut visit: impl FnMut(&str, &[u8])) -> Result<(), MetaError> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(DRIVER_KV)?;
+        for entry in table.range(prefix..)? {
+            let (key, value) = entry?;
+            if !key.value().starts_with(prefix) {
+                break;
+            }
+            visit(key.value(), value.value());
+        }
+        Ok(())
     }
 
     /// Apply a batch of driver-owned writes in one transaction. `durable` requests an fsync-backed
@@ -311,5 +342,32 @@ impl DriverTxn<'_> {
                 ))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MetaStore;
+
+    #[test]
+    fn test_driver_prefix_keys_limited_bounds_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+        for key in ["catalog/1", "catalog/2", "catalog/3", "other/1"] {
+            meta.put_driver_value(key, b"value").unwrap();
+        }
+
+        assert!(meta.driver_prefix_keys_limited("catalog/", 0).unwrap().is_empty());
+        assert_eq!(
+            meta.driver_prefix_keys_limited("catalog/", 2).unwrap(),
+            vec!["catalog/1", "catalog/2"]
+        );
+        assert_eq!(meta.driver_prefix_keys("other/").unwrap(), vec!["other/1"]);
+        let mut visited = Vec::new();
+        meta.visit_driver_prefix("catalog/", |key, value| {
+            visited.push((key.to_owned(), value.to_vec()));
+        })
+        .unwrap();
+        assert_eq!(visited.len(), 3);
     }
 }

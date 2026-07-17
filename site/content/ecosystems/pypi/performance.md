@@ -164,6 +164,31 @@ one TOML report these tables render from. Cells tint from best-in-row green to w
 parentheses compares against **direct**, the no-proxy baseline, so each server's cell reads as the overhead (or win) it
 adds over talking to pypi.org yourself.
 
+### Root-catalog synchronization
+
+The root-catalog benchmark generates exactly one million valid project names, serves one PEP 691 response over loopback,
+and runs the same streaming parser, 10,000-name transactions, and generation swap as `mirror sync --mode all`. While the
+sync runs, another runtime worker repeatedly reads an unrelated project record. The report includes wall time, upstream
+request count, completed foreground reads, and their p99 latency.
+
+Build once before collecting samples, then run at least five measured rounds. Compare medians from the same machine and
+power state; do not compare a debug build, the first build, or results from hosts with different storage. On macOS,
+`/usr/bin/time -l` reports peak resident memory as `maximum resident set size`; GNU time reports it as
+`Maximum resident set size`:
+
+```shell
+CARGO_TARGET_DIR=.tox/target-catalog cargo build --release \
+  -p peryx-ecosystem-pypi --example catalog_million
+
+/usr/bin/time -l .tox/target-catalog/release/examples/catalog_million
+# Linux: /usr/bin/time -v .tox/target-catalog/release/examples/catalog_million
+```
+
+The fixture lives in the benchmark process, so peak RSS includes its generated JSON and the loopback server's response
+buffer. Compare deltas only between revisions of this benchmark. The one-request assertion catches accidental refetches;
+the project-count assertion catches partial publication. CI should use a fixed runner image and upload the raw stdout
+and time output rather than enforcing a cross-machine wall-time threshold.
+
 The table covers every alternative that can be started hermetically from a published package: peryx, devpi, proxpi,
 pypiserver (whose upstream fallback is a redirect rather than a cache), and pypicloud (archived upstream; it still runs,
 but only under Python 3.10 with SQLAlchemy pinned below 2). [Pulp](https://pulpproject.org/) needs

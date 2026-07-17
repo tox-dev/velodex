@@ -3709,6 +3709,7 @@ dependencies = [
  "email_address",
  "flate2",
  "futures-util",
+ "html5ever",
  "http",
  "http-body-util",
  "httpdate",

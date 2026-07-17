@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use peryx_events::metrics::{Event, Metrics};
+use peryx_events::metrics::{CatalogSyncOutcome, Event, Metrics};
 use peryx_storage::blob::Digest;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -107,6 +107,17 @@ fn test_operational_events_aggregate() {
         route: "pypi".into(),
         project: "flask".into(),
     });
+    for (outcome, projects) in [
+        (CatalogSyncOutcome::Published, Some(700_000)),
+        (CatalogSyncOutcome::NotModified, Some(700_000)),
+        (CatalogSyncOutcome::Error, None),
+    ] {
+        metrics.record(Event::CatalogSync {
+            route: "pypi".into(),
+            outcome,
+            projects,
+        });
+    }
     settle(&metrics, |m| {
         m.index_totals().get("pypi").is_some_and(|t| t.base.rejected == 1)
     });
@@ -118,10 +129,16 @@ fn test_operational_events_aggregate() {
     assert_eq!(index.cached.stale_served, 1);
     assert_eq!(index.cached.upstream_errors, 1);
     assert_eq!(index.base.rejected, 1);
+    assert_eq!(index.cached.catalog_syncs, 3);
+    assert_eq!(index.cached.catalog_published, 1);
+    assert_eq!(index.cached.catalog_not_modified, 1);
+    assert_eq!(index.cached.catalog_errors, 1);
+    assert_eq!(index.cached.catalog_projects, 700_000);
 
     let projects = metrics.drill(Some("pypi"), None);
     assert_eq!(projects["projects"]["flask"]["cached"]["refreshes"], 2);
     assert_eq!(projects["projects"]["flask"]["base"]["rejected"], 1);
+    assert_eq!(projects["projects"].as_object().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -181,7 +198,17 @@ async fn test_router_paths_feed_stats_and_prometheus_metrics() {
         serde_json::json!({
             "totals": {
                 "base": {"pages": 1, "downloads": 1, "bytes": wheel.len() as u64, "rejected": 0},
-                "cached": {"refreshes": 0, "changed": 0, "stale_served": 0, "upstream_errors": 0},
+                "cached": {
+                    "refreshes": 0,
+                    "changed": 0,
+                    "stale_served": 0,
+                    "upstream_errors": 0,
+                    "catalog_syncs": 0,
+                    "catalog_published": 0,
+                    "catalog_not_modified": 0,
+                    "catalog_errors": 0,
+                    "catalog_projects": 0
+                },
                 "hosted": {"uploads": 0},
                 "ecosystem": {"metadata": 1}
             },

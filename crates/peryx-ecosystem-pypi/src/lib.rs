@@ -9,6 +9,8 @@ mod admin;
 pub mod archive;
 #[cfg(feature = "serving")]
 pub mod cache;
+#[cfg(feature = "serving")]
+pub mod catalog;
 mod changelog;
 #[cfg(feature = "serving")]
 mod classifier;

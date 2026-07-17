@@ -57,6 +57,21 @@ pub enum Event {
     UpstreamError { route: String, project: String },
     /// A streamed download hashed differently than its registration; the blob was not admitted.
     BlobRejected { route: String, project: String },
+    /// A remote root-catalog synchronization completed. This is index-level operational state: it
+    /// never creates a project or file node in the metrics tree.
+    CatalogSync {
+        route: String,
+        outcome: CatalogSyncOutcome,
+        projects: Option<u64>,
+    },
+}
+
+/// The bounded outcomes a catalog synchronization reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogSyncOutcome {
+    Published,
+    NotModified,
+    Error,
 }
 
 /// Counters every index reports, whatever its role or ecosystem.
@@ -78,6 +93,12 @@ pub struct CachedCounters {
     /// Pages served from cache because upstream was unavailable.
     pub stale_served: u64,
     pub upstream_errors: u64,
+    pub catalog_syncs: u64,
+    pub catalog_published: u64,
+    pub catalog_not_modified: u64,
+    pub catalog_errors: u64,
+    /// Names in the most recently published or revalidated root catalog.
+    pub catalog_projects: u64,
 }
 
 /// Counters only a hosted index fills.
@@ -474,6 +495,22 @@ fn apply(tree: &mut StatsTree, event: Event) {
             let index = tree.entry(route).or_default();
             index.totals.base.rejected += 1;
             index.projects.entry(project).or_default().totals.base.rejected += 1;
+        }
+        Event::CatalogSync {
+            route,
+            outcome,
+            projects,
+        } => {
+            let cached = &mut tree.entry(route).or_default().totals.cached;
+            cached.catalog_syncs += 1;
+            match outcome {
+                CatalogSyncOutcome::Published => cached.catalog_published += 1,
+                CatalogSyncOutcome::NotModified => cached.catalog_not_modified += 1,
+                CatalogSyncOutcome::Error => cached.catalog_errors += 1,
+            }
+            if let Some(projects) = projects {
+                cached.catalog_projects = projects;
+            }
         }
     }
 }
