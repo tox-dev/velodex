@@ -97,6 +97,43 @@ pub trait ArtifactRule: Send + Sync + fmt::Debug {
     /// Returns a [`PolicyDenial`] when the facts match this rule's block criteria or miss its allow
     /// criteria.
     fn check(&self, action: PolicyAction, facts: &ArtifactFacts) -> Result<(), PolicyDenial>;
+
+    /// A virtual repository's source policy, when this rule defines one. Most artifact rules do not
+    /// affect repository composition and keep the default `None`.
+    fn fallback_mode(&self) -> Option<FallbackMode> {
+        None
+    }
+}
+
+/// How a virtual repository combines hosted and cached project candidates.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FallbackMode {
+    /// Preserve filename-level merging: hosted files shadow identical cached files, while the cached
+    /// project supplies every other candidate.
+    #[default]
+    Fallback,
+    /// Serve only hosted candidates when the normalized project exists in both source classes.
+    PrivateFirst,
+    /// Never consult this virtual repository's immediate cached members.
+    NoFallback,
+}
+
+impl FallbackMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fallback => "fallback",
+            Self::PrivateFirst => "private-first",
+            Self::NoFallback => "no-fallback",
+        }
+    }
+}
+
+impl fmt::Display for FallbackMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 /// The result retained for one policy subject and action.
@@ -244,6 +281,16 @@ impl Policy {
     #[must_use]
     pub const fn max_project_size(&self) -> Option<u64> {
         self.max_project_size_bytes
+    }
+
+    /// The source policy contributed by this ecosystem, or the compatibility-preserving fallback
+    /// mode when it contributes none.
+    #[must_use]
+    pub fn fallback_mode(&self) -> FallbackMode {
+        self.rules
+            .iter()
+            .find_map(|rule| rule.fallback_mode())
+            .unwrap_or_default()
     }
 
     fn compute_active(&self) -> bool {

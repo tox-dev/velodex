@@ -1,4 +1,4 @@
-use peryx_policy::{Policy, PolicyAction, PolicyConfig};
+use peryx_policy::{FallbackMode, Policy, PolicyAction, PolicyConfig};
 
 #[test]
 fn check_size_allows_the_configured_limit() {
@@ -78,4 +78,16 @@ fn protection_matches_after_normalization() {
 
     assert!(policy.check_project(PolicyAction::Cached, "acme-secrets").is_err());
     assert!(policy.check_project(PolicyAction::Cached, "team-alpha").is_err());
+}
+
+#[test]
+fn a_fallback_mode_renders_its_configured_wire_name() {
+    for (mode, name) in [
+        (FallbackMode::Fallback, "fallback"),
+        (FallbackMode::PrivateFirst, "private-first"),
+        (FallbackMode::NoFallback, "no-fallback"),
+    ] {
+        assert_eq!(mode.as_str(), name);
+        assert_eq!(mode.to_string(), name);
+    }
 }

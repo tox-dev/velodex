@@ -11,7 +11,7 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 
 use pep440_rs::{Version, VersionSpecifiers};
-use peryx_policy::{ArtifactFacts, ArtifactRule, Policy, PolicyAction, PolicyDenial, retain_versions};
+use peryx_policy::{ArtifactFacts, ArtifactRule, FallbackMode, Policy, PolicyAction, PolicyDenial, retain_versions};
 use serde::Deserialize;
 
 use crate::{DistributionKind, File, ProjectDetail, ProjectList, normalize_name, parse_distribution_filename};
@@ -21,6 +21,7 @@ use crate::{DistributionKind, File, ProjectDetail, ProjectList, normalize_name, 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct PypiPolicyConfig {
+    pub fallback_mode: FallbackMode,
     pub allow_versions: Option<String>,
     pub allow_package_types: Vec<PackageType>,
     pub block_package_types: Vec<PackageType>,
@@ -35,6 +36,7 @@ impl PypiPolicyConfig {
     /// The `[index.policy]` keys `PyPI` adds on top of the neutral set, so a config layer can reject a
     /// key that belongs to neither.
     pub const KEYS: &'static [&'static str] = &[
+        "fallback_mode",
         "allow_versions",
         "allow_package_types",
         "block_package_types",
@@ -92,6 +94,9 @@ pub enum PypiPolicyError {
 /// Returns an error when a version specifier does not parse or a tag filter is empty.
 pub fn compile_rules(config: &PypiPolicyConfig) -> Result<Vec<Arc<dyn ArtifactRule>>, PypiPolicyError> {
     let mut rules: Vec<Arc<dyn ArtifactRule>> = Vec::new();
+    if config.fallback_mode != FallbackMode::Fallback {
+        rules.push(Arc::new(FallbackRule(config.fallback_mode)));
+    }
     if let Some(specifier) = &config.allow_versions {
         let allowed = VersionSpecifiers::from_str(specifier)
             .map_err(|_| PypiPolicyError::VersionSpecifiers(specifier.clone()))?;
@@ -130,6 +135,19 @@ pub fn compile_rules(config: &PypiPolicyConfig) -> Result<Vec<Arc<dyn ArtifactRu
         }));
     }
     Ok(rules)
+}
+
+#[derive(Debug)]
+struct FallbackRule(FallbackMode);
+
+impl ArtifactRule for FallbackRule {
+    fn check(&self, _action: PolicyAction, _facts: &ArtifactFacts) -> Result<(), PolicyDenial> {
+        Ok(())
+    }
+
+    fn fallback_mode(&self) -> Option<FallbackMode> {
+        Some(self.0)
+    }
 }
 
 fn push_wheel_tag_rule(

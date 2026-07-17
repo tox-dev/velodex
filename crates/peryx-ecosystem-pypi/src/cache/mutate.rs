@@ -11,7 +11,7 @@ use peryx_driver::state::ServingState;
 use peryx_index::{Index, IndexKind};
 
 use super::CacheError;
-use super::resolve::resolve_detail;
+use super::resolve::resolve_detail_optional;
 
 /// Persist a prepared upload into the hosted store `name`: commit the staged blob, record the file
 /// and its project, and bump the serial. Returns `false` for a same-bytes duplicate.
@@ -274,7 +274,7 @@ pub async fn project_status(
     if matches!(index.kind, IndexKind::Hosted { .. }) {
         return Ok(ProjectStatus::Active);
     }
-    let Some(detail) = Box::pin(resolve_detail(state, index, normalized, &index.route)).await? else {
+    let Some(detail) = Box::pin(resolve_detail_optional(state, index, normalized, &index.route)).await? else {
         return Ok(ProjectStatus::Active);
     };
     Ok(detail.meta.status())
@@ -327,7 +327,7 @@ async fn served_filenames(
     normalized: &str,
     version: Option<&str>,
 ) -> Result<Vec<String>, CacheError> {
-    let Some(detail) = Box::pin(resolve_detail(state, index, normalized, &index.route)).await? else {
+    let Some(detail) = Box::pin(resolve_detail_optional(state, index, normalized, &index.route)).await? else {
         return Ok(Vec::new());
     };
     Ok(detail

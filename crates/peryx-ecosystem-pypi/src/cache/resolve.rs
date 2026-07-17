@@ -10,7 +10,7 @@ use crate::{CoreMetadata, File, Meta, ProjectDetail, ProjectList, ProjectListEnt
 use peryx_core::path::{is_local_file_url, local_file_url};
 use peryx_driver::state::ServingState;
 use peryx_index::{Index, IndexKind};
-use peryx_policy::PolicyAction;
+use peryx_policy::{FallbackMode, PolicyAction, PolicyDenial};
 use peryx_upstream::UpstreamClient;
 
 use super::fetch::fetch_and_store;
@@ -35,7 +35,18 @@ pub async fn resolve_detail(
     project: &str,
     serve_route: &str,
 ) -> Result<Option<ProjectDetail>, CacheError> {
-    Ok(resolve_detail_page(state, index, project, serve_route)
+    Ok(resolve_detail_page_with(state, index, project, serve_route, true)
+        .await?
+        .map(|page| page.detail))
+}
+
+pub(super) async fn resolve_detail_optional(
+    state: &ServingState,
+    index: &Index,
+    project: &str,
+    serve_route: &str,
+) -> Result<Option<ProjectDetail>, CacheError> {
+    Ok(resolve_detail_page_with(state, index, project, serve_route, false)
         .await?
         .map(|page| page.detail))
 }
@@ -49,6 +60,16 @@ pub async fn resolve_detail_page(
     index: &Index,
     project: &str,
     serve_route: &str,
+) -> Result<Option<DetailPage>, CacheError> {
+    resolve_detail_page_with(state, index, project, serve_route, true).await
+}
+
+async fn resolve_detail_page_with(
+    state: &ServingState,
+    index: &Index,
+    project: &str,
+    serve_route: &str,
+    deny_no_fallback_miss: bool,
 ) -> Result<Option<DetailPage>, CacheError> {
     index.policy.check_project(PolicyAction::Serve, project)?;
     let page = match &index.kind {
@@ -70,12 +91,20 @@ pub async fn resolve_detail_page(
                 last_serial: Some(state.meta.current_serial()?),
             })
         }
-        IndexKind::Virtual { layers, upload } => virtual_detail(state, layers, *upload, project, serve_route)
-            .await?
-            .map(|detail| DetailPage {
-                detail,
-                last_serial: None,
-            }),
+        IndexKind::Virtual { layers, upload } => virtual_detail(
+            state,
+            index,
+            layers,
+            *upload,
+            project,
+            serve_route,
+            deny_no_fallback_miss,
+        )
+        .await?
+        .map(|detail| DetailPage {
+            detail,
+            last_serial: None,
+        }),
     };
     page.map(|mut page| {
         page.detail = index
@@ -86,75 +115,68 @@ pub async fn resolve_detail_page(
     .transpose()
 }
 
-/// Merge the layers of a virtual index: first match per filename wins, versions are unioned. Overrides
-/// recorded on the virtual index's upload layer then apply: `hidden` files drop out of the page and
-/// `yanked` files carry the PEP 592 marker, which is how read-only upstream files are yanked or
-/// removed without touching the cache.
-///
-/// Cached layers merge last however the operator ordered `layers`, so a hosted file always shadows a
-/// same-named upstream one. That ordering is the dependency-confusion defense, and leaving it to the
-/// configured order would make it an operator's mistake to lose.
+/// Resolve eligible members concurrently, then apply the virtual repository's source policy before
+/// merging candidates in shadow order. Hidden and yanked overrides from the upload target apply to
+/// the resulting view.
 async fn virtual_detail(
     state: &ServingState,
+    index: &Index,
     layers: &[usize],
     upload: Option<usize>,
     project: &str,
     serve_route: &str,
+    deny_no_fallback_miss: bool,
 ) -> Result<Option<ProjectDetail>, CacheError> {
-    // Layers resolve concurrently; `shadow_order` fixes the merge precedence.
-    let ordered = peryx_index::shadow_order(&state.indexes, layers);
+    let mode = index.policy.fallback_mode();
+    let cached_denial = index.policy.check_project(PolicyAction::Cached, project).err();
+    let consult_cached = mode != FallbackMode::NoFallback && cached_denial.is_none();
+    let ordered: Vec<_> = peryx_index::shadow_order(&state.indexes, layers)
+        .into_iter()
+        .filter(|&pos| !is_cached(state.index_at(pos)) || consult_cached)
+        .collect();
     let resolved = futures_util::future::join_all(ordered.iter().map(|&pos| {
         let layer = state.index_at(pos);
-        Box::pin(resolve_detail(state, layer, project, serve_route))
+        Box::pin(async move {
+            Ok(
+                resolve_detail_page_with(state, layer, project, serve_route, deny_no_fallback_miss)
+                    .await?
+                    .map(|page| page.detail),
+            )
+        })
     }))
     .await;
-    let mut files = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut versions = BTreeSet::new();
-    let mut meta = Meta::default();
-    let mut found = false;
+    let mut details = Vec::new();
     let mut offline_missing = None;
     let mut rate_limited = None;
     for (pos, outcome) in ordered.into_iter().zip(resolved) {
-        // A layer being unavailable (a down upstream with a cold cache) must not break the others.
-        let detail = match outcome {
-            Ok(detail) => detail,
-            Err(err @ CacheError::OfflineMissing(_)) => {
-                offline_missing = Some(err);
-                continue;
-            }
-            // A saturated upstream cap is transient. If no other layer serves the project, propagate it
-            // as a retryable error rather than skipping the layer and reporting the project as missing.
-            Err(err @ CacheError::RateLimited { .. }) => {
-                rate_limited = Some(err);
-                continue;
-            }
+        match outcome {
+            Ok(Some(detail)) => details.push((pos, detail)),
+            Ok(None) => {}
+            Err(err @ CacheError::OfflineMissing(_)) => offline_missing = Some(err),
+            Err(err @ CacheError::RateLimited { .. }) => rate_limited = Some(err),
             Err(err) => {
-                let layer = state.index_at(pos);
-                tracing::warn!(layer = %layer.name, error = ?err, "virtual-index layer unavailable, skipping");
-                continue;
-            }
-        };
-        if let Some(detail) = detail {
-            found = true;
-            versions.extend(detail.versions);
-            // A virtual index guarantees only what its weakest layer does: a layer that cannot promise
-            // PEP 700's `versions`/`size` caps the merged page at the base version too.
-            if detail.meta.api_version == crate::API_VERSION_BASE {
-                meta.api_version = crate::API_VERSION_BASE;
-            }
-            if meta.project_status.is_none() && detail.meta.project_status.is_some() {
-                meta.project_status = detail.meta.project_status;
-                meta.project_status_reason = detail.meta.project_status_reason;
-            }
-            for file in detail.files {
-                if seen.insert(file.filename.clone()) {
-                    files.push(file);
-                }
+                tracing::warn!(layer = %state.index_at(pos).name, error = ?err, "virtual-index layer unavailable, skipping");
             }
         }
     }
-    if !found {
+    if mode != FallbackMode::Fallback {
+        details.retain(|(_, detail)| !detail.files.is_empty());
+    }
+    let hosted_found = details.iter().any(|(pos, _)| !is_cached(state.index_at(*pos)));
+    let cached_found = details.iter().any(|(pos, _)| is_cached(state.index_at(*pos)));
+    if mode == FallbackMode::PrivateFirst && hosted_found {
+        if cached_found {
+            record_collision(state, index, layers, project);
+        }
+        details.retain(|(pos, _)| !is_cached(state.index_at(*pos)));
+    }
+    if details.is_empty() {
+        if let Some(denial) = cached_denial {
+            return Err(denial.into());
+        }
+        if mode == FallbackMode::NoFallback && deny_no_fallback_miss {
+            return Err(no_fallback_denial(state, index, layers, project).into());
+        }
         if let Some(err) = rate_limited {
             return Err(err);
         }
@@ -162,6 +184,27 @@ async fn virtual_detail(
             return Err(err);
         }
         return Ok(None);
+    }
+    let mut files = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut versions = BTreeSet::new();
+    let mut meta = Meta::default();
+    for (_, detail) in details {
+        versions.extend(detail.versions);
+        // A virtual index guarantees only what its weakest layer does: a layer that cannot promise
+        // PEP 700's `versions`/`size` caps the merged page at the base version too.
+        if detail.meta.api_version == crate::API_VERSION_BASE {
+            meta.api_version = crate::API_VERSION_BASE;
+        }
+        if meta.project_status.is_none() && detail.meta.project_status.is_some() {
+            meta.project_status = detail.meta.project_status;
+            meta.project_status_reason = detail.meta.project_status_reason;
+        }
+        for file in detail.files {
+            if seen.insert(file.filename.clone()) {
+                files.push(file);
+            }
+        }
     }
     if let Some(pos) = upload {
         apply_overrides(state, &state.index_at(pos).name, project, &mut files)?;
@@ -174,6 +217,55 @@ async fn virtual_detail(
     };
     apply_project_status(&mut detail);
     Ok(Some(detail))
+}
+
+const fn is_cached(index: &Index) -> bool {
+    matches!(index.kind, IndexKind::Cached { .. })
+}
+
+fn member_names(state: &ServingState, layers: &[usize], cached: bool) -> String {
+    layers
+        .iter()
+        .map(|&pos| state.index_at(pos))
+        .filter(|index| is_cached(index) == cached)
+        .map(|index| index.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn record_collision(state: &ServingState, index: &Index, layers: &[usize], project: &str) {
+    let hosted_members = member_names(state, layers, false);
+    let cached_members = member_names(state, layers, true);
+    tracing::warn!(
+        security_event = true,
+        event = "policy_decision",
+        action = "serve",
+        result = "shadowed",
+        index = %index.name,
+        project,
+        fallback_mode = %FallbackMode::PrivateFirst,
+        hosted_members,
+        cached_members,
+        "private-first policy selected hosted project candidates"
+    );
+}
+
+fn no_fallback_denial(state: &ServingState, index: &Index, layers: &[usize], project: &str) -> PolicyDenial {
+    PolicyDenial::new(
+        PolicyAction::Cached,
+        project,
+        None,
+        None,
+        "virtual-fallback",
+        "fallback_mode",
+        format!(
+            "project {project:?} is missing from hosted members {:?} of virtual repository {:?}; fallback mode {:?} forbids cached members {:?}",
+            member_names(state, layers, false),
+            index.name,
+            FallbackMode::NoFallback.as_str(),
+            member_names(state, layers, true),
+        ),
+    )
 }
 
 /// Apply the `hidden`/`yanked` overrides stored on `hosted` to a merged file list.

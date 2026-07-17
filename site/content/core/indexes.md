@@ -49,9 +49,9 @@ one URL where your own content wins over upstream. peryx names these cached, hos
 
 - A **cached** index proxies and caches one upstream, with its own credentials.
 - A **hosted** index stores uploads; `upload_token` gates writes and `volatile` gates deletion.
-- A **virtual** index serves an ordered list of other indexes under one route. Resolution is first-match per filename;
-  versions union. Uploads land in the virtual index's designated hosted layer. A layer can be another virtual index,
-  which gives inheritance chains.
+- A **virtual** index serves an ordered list of other indexes under one route. PyPI defaults to first-match per filename
+  and unioned versions; its source policy can instead select hosted candidates at project level or disable cached
+  fallback. Uploads land in the virtual index's designated hosted layer. A layer can be another virtual index.
 
 {% mermaid() %}
 flowchart LR
@@ -62,8 +62,10 @@ flowchart LR
   class cached warn
 {% end %}
 
-Filename-level (rather than project-level) shadowing means you can override one broken wheel of an upstream release
-while its sdist and its other wheels continue to come from the cached layer.
+The default filename-level mode lets you override one broken wheel of an upstream release while its sdist and other
+wheels continue to come from the cached layer. PyPI virtual indexes can instead use `private-first`, where any hosted
+candidate for the normalized project hides every cached candidate, or `no-fallback`, where the virtual index does not
+query its immediate cached members. See [`fallback_mode`](@/core/configuration.md#index-policy).
 
 ## Why shadowing is a security control
 
@@ -75,11 +77,14 @@ compromised [PyTorch's nightly channel](https://pytorch.org/blog/compromised-nig
 disclosure, three dozen major companies. Client-side mitigations exist (uv's `explicit` index pinning, for one) but must
 be repeated in every project, for every tool, forever.
 
-A virtual index moves the decision server-side. The client has one `index-url` and no fallback; the virtual index's
-hosted layer is consulted first; a name that exists in the hosted layer never falls through to the cached layer. The
-guarantee holds for pip, uv, [poetry](https://python-poetry.org/), and whatever comes next, because it lives where the
-indexes meet rather than in each client's configuration. Publishing a package privately is what turns its name off
-upstream; there is no separate deny-list to maintain.
+A virtual index moves the decision server-side. Give the client one `index-url` and configure the virtual index with
+`private-first`: a name with hosted candidates then does not expose cached candidates. The rule works with Simple API
+clients such as pip and uv because it lives where the indexes meet. Use `protected_names` as well when an absent or
+deleted private project must remain blocked upstream.
+
+The default `fallback` mode keeps filename-level merging for compatibility and is not a project-level
+dependency-confusion boundary. `no-fallback` is stricter at the configured virtual boundary, but a nested virtual member
+uses its own mode, and a client can still bypass this policy by configuring another index or `--extra-index-url`.
 
 ## Removal semantics
 

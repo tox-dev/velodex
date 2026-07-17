@@ -138,9 +138,8 @@ fn simple_json(dist: &Dist, port: u16) -> Vec<u8> {
 
 type Routes = HashMap<String, (String, Vec<u8>)>;
 
-/// A local HTTP index peryx proxies as its upstream. Serves `peryxa` (which requires `peryxb`) and
-/// `peryxb`, so dependency resolution, downloads, and PEP 658 metadata all exercise real client
-/// behavior with no external network. Dropping it stops the server thread.
+/// A local HTTP index peryx proxies as its upstream. `peryxa` requires `peryxb`; `peryxc` gives policy
+/// tests an independent upstream-only project. Dropping the fixture stops its server thread.
 struct Upstream {
     port: u16,
     stop: Arc<AtomicBool>,
@@ -154,6 +153,7 @@ impl Upstream {
         let dists = [
             build_dist("peryxa", "1.0", &["peryxb"]),
             build_dist("peryxb", "1.0", &[]),
+            build_dist("peryxc", "1.0", &[]),
         ];
         let mut routes: Routes = HashMap::new();
         for dist in dists {
@@ -823,7 +823,11 @@ fn e2e_file_download_is_cached_content_addressed() {
 
 /// Write a built distribution's wheel to a temp file, returning the dir (kept alive) and the path.
 fn wheel_on_disk(name: &str) -> (TempDir, PathBuf) {
-    let dist = build_dist(name, "1.0", &[]);
+    wheel_version_on_disk(name, "1.0")
+}
+
+fn wheel_version_on_disk(name: &str, version: &str) -> (TempDir, PathBuf) {
+    let dist = build_dist(name, version, &[]);
     let dir = TempDir::new().expect("wheel dir");
     let path = dir.path().join(dist.wheel_filename());
     std::fs::write(&path, &dist.wheel).expect("write wheel");
@@ -838,6 +842,42 @@ fn uv_publish(peryx: &Peryx, wheel: &std::path::Path) {
         .args(["-u", "__token__", "-p", UPLOAD_TOKEN])
         .arg(wheel);
     run(&mut cmd, "uv publish");
+}
+
+fn assert_client_fallback_modes(install: fn(&TempDir, &Peryx, &str), install_fails: fn(&TempDir, &Peryx, &str)) {
+    for (mode, upstream_allowed) in [("fallback", true), ("private-first", true), ("no-fallback", false)] {
+        let policy = format!("fallback_mode = \"{mode}\"\nprotected_names = [\"peryxb\"]\n");
+        let (_upstream, peryx) = hermetic_with_overlay_policy(&policy);
+        let (_wheel_dir, wheel) = wheel_version_on_disk("peryxa", "2.0");
+        uv_publish(&peryx, &wheel);
+
+        let collision_venv = uv_venv();
+        install(&collision_venv, &peryx, "peryxa");
+        assert_importable(&collision_venv, "peryxa");
+        let (_, detail) = http_get(peryx.port, "/root/pypi/simple/peryxa/").expect("collision detail");
+        assert!(detail.contains("peryxa-2.0-py3-none-any.whl"));
+        assert_eq!(detail.contains("peryxa-1.0-py3-none-any.whl"), mode == "fallback");
+
+        let missing_venv = uv_venv();
+        if upstream_allowed {
+            install(&missing_venv, &peryx, "peryxc");
+            assert_importable(&missing_venv, "peryxc");
+        } else {
+            install_fails(&missing_venv, &peryx, "peryxc");
+        }
+
+        install_fails(&uv_venv(), &peryx, "peryxb");
+    }
+}
+
+#[test]
+fn e2e_pip_respects_virtual_fallback_modes() {
+    assert_client_fallback_modes(pip_install, pip_install_fails);
+}
+
+#[test]
+fn e2e_uv_respects_virtual_fallback_modes() {
+    assert_client_fallback_modes(uv_install, uv_install_fails);
 }
 
 #[test]

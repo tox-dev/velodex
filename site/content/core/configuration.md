@@ -335,6 +335,7 @@ layers = ["hosted", "pypi"]
 upload = "hosted"
 
 [index.policy]
+fallback_mode = "private-first"
 allow_projects = ["flask", "requests"]
 block_projects = ["bad-package"]
 protected_names = ["acme-secrets", "acme-*"]
@@ -350,6 +351,7 @@ min_release_age_secs = 604800
 
 | Key                      | Meaning                                                                       |
 | ------------------------ | ----------------------------------------------------------------------------- |
+| `fallback_mode`          | PyPI virtual source policy: `fallback`, `private-first`, or `no-fallback`     |
 | `allow_projects`         | Only these normalized projects may be served, mirrored, or uploaded           |
 | `block_projects`         | These normalized projects are denied                                          |
 | `protected_names`        | Reserved names that never fall back upstream; exact or `prefix-*` namespace   |
@@ -382,10 +384,31 @@ answer fails instead of reaching the public index. That closes the gap a missing
 would otherwise open. An entry is an exact name or a `prefix-*` namespace rule, both normalized like the incoming name
 before the comparison.
 
+`fallback_mode` controls how a PyPI virtual index chooses project candidates from its immediate hosted and cached
+members:
+
+- `fallback` is the compatibility default. It merges every member and keeps the first record for a duplicate filename,
+  so hosted and upstream files with different names remain visible together.
+- `private-first` serves only hosted candidates when both source classes contain the normalized project. It uses the
+  cached candidates only when the hosted members contain no files, and records a structured `policy_decision` security
+  event for each collision.
+- `no-fallback` does not query an immediate cached member. A project with no hosted candidates returns a structured
+  `403` policy denial instead of an empty or upstream page.
+
+Protected names take precedence over all three modes: hosted members can serve a protected name, but cached members do
+not query it upstream. The comparison uses the same PEP 503 normalization as project routing, so
+`acme-pkg`/`acme_pkg`/`acme.pkg` select one policy decision. A nested virtual member uses its own mode; configure that
+member too when its boundary must enforce the same rule.
+
+Leaving `fallback_mode` unset preserves existing filename-level merging. An unknown value or use on an OCI index is a
+startup error. The setting governs candidates returned by this server, not indexes a client adds to its own config;
+pip's `--extra-index-url`, uv source overrides, and nested virtual indexes with their own mode remain separate trust
+boundaries. Use `protected_names` for private names that must stay blocked even while absent or renamed.
+
 `allow_projects`, `block_projects`, `protected_names`, `max_file_size_bytes`, and `max_project_size_bytes` are
 ecosystem-neutral and apply to an OCI index too, matching on image name and blob size: a blocked image is hidden on
 reads and refused on push, and a layer or manifest over the size limit is refused. The rest of the keys above cover
-version specifiers, package types, and wheel tags. These are Python-specific
+fallback selection, version specifiers, package types, and wheel tags. These are Python-specific
 ([PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/) versions, wheel/sdist types, wheel
 tags) and have no OCI counterpart, so they are implemented in the PyPI ecosystem crate and apply only to a PyPI index.
 Each ecosystem contributes its own matchers to the same neutral `[index.policy]` engine through a rule trait.

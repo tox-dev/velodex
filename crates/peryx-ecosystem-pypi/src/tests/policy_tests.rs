@@ -1,9 +1,43 @@
 use std::collections::BTreeMap;
 
-use peryx_policy::{ArtifactFacts, Policy, PolicyAction, PolicyConfig};
+use peryx_policy::{ArtifactFacts, FallbackMode, Policy, PolicyAction, PolicyConfig};
+use rstest::rstest;
 
 use crate::policy::{PackageType, PypiPolicy, PypiPolicyConfig, PypiPolicyError, compile_rules};
 use crate::{CoreMetadata, File, Meta, ProjectDetail, ProjectList, ProjectListEntry, Provenance, Yanked};
+
+#[test]
+fn test_fallback_mode_defaults_to_inactive_filename_merge() {
+    let policy = policy(|_neutral, _pypi| {});
+
+    assert_eq!(policy.fallback_mode(), FallbackMode::Fallback);
+    assert!(!policy.active());
+}
+
+#[rstest]
+#[case(FallbackMode::PrivateFirst)]
+#[case(FallbackMode::NoFallback)]
+fn test_fallback_mode_activates_project_resolution(#[case] mode: FallbackMode) {
+    let policy = policy(|_neutral, pypi| pypi.fallback_mode = mode);
+
+    assert_eq!(policy.fallback_mode(), mode);
+    assert!(policy.active());
+}
+
+#[rstest]
+#[case("fallback", FallbackMode::Fallback)]
+#[case("private-first", FallbackMode::PrivateFirst)]
+#[case("no-fallback", FallbackMode::NoFallback)]
+fn test_fallback_mode_deserializes_kebab_case(#[case] value: &str, #[case] expected: FallbackMode) {
+    let config: PypiPolicyConfig = serde_json::from_str(&format!(r#"{{"fallback_mode":"{value}"}}"#)).unwrap();
+
+    assert_eq!(config.fallback_mode, expected);
+}
+
+#[test]
+fn test_fallback_mode_rejects_unknown_values() {
+    serde_json::from_str::<PypiPolicyConfig>(r#"{"fallback_mode":"prefer-private"}"#).unwrap_err();
+}
 
 #[test]
 fn test_apply_list_filters_project_rules() {

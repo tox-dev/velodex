@@ -5,6 +5,7 @@ mod support;
 mod changelog;
 mod discovery;
 mod download;
+mod fallback;
 mod inspect;
 mod legacy_json;
 mod metadata;
