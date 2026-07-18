@@ -131,6 +131,13 @@ pub struct File {
 }
 
 impl File {
+    /// The content address a served file resolves through: its `sha256` hash, the digest peryx keys
+    /// every cached artifact by. A file the Simple response left without one cannot be content-addressed.
+    #[must_use]
+    pub fn sha256(&self) -> Option<&str> {
+        self.hashes.get("sha256").map(String::as_str)
+    }
+
     /// The effective metadata sibling advertised by either spelling, preferring the current key.
     #[must_use]
     pub const fn metadata(&self) -> &CoreMetadata {

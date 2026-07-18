@@ -142,6 +142,43 @@ strip user information, query strings, and fragments.
 `peryx_catalog_errors_total`, and the `peryx_catalog_projects` gauge. These series use only the bounded `ecosystem` and
 `role` labels; upstream names, URLs, index names, and project names never become Prometheus labels.
 
+### Sync project file metadata
+
+Discovering names populates the root; syncing a project's detail page records the files under it. This fetches each
+project's HTML or JSON Simple response and stores its remote file metadata without downloading a single distribution
+byte, so a mirror knows every file's identity, hash, and size before anything is transferred.
+
+Each admitted file records its filename, hashes, size, upload time, yank state, metadata-sibling link, provenance link,
+and upstream URL, parsed from the
+[PyPA Simple Repository API](https://packaging.python.org/en/latest/specifications/simple-repository-api/) with the
+per-file [PEP 700](https://peps.python.org/pep-0700/) `size` and `upload-time`,
+[PEP 592](https://peps.python.org/pep-0592/) yanks, [PEP 658](https://peps.python.org/pep-0658/) metadata siblings, and
+[PEP 740](https://peps.python.org/pep-0740/) provenance. The generation around them retains the source index that
+produced it, the `ETag`/`Last-Modified`/last-serial validators, the observation time, and a monotonic generation number.
+HTML and JSON responses parse into the same fields, so an upstream serving either form yields identical records.
+
+The configured repository policy runs before a file is admitted, so an installer never sees a file the policy denies; a
+file the response leaves without a `sha256` is skipped as well, because peryx cannot content-address it. Admitting a
+file registers its digest-keyed download source and metadata sibling, so a later cache-miss fetch resolves the bytes by
+digest — the metadata is remote-only until then, describing files that still live upstream.
+
+The detail transfer completes into a bounded temporary file before any staging row is written, holding no metadata
+transaction open during the upstream request. Parsing streams the file array, committing batches of 10,000 records into
+a staging generation so a million-file generated project never materializes in memory or in one transaction. A single
+pointer change publishes the generation once the parser reaches a valid end of document, and the displaced generation is
+swept in bounded batches. A truncated transfer, malformed document, unsupported Simple API major, or failed publication
+leaves the previous generation active and serviceable — the same retain-on-failure discipline
+[bandersnatch](https://github.com/pypa/bandersnatch/blob/main/src/bandersnatch/mirror.py) applies to per-release
+metadata, and the reason [devpi](https://github.com/devpi/devpi/blob/main/server/devpi_server/mirror.py) keeps its last
+good project serial when a refresh errors.
+
+Peryx sends `If-None-Match` on the next sync when the active generation carried an `ETag`. A `304 Not Modified` reuses
+that generation without moving any artifact, advancing only the observation time and merging validators present on the
+response, as [HTTP cache validation](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4) requires; a `404` leaves
+any prior generation in place. A detail response is limited to 256 MiB and 2,000,000 files, the redirect policy permits
+at most ten redirects, and concurrent syncs of one project inside a process share a lock and one fetch. Persisted source
+and final URLs strip user information, query strings, and fragments.
+
 ## HTML upstreams
 
 Some upstreams, including [Artifactory](https://jfrog.com/artifactory/), serve the

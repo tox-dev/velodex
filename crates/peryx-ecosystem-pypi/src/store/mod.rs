@@ -21,7 +21,9 @@ pub use files::{
     put_provenance, scan_file_urls, scan_metadata_records, scan_provenance_records,
 };
 pub use index::{
-    get_index, get_project_status, list_index_pages, put_cached_page, put_index, scan_index_pages, scan_index_records,
+    abort_project_generation, active_project_generation, begin_project_generation, get_index, get_project_status,
+    list_index_pages, list_project_files, project_meta_state, publish_project_generation, put_cached_page, put_index,
+    put_project_files, recover_project_generations, refresh_project_generation, scan_index_pages, scan_index_records,
     touch_index_freshness,
 };
 pub(crate) use journal::{ChangelogReadError, read_changelog_page};
@@ -33,7 +35,10 @@ pub use projects::{
     publish_catalog_generation, put_catalog_projects, put_project, recover_catalog_generations,
     refresh_catalog_generation, scan_project_records,
 };
-pub use record::{CachedIndex, CachedIndexPage, CachedIndexSummary, FreshnessOverlay, ProjectStatusRecord};
+pub use record::{
+    CachedIndex, CachedIndexPage, CachedIndexSummary, FreshnessOverlay, ProjectGeneration, ProjectMetaState,
+    ProjectStatusRecord,
+};
 pub use summary::summarize_indexes;
 pub use uploads::{
     Guard, MetadataSibling, PromotedRelease, ProvenanceSibling, PublishedFile, UploadMutation, delete_override,
@@ -57,6 +62,11 @@ const PROVENANCE_PREFIX: &str = "pypi\u{0}a\u{0}";
 const PROJECTS_PREFIX: &str = "pypi\u{0}p\u{0}";
 const CATALOG_PREFIX: &str = "pypi\u{0}c\u{0}";
 const CATALOG_GENERATION_PREFIX: &str = "pypi\u{0}g\u{0}";
+/// Per-project remote file-metadata publication state, keyed by `{index}/{normalized}`.
+const PROJECT_META_PREFIX: &str = "pypi\u{0}m\u{0}";
+/// One remote file's parsed metadata, keyed by `{index}/{normalized}/{generation}/{filename}` so a
+/// generation's rows sort together and delete by prefix.
+const PROJECT_FILE_PREFIX: &str = "pypi\u{0}r\u{0}";
 /// The former `project_status` table: explicit status markers, keyed by `{index}/{normalized}`.
 const PROJECT_STATUS_PREFIX: &str = "pypi\u{0}s\u{0}";
 /// The former `uploads` table: hosted file records, keyed by `{index}/{normalized}/{filename}`.
@@ -90,6 +100,18 @@ fn project_key(index: &str, normalized: &str) -> String {
 
 fn project_status_key(index: &str, normalized: &str) -> String {
     format!("{PROJECT_STATUS_PREFIX}{index}/{normalized}")
+}
+
+fn project_meta_key(index: &str, normalized: &str) -> String {
+    format!("{PROJECT_META_PREFIX}{index}/{normalized}")
+}
+
+fn project_generation_prefix(index: &str, normalized: &str, generation: u64) -> String {
+    format!("{PROJECT_FILE_PREFIX}{index}/{normalized}/{generation:020}/")
+}
+
+fn project_file_key(index: &str, normalized: &str, generation: u64, filename: &str) -> String {
+    format!("{}{filename}", project_generation_prefix(index, normalized, generation))
 }
 
 fn upload_key(index: &str, normalized: &str, filename: &str) -> String {

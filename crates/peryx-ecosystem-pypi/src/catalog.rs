@@ -214,7 +214,7 @@ fn write_catalog_chunk(
     Ok(())
 }
 
-fn redact_url(raw: &str) -> String {
+pub(crate) fn redact_url(raw: &str) -> String {
     let Ok(mut url) = Url::parse(raw) else {
         return "<invalid-url>".to_owned();
     };

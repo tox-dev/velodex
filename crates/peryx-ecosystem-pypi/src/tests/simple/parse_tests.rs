@@ -395,3 +395,96 @@ fn test_legacy_project_json_handles_empty_project() {
         )
     );
 }
+
+#[derive(Default)]
+struct Collect(Vec<File>);
+
+impl crate::simple::DetailSink for Collect {
+    type Error = std::convert::Infallible;
+
+    fn file(&mut self, file: File) -> Result<(), Self::Error> {
+        self.0.push(file);
+        Ok(())
+    }
+}
+
+struct Boom;
+
+impl crate::simple::DetailSink for Boom {
+    type Error = String;
+
+    fn file(&mut self, _file: File) -> Result<(), Self::Error> {
+        Err("sink rejected the file".to_owned())
+    }
+}
+
+fn detail_base() -> url::Url {
+    url::Url::parse("https://pypi.org/simple/flask/").unwrap()
+}
+
+#[test]
+fn test_stream_detail_json_collects_files_and_absolutizes_urls() {
+    let body = br#"{"meta":{"api-version":"1.1"},"name":"flask","versions":["1.0"],
+        "files":[{"filename":"flask-1.0.tar.gz","url":"../../files/flask-1.0.tar.gz","hashes":{"sha256":"abc"}}],
+        "alternate-locations":["ignored"]}"#;
+    let mut sink = Collect::default();
+
+    let detail: crate::simple::StreamedDetail =
+        crate::simple::stream_detail_json(std::io::Cursor::new(&body[..]), &detail_base(), &mut sink).unwrap();
+
+    assert_eq!(detail.name, "flask");
+    assert_eq!(detail.versions, vec!["1.0".to_owned()]);
+    assert_eq!(sink.0.len(), 1);
+    assert_eq!(sink.0[0].url, "https://pypi.org/files/flask-1.0.tar.gz");
+}
+
+#[test]
+fn test_stream_detail_json_defaults_a_missing_name() {
+    let body = br#"{"meta":{"api-version":"1.0"},"files":[]}"#;
+    let mut sink = Collect::default();
+    let detail = crate::simple::stream_detail_json(std::io::Cursor::new(&body[..]), &detail_base(), &mut sink).unwrap();
+    assert_eq!(detail.name, "");
+    assert!(sink.0.is_empty());
+}
+
+#[test]
+fn test_stream_detail_json_rejects_unsupported_api_version() {
+    let body = br#"{"meta":{"api-version":"2.0"},"files":[]}"#;
+    let mut sink = Collect::default();
+    assert!(crate::simple::stream_detail_json(std::io::Cursor::new(&body[..]), &detail_base(), &mut sink).is_err());
+}
+
+#[test]
+fn test_stream_detail_json_rejects_invalid_json() {
+    let mut sink = Collect::default();
+    assert!(crate::simple::stream_detail_json(std::io::Cursor::new(&b"{"[..]), &detail_base(), &mut sink).is_err());
+}
+
+#[test]
+fn test_stream_detail_json_rejects_trailing_data() {
+    let body = br#"{"meta":{"api-version":"1.0"},"files":[]} trailing"#;
+    let mut sink = Collect::default();
+    assert!(crate::simple::stream_detail_json(std::io::Cursor::new(&body[..]), &detail_base(), &mut sink).is_err());
+}
+
+#[test]
+fn test_stream_detail_json_rejects_a_non_object_root() {
+    let mut sink = Collect::default();
+    assert!(crate::simple::stream_detail_json(std::io::Cursor::new(&b"[]"[..]), &detail_base(), &mut sink).is_err());
+}
+
+#[test]
+fn test_stream_detail_json_rejects_non_array_files() {
+    let mut sink = Collect::default();
+    assert!(
+        crate::simple::stream_detail_json(std::io::Cursor::new(&br#"{"files":{}}"#[..]), &detail_base(), &mut sink)
+            .is_err()
+    );
+}
+
+#[test]
+fn test_stream_detail_json_surfaces_a_sink_error() {
+    let body = br#"{"files":[{"filename":"f","url":"u","hashes":{}}]}"#;
+    let mut sink = Boom;
+    assert!(crate::simple::stream_detail_json(std::io::Cursor::new(&body[..]), &detail_base(), &mut sink).is_err());
+}

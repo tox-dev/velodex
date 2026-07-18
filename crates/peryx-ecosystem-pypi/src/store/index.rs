@@ -1,10 +1,21 @@
-use peryx_storage::meta::{DriverBatch, MetaError, MetaScanError, MetaStore};
+use peryx_storage::meta::{DriverBatch, DriverTxn, MetaError, MetaScanError, MetaStore};
 
-use super::record::{CachedIndex, CachedIndexPage, FreshnessOverlay, ProjectStatusRecord};
+use crate::simple::File;
+use crate::stream::metadata_sibling;
+use crate::{CoreMetadata, to_json};
+
+use super::record::{
+    CachedIndex, CachedIndexPage, FreshnessOverlay, ProjectGeneration, ProjectMetaState, ProjectStatusRecord,
+};
 use super::{
     INDEX_PREFIX, file_key, file_source_value, freshness_key, index_key, metadata_key, metadata_value, project_key,
     project_status_key,
 };
+use super::{project_file_key, project_generation_prefix, project_meta_key};
+
+/// How many generation rows a purge deletes per transaction, bounding one commit for a project with
+/// a very large file list.
+const PROJECT_FILE_DELETE_BATCH: usize = 10_000;
 
 /// Store everything a freshly fetched cached page produces in one transaction.
 ///
@@ -212,6 +223,264 @@ pub fn scan_index_records<E>(
         visit(&key[INDEX_PREFIX.len()..], &raw).map_err(MetaScanError::Visit)?;
     }
     Ok(())
+}
+
+fn decode_project_meta_state(raw: Option<Vec<u8>>) -> Result<ProjectMetaState, MetaError> {
+    raw.map_or_else(
+        || Ok(ProjectMetaState::default()),
+        |raw| Ok(serde_json::from_slice(&raw)?),
+    )
+}
+
+/// Read one project's remote file-metadata publication state.
+///
+/// # Errors
+/// Returns a store error if the read or decode fails.
+pub fn project_meta_state(meta: &MetaStore, index: &str, normalized: &str) -> Result<ProjectMetaState, MetaError> {
+    decode_project_meta_state(meta.get_driver_value(&project_meta_key(index, normalized))?)
+}
+
+/// The active (reader-visible) remote file-metadata generation for one project, if published.
+///
+/// # Errors
+/// Returns a store error if the read or decode fails.
+pub fn active_project_generation(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+) -> Result<Option<ProjectGeneration>, MetaError> {
+    Ok(project_meta_state(meta, index, normalized)?.active)
+}
+
+fn store_project_meta_state(
+    txn: &mut DriverTxn<'_>,
+    index: &str,
+    normalized: &str,
+    state: &ProjectMetaState,
+) -> Result<(), MetaError> {
+    txn.put_local(&project_meta_key(index, normalized), &serde_json::to_vec(state)?)
+}
+
+fn delete_generation_rows(meta: &MetaStore, index: &str, normalized: &str, generation: u64) -> Result<(), MetaError> {
+    let prefix = project_generation_prefix(index, normalized, generation);
+    loop {
+        let keys = meta.driver_prefix_keys_limited(&prefix, PROJECT_FILE_DELETE_BATCH)?;
+        if keys.is_empty() {
+            break;
+        }
+        let mut batch = DriverBatch::new();
+        for key in keys {
+            batch.delete(key);
+        }
+        meta.commit_driver_batch(&batch, false)?;
+    }
+    Ok(())
+}
+
+/// Remove generations left by an interrupted sync, clearing their state only after every row is gone.
+///
+/// # Errors
+/// Returns a store error if a read, deletion, or state update fails.
+pub fn recover_project_generations(meta: &MetaStore, index: &str, normalized: &str) -> Result<(), MetaError> {
+    let state = project_meta_state(meta, index, normalized)?;
+    for generation in [state.staging, state.retired].into_iter().flatten() {
+        delete_generation_rows(meta, index, normalized, generation)?;
+    }
+    meta.commit_driver_txn(|txn| {
+        let mut current = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        if current.staging == state.staging {
+            current.staging = None;
+        }
+        if current.retired == state.retired {
+            current.retired = None;
+        }
+        store_project_meta_state(txn, index, normalized, &current)?;
+        Ok::<_, MetaError>(((), Vec::new()))
+    })
+}
+
+/// Reserve the next generation for one project and return it with the active generation expected at
+/// publication, so a concurrent sync cannot silently overwrite a newer one.
+///
+/// # Errors
+/// Returns a store error if the reservation fails.
+pub fn begin_project_generation(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+) -> Result<(u64, Option<u64>), MetaError> {
+    meta.commit_driver_txn(|txn| {
+        let mut state = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        let expected = state.active.as_ref().map(|active| active.generation);
+        state.next_generation += 1;
+        state.staging = Some(state.next_generation);
+        store_project_meta_state(txn, index, normalized, &state)?;
+        Ok::<_, MetaError>(((state.next_generation, expected), Vec::new()))
+    })
+}
+
+/// Add a bounded batch of parsed remote files to a staging generation.
+///
+/// Each admitted file's download source and PEP 658 sibling are registered so a cache hit resolves by
+/// digest. The first spelling of a duplicate filename wins, making the result independent of upstream
+/// ordering. Returns the number of newly inserted filenames.
+///
+/// # Errors
+/// Returns a store error if the transaction fails or the generation is no longer staging.
+pub fn put_project_files(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+    generation: u64,
+    source: &str,
+    upstream: Option<&str>,
+    files: &[File],
+) -> Result<u64, MetaError> {
+    meta.commit_driver_txn(|txn| {
+        let state = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        if state.staging != Some(generation) {
+            return Err(MetaError::DriverPrecondition(
+                "project generation is not staging".to_owned(),
+            ));
+        }
+        let mut inserted = 0;
+        for file in files {
+            let key = project_file_key(index, normalized, generation, &file.filename);
+            if txn.get(&key)?.is_some() {
+                continue;
+            }
+            txn.put_local(&key, to_json(file).as_bytes())?;
+            inserted += 1;
+            register_file_rows(txn, source, upstream, file)?;
+        }
+        Ok::<_, MetaError>((inserted, Vec::new()))
+    })
+}
+
+/// Register the digest-keyed download source and metadata sibling a served file resolves through.
+fn register_file_rows(
+    txn: &mut DriverTxn<'_>,
+    source: &str,
+    upstream: Option<&str>,
+    file: &File,
+) -> Result<(), MetaError> {
+    let Some(sha256) = file.sha256() else {
+        return Ok(());
+    };
+    let source_value = file_source_value(&file.url, source, file.size, upstream);
+    txn.put_local(&file_key(sha256), source_value.as_bytes())?;
+    if let CoreMetadata::Hashes(hashes) = file.metadata()
+        && let Some(digest) = hashes.get("sha256")
+    {
+        let sibling = metadata_value(&metadata_sibling(&file.url), digest, source);
+        txn.put_local(&metadata_key(sha256), sibling.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Publish a fully parsed generation, swapping the active pointer only if both the staging
+/// reservation and the active generation still match what the sync observed.
+///
+/// # Errors
+/// Returns a store error if publication loses its compare-and-swap or the transaction fails.
+pub fn publish_project_generation(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+    expected_active: Option<u64>,
+    generation: ProjectGeneration,
+) -> Result<(), MetaError> {
+    meta.commit_driver_txn(|txn| {
+        let mut state = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        if state.staging != Some(generation.generation)
+            || state.active.as_ref().map(|active| active.generation) != expected_active
+        {
+            return Err(MetaError::DriverPrecondition(
+                "project publication lost its reservation".to_owned(),
+            ));
+        }
+        state.retired = state.active.as_ref().map(|active| active.generation);
+        state.active = Some(generation);
+        state.staging = None;
+        store_project_meta_state(txn, index, normalized, &state)?;
+        Ok::<_, MetaError>(((), Vec::new()))
+    })
+}
+
+/// Discard one failed staging generation without disturbing a newer reservation.
+///
+/// # Errors
+/// Returns a store error if row cleanup or the state update fails.
+pub fn abort_project_generation(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+    generation: u64,
+) -> Result<(), MetaError> {
+    delete_generation_rows(meta, index, normalized, generation)?;
+    meta.commit_driver_txn(|txn| {
+        let mut state = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        if state.staging == Some(generation) {
+            state.staging = None;
+            store_project_meta_state(txn, index, normalized, &state)?;
+        }
+        Ok::<_, MetaError>(((), Vec::new()))
+    })
+}
+
+/// Refresh the active generation after a `304 Not Modified`, merging only validators the response
+/// carried and advancing the observation time, without touching the file rows.
+///
+/// # Errors
+/// Returns a store error if the active generation changed or the transaction fails.
+pub fn refresh_project_generation(
+    meta: &MetaStore,
+    index: &str,
+    normalized: &str,
+    expected: u64,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    fetched_at_unix: i64,
+) -> Result<(), MetaError> {
+    meta.commit_driver_txn(|txn| {
+        let mut state = decode_project_meta_state(txn.get(&project_meta_key(index, normalized))?)?;
+        let active = state
+            .active
+            .as_mut()
+            .filter(|active| active.generation == expected)
+            .ok_or_else(|| MetaError::DriverPrecondition("project changed during revalidation".to_owned()))?;
+        if etag.is_some() {
+            active.etag = etag;
+        }
+        if last_modified.is_some() {
+            active.last_modified = last_modified;
+        }
+        active.fetched_at_unix = fetched_at_unix;
+        store_project_meta_state(txn, index, normalized, &state)?;
+        Ok::<_, MetaError>(((), Vec::new()))
+    })
+}
+
+/// List one project's parsed remote files from its active generation, sorted by filename.
+///
+/// # Errors
+/// Returns a store error if a read fails or a stored file row cannot be decoded.
+///
+/// # Panics
+/// Never in practice: a key the prefix scan just returned still has its value.
+pub fn list_project_files(meta: &MetaStore, index: &str, normalized: &str) -> Result<Vec<File>, MetaError> {
+    let Some(active) = active_project_generation(meta, index, normalized)? else {
+        return Ok(Vec::new());
+    };
+    let prefix = project_generation_prefix(index, normalized, active.generation);
+    let mut files = Vec::new();
+    for key in meta.driver_prefix_keys(&prefix)? {
+        let raw = meta
+            .get_driver_value(&key)?
+            .expect("a key from the prefix scan still has its value");
+        files.push(serde_json::from_slice::<File>(&raw)?);
+    }
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -453,5 +722,296 @@ mod tests {
         })
         .unwrap();
         assert_eq!(keys, vec![("pypi/flask".to_owned(), true)]);
+    }
+
+    mod generation {
+        use std::collections::BTreeMap;
+
+        use super::super::{
+            abort_project_generation, active_project_generation, begin_project_generation, list_project_files,
+            project_generation_prefix, project_meta_state, publish_project_generation, put_project_files,
+            recover_project_generations, refresh_project_generation,
+        };
+        use super::MetaStore;
+        use crate::simple::{CoreMetadata, File, Yanked};
+        use crate::store::{ProjectGeneration, PypiStore as _};
+
+        fn store() -> (tempfile::TempDir, MetaStore) {
+            let dir = tempfile::tempdir().unwrap();
+            let meta = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+            (dir, meta)
+        }
+
+        fn file(filename: &str, sha256: Option<&str>) -> File {
+            File {
+                filename: filename.to_owned(),
+                url: format!("https://files.example/{filename}"),
+                hashes: sha256
+                    .map(|digest| BTreeMap::from([("sha256".to_owned(), digest.to_owned())]))
+                    .unwrap_or_default(),
+                requires_python: None,
+                size: Some(10),
+                upload_time: Some("2024-01-01T00:00:00Z".to_owned()),
+                yanked: Yanked::No,
+                core_metadata: CoreMetadata::Absent,
+                dist_info_metadata: CoreMetadata::Absent,
+                gpg_sig: None,
+                provenance: crate::simple::Provenance::Absent,
+            }
+        }
+
+        fn generation(id: u64, etag: Option<&str>, files: u64) -> ProjectGeneration {
+            ProjectGeneration {
+                generation: id,
+                source: "pypi".to_owned(),
+                url: "https://pypi.org/simple/flask/".to_owned(),
+                format: "json".to_owned(),
+                etag: etag.map(str::to_owned),
+                last_modified: None,
+                last_serial: Some(3),
+                fetched_at_unix: 1,
+                bytes: 100,
+                files,
+                versions: vec!["1.0".to_owned()],
+                project_status: None,
+                project_status_reason: None,
+            }
+        }
+
+        fn publish(meta: &MetaStore, index: &str, project: &str, files: &[File]) -> u64 {
+            let (id, expected) = begin_project_generation(meta, index, project).unwrap();
+            let admitted = put_project_files(meta, index, project, id, "pypi", None, files).unwrap();
+            publish_project_generation(meta, index, project, expected, generation(id, Some("etag"), admitted)).unwrap();
+            id
+        }
+
+        #[test]
+        fn test_publish_lists_files_and_registers_download_rows() {
+            let (_dir, meta) = store();
+            let mut wheel = file("flask-1.0-py3-none-any.whl", Some(&"a".repeat(64)));
+            wheel.set_metadata(CoreMetadata::Hashes(BTreeMap::from([(
+                "sha256".to_owned(),
+                "b".repeat(64),
+            )])));
+
+            publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[wheel.clone(), file("flask-1.0.tar.gz", Some(&"c".repeat(64)))],
+            );
+
+            let listed = list_project_files(&meta, "pypi", "flask").unwrap();
+            assert_eq!(listed.len(), 2);
+            assert_eq!(listed[0].filename, "flask-1.0-py3-none-any.whl");
+            let source = meta.get_file_url(&"a".repeat(64)).unwrap().unwrap();
+            assert_eq!(source.url, "https://files.example/flask-1.0-py3-none-any.whl");
+            assert_eq!(source.size, Some(10));
+            let (_url, digest, _source) = meta.get_metadata(&"a".repeat(64)).unwrap().unwrap();
+            assert_eq!(digest, "b".repeat(64));
+        }
+
+        #[test]
+        fn test_active_generation_records_counts_and_validators() {
+            let (_dir, meta) = store();
+            let id = publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[file("flask-1.0.tar.gz", Some(&"a".repeat(64)))],
+            );
+            let active = active_project_generation(&meta, "pypi", "flask").unwrap().unwrap();
+            assert_eq!(active.generation, id);
+            assert_eq!(active.files, 1);
+            assert_eq!(active.etag.as_deref(), Some("etag"));
+        }
+
+        #[test]
+        fn test_put_project_files_is_first_wins_and_counts_new_filenames() {
+            let (_dir, meta) = store();
+            let (id, _) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            let first = file("flask-1.0.tar.gz", Some(&"a".repeat(64)));
+            let again = file("flask-1.0.tar.gz", Some(&"d".repeat(64)));
+            assert_eq!(
+                put_project_files(&meta, "pypi", "flask", id, "pypi", None, &[first, again]).unwrap(),
+                1
+            );
+            // A second filename that shares no key inserts; a repeat of the first does not.
+            assert_eq!(
+                put_project_files(
+                    &meta,
+                    "pypi",
+                    "flask",
+                    id,
+                    "pypi",
+                    None,
+                    &[file("flask-2.0.tar.gz", Some(&"e".repeat(64)))]
+                )
+                .unwrap(),
+                1
+            );
+        }
+
+        #[test]
+        fn test_put_project_files_stores_a_file_without_a_hash_but_registers_no_source() {
+            let (_dir, meta) = store();
+            let (id, expected) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            put_project_files(
+                &meta,
+                "pypi",
+                "flask",
+                id,
+                "pypi",
+                None,
+                &[file("flask-1.0.tar.gz", None)],
+            )
+            .unwrap();
+            publish_project_generation(&meta, "pypi", "flask", expected, generation(id, None, 1)).unwrap();
+            assert_eq!(list_project_files(&meta, "pypi", "flask").unwrap().len(), 1);
+        }
+
+        #[test]
+        fn test_put_project_files_requires_its_staging_generation() {
+            let (_dir, meta) = store();
+            let error = put_project_files(
+                &meta,
+                "pypi",
+                "flask",
+                7,
+                "pypi",
+                None,
+                &[file("f.tar.gz", Some(&"a".repeat(64)))],
+            )
+            .unwrap_err();
+            assert!(matches!(error, peryx_storage::meta::MetaError::DriverPrecondition(_)));
+        }
+
+        #[test]
+        fn test_publish_lost_reservation_is_rejected() {
+            let (_dir, meta) = store();
+            let (first, expected) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            begin_project_generation(&meta, "pypi", "flask").unwrap();
+            assert!(publish_project_generation(&meta, "pypi", "flask", expected, generation(first, None, 0)).is_err());
+        }
+
+        #[test]
+        fn test_list_files_is_empty_without_an_active_generation() {
+            let (_dir, meta) = store();
+            assert!(list_project_files(&meta, "pypi", "flask").unwrap().is_empty());
+            assert!(active_project_generation(&meta, "pypi", "flask").unwrap().is_none());
+        }
+
+        #[test]
+        fn test_list_files_reports_a_malformed_row() {
+            let (_dir, meta) = store();
+            let id = publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[file("flask-1.0.tar.gz", Some(&"a".repeat(64)))],
+            );
+            meta.put_driver_value(
+                &super::super::project_file_key("pypi", "flask", id, "flask-1.0.tar.gz"),
+                b"not a file record",
+            )
+            .unwrap();
+            assert!(list_project_files(&meta, "pypi", "flask").is_err());
+        }
+
+        #[test]
+        fn test_abort_removes_only_its_generation_rows() {
+            let (_dir, meta) = store();
+            let published = publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[file("flask-1.0.tar.gz", Some(&"a".repeat(64)))],
+            );
+            let (staging, _) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            put_project_files(
+                &meta,
+                "pypi",
+                "flask",
+                staging,
+                "pypi",
+                None,
+                &[file("flask-2.0.tar.gz", Some(&"b".repeat(64)))],
+            )
+            .unwrap();
+
+            abort_project_generation(&meta, "pypi", "flask", staging).unwrap();
+
+            let state = project_meta_state(&meta, "pypi", "flask").unwrap();
+            assert_eq!(state.active.unwrap().generation, published);
+            assert!(state.staging.is_none());
+            assert!(
+                meta.driver_prefix_keys(&project_generation_prefix("pypi", "flask", staging))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        #[test]
+        fn test_abort_leaves_a_newer_staging_reservation() {
+            let (_dir, meta) = store();
+            let (first, _) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            let (second, _) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            abort_project_generation(&meta, "pypi", "flask", first).unwrap();
+            assert_eq!(
+                project_meta_state(&meta, "pypi", "flask").unwrap().staging,
+                Some(second)
+            );
+        }
+
+        #[test]
+        fn test_refresh_merges_present_validators_and_advances_time() {
+            let (_dir, meta) = store();
+            let id = publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[file("flask-1.0.tar.gz", Some(&"a".repeat(64)))],
+            );
+            refresh_project_generation(&meta, "pypi", "flask", id, None, Some("mon".to_owned()), 99).unwrap();
+            assert!(refresh_project_generation(&meta, "pypi", "flask", id + 1, None, None, 100).is_err());
+            let active = active_project_generation(&meta, "pypi", "flask").unwrap().unwrap();
+            assert_eq!(active.etag.as_deref(), Some("etag"));
+            assert_eq!(active.last_modified.as_deref(), Some("mon"));
+            assert_eq!(active.fetched_at_unix, 99);
+        }
+
+        #[test]
+        fn test_recover_preserves_active_and_sweeps_pending_generations() {
+            let (_dir, meta) = store();
+            let active = publish(
+                &meta,
+                "pypi",
+                "flask",
+                &[file("flask-1.0.tar.gz", Some(&"a".repeat(64)))],
+            );
+            let (staging, _) = begin_project_generation(&meta, "pypi", "flask").unwrap();
+            put_project_files(
+                &meta,
+                "pypi",
+                "flask",
+                staging,
+                "pypi",
+                None,
+                &[file("flask-2.0.tar.gz", Some(&"b".repeat(64)))],
+            )
+            .unwrap();
+
+            recover_project_generations(&meta, "pypi", "flask").unwrap();
+
+            let state = project_meta_state(&meta, "pypi", "flask").unwrap();
+            assert_eq!(state.active.unwrap().generation, active);
+            assert!(state.staging.is_none());
+            assert!(state.retired.is_none());
+            assert!(
+                meta.driver_prefix_keys(&project_generation_prefix("pypi", "flask", staging))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 }

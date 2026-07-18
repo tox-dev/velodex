@@ -14,6 +14,7 @@ pub use file::{CoreMetadata, File, Provenance, Yanked};
 pub use meta::{API_VERSION, API_VERSION_BASE, Meta, ProjectStatus};
 pub use parse::absolutize;
 pub use parse::{
-    ParsedDetail, ProjectDetail, ProjectList, ProjectListEntry, parse_detail, parse_index, parse_meta, to_json,
+    DetailSink, ParsedDetail, ProjectDetail, ProjectList, ProjectListEntry, StreamedDetail, parse_detail, parse_index,
+    parse_meta, stream_detail_json, to_json,
 };
 pub use render::{render_detail_html, render_index_html};

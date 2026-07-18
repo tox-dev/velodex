@@ -23,7 +23,10 @@ mod resolve;
 
 pub(crate) use download::download_dimensions;
 pub use download::{FileOutcome, FileProbe, file_path, probe_file, stream_file};
-pub use fetch::{RefreshSummary, refresh_stale_pages};
+pub use fetch::{
+    MAX_PROJECT_BYTES, MAX_PROJECT_FILES, ProjectSyncError, ProjectSyncOutcome, RefreshSummary, refresh_stale_pages,
+    sync_project_files,
+};
 pub use metadata::{metadata_bytes, registered_file_size};
 pub use mutate::{
     TrashContext, download_status, project_status, project_upload_bytes, promote_release, remove_files, restore_files,
