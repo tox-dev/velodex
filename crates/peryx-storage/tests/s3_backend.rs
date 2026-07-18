@@ -350,32 +350,29 @@ async fn test_s3_read_operations_surface_a_server_error() {
     assert_eq!(storage.delete(&digest).await.unwrap_err().kind(), BlobErrorKind::Io);
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn test_s3_begin_surfaces_a_staging_failure() {
-    use std::os::unix::fs::PermissionsExt as _;
     let (server, _mock) = mounted().await;
-    let staging = tempfile::tempdir().unwrap();
+    // The staging path is a regular file, so creating the staging directory fails with a
+    // not-a-directory error that no user, root included, can bypass.
+    let root = tempfile::tempdir().unwrap();
+    let staging = root.path().join("staging");
+    std::fs::write(&staging, b"regular file, not a directory").unwrap();
     let config = S3Config::new(settings(server.uri())).unwrap();
-    let storage = BlobStorage::s3(config, credentials(), staging.path().to_path_buf());
-    std::fs::set_permissions(staging.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-    let error = storage.begin().await.map(|_| ()).unwrap_err();
-    std::fs::set_permissions(staging.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(error.kind(), BlobErrorKind::Io);
+    let storage = BlobStorage::s3(config, credentials(), staging);
+    assert_eq!(storage.begin().await.map(|_| ()).unwrap_err().kind(), BlobErrorKind::Io);
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn test_s3_commit_surfaces_an_unreadable_stage() {
-    use std::os::unix::fs::PermissionsExt as _;
+async fn test_s3_commit_surfaces_a_missing_stage() {
     let (server, _mock) = mounted().await;
-    let (storage, _staging) = storage(&server, |settings| settings.max_retries = 0);
-    let staged = storage.stage_bytes(b"unreadable").await.unwrap();
-    let path = staged.with_materialized(std::path::Path::to_path_buf);
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let error = staged.commit().await.unwrap_err();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(error.kind(), BlobErrorKind::Io);
+    let (storage, _staging) = storage(&server, |_| {});
+    let staged = storage.stage_bytes(b"vanishes").await.unwrap();
+    // Remove the local stage before commit reads it to upload. A missing file fails the read for any
+    // user, unlike a permission bit that root ignores, and there is no permission to restore that
+    // could race the stage's asynchronous drop.
+    std::fs::remove_file(staged.with_materialized(std::path::Path::to_path_buf)).unwrap();
+    assert_eq!(staged.commit().await.unwrap_err().kind(), BlobErrorKind::Io);
 }
 
 #[tokio::test]
