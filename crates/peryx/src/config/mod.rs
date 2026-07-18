@@ -17,15 +17,15 @@ pub use load::{from_env, from_file, from_toml};
 #[cfg(test)]
 pub(crate) use merge::classify_tls;
 pub use model::{
-    AcmeConfig, AuthConfig, BlobStorageConfig, Config, DEFAULT_REPLICA_PAGE_SIZE, DEFAULT_REPLICA_POLL_INTERVAL_SECS,
-    IndexConfig, IndexKind, JobsConfig, JobsMode, LogConfig, LogFormat, LogSink, PrefetchConfig, PrefetchMode,
-    ReplicationConfig, S3StorageConfig, SecretSource, TlsConfig, TokenConfig, TrustedPublisherConfig, UpstreamConfig,
-    UpstreamRoutingConfig, UpstreamTlsConfig, WebhookConfig, WebhookSecret,
+    AcmeConfig, AuthConfig, AvailabilityConfig, AvailabilityMode, BlobStorageConfig, Config, DEFAULT_REPLICA_PAGE_SIZE,
+    DEFAULT_REPLICA_POLL_INTERVAL_SECS, IndexConfig, IndexKind, JobsConfig, JobsMode, LogConfig, LogFormat, LogSink,
+    PrefetchConfig, PrefetchMode, ReplicationConfig, S3StorageConfig, SecretSource, TlsConfig, TokenConfig,
+    TrustedPublisherConfig, UpstreamConfig, UpstreamRoutingConfig, UpstreamTlsConfig, WebhookConfig, WebhookSecret,
 };
 pub use raw::{
     PartialAuthConfig, PartialConfig, PartialJobsConfig, PartialLogConfig, PartialRateLimitConfig, PartialRouteLimit,
-    RawAcme, RawBlobStorage, RawIndex, RawJobSchedule, RawPolicy, RawPrefetchConfig, RawReplication, RawTls, RawToken,
-    RawTrustedPublisher, RawUpstream, RawWebhook,
+    RawAcme, RawAvailability, RawBlobStorage, RawIndex, RawJobSchedule, RawPolicy, RawPrefetchConfig, RawReplication,
+    RawTls, RawToken, RawTrustedPublisher, RawUpstream, RawWebhook,
 };
 
 /// An error while assembling configuration.
@@ -47,6 +47,8 @@ pub enum ConfigError {
     Auth { reason: &'static str },
     #[error("trusted publisher {id}: {reason}")]
     TrustedPublisher { id: String, reason: &'static str },
+    #[error("availability: {reason}")]
+    Availability { reason: &'static str },
     #[error("replication: {reason}")]
     Replication { reason: &'static str },
     #[error("jobs schedule [{index}]: {reason}")]

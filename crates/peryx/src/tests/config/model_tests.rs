@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use peryx_driver::rate_limit::RateLimitConfig;
 
-use crate::config::{Config, IndexKind, LogConfig, ReplicationConfig, SecretSource};
+use crate::config::{AvailabilityConfig, Config, IndexKind, LogConfig, ReplicationConfig, SecretSource};
 
 #[test]
 fn test_secret_source_file_returns_trimmed_contents() {
@@ -113,12 +113,16 @@ fn test_config_rejects_a_blank_writer_identity() {
 fn test_config_requires_a_writer_identity_in_replica_mode(#[case] configured_replication: bool) {
     let config = Config {
         read_only: !configured_replication,
-        replication: configured_replication.then(|| ReplicationConfig::Replica {
-            upstream: "https://writer.example/".to_owned(),
-            token: SecretSource::Literal("secret".to_owned()),
-            poll_interval: std::time::Duration::from_secs(1),
-            page_size: std::num::NonZeroUsize::MIN,
-        }),
+        availability: if configured_replication {
+            AvailabilityConfig::Dc(ReplicationConfig::Replica {
+                upstream: "https://writer.example/".to_owned(),
+                token: SecretSource::Literal("secret".to_owned()),
+                poll_interval: std::time::Duration::from_secs(1),
+                page_size: std::num::NonZeroUsize::MIN,
+            })
+        } else {
+            AvailabilityConfig::None
+        },
         ..Config::default()
     };
 

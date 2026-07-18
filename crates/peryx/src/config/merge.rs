@@ -14,14 +14,15 @@ use std::collections::HashSet;
 
 use super::ConfigError;
 use super::model::{
-    AcmeConfig, AuthConfig, BlobStorageConfig, Config, DEFAULT_REPLICA_PAGE_SIZE, DEFAULT_REPLICA_POLL_INTERVAL_SECS,
-    IndexConfig, IndexKind, JobsConfig, LogConfig, ReplicationConfig, S3StorageConfig, SecretSource, TlsConfig,
-    TokenConfig, TrustedPublisherConfig, UpstreamConfig, UpstreamRoutingConfig, UpstreamTlsConfig, WebhookConfig,
-    WebhookSecret,
+    AcmeConfig, AuthConfig, AvailabilityConfig, AvailabilityMode, BlobStorageConfig, Config, DEFAULT_REPLICA_PAGE_SIZE,
+    DEFAULT_REPLICA_POLL_INTERVAL_SECS, IndexConfig, IndexKind, JobsConfig, LogConfig, ReplicationConfig,
+    S3StorageConfig, SecretSource, TlsConfig, TokenConfig, TrustedPublisherConfig, UpstreamConfig,
+    UpstreamRoutingConfig, UpstreamTlsConfig, WebhookConfig, WebhookSecret,
 };
 use super::raw::{
     PartialAuthConfig, PartialConfig, PartialJobsConfig, PartialLogConfig, PartialRateLimitConfig, PartialRouteLimit,
-    RawAcme, RawBlobStorage, RawIndex, RawJobSchedule, RawReplication, RawTls, RawToken, RawUpstream, RawWebhook,
+    RawAcme, RawAvailability, RawBlobStorage, RawIndex, RawJobSchedule, RawReplication, RawTls, RawToken, RawUpstream,
+    RawWebhook,
 };
 
 impl Config {
@@ -73,8 +74,8 @@ impl Config {
         self.log = self.log.apply(partial.log);
         self.rate_limit = apply_rate_limit(self.rate_limit, partial.rate_limit);
         self.auth = self.auth.apply(partial.auth)?;
-        if let Some(replication) = partial.replication {
-            self.replication = Some(classify_replication(replication)?);
+        if let Some(availability) = partial.availability {
+            self.availability = classify_availability(availability)?;
         }
         if let Some(blob) = partial.blob {
             self.blob = classify_blob(blob)?;
@@ -146,6 +147,22 @@ fn classify_blob(raw: RawBlobStorage) -> Result<BlobStorageConfig, ConfigError> 
         reason: error.to_string(),
     })?;
     Ok(BlobStorageConfig::S3(config))
+}
+
+/// Resolve the `[availability]` table into a mode and its topology. `none` carries no replication, so
+/// pairing it with a role is a configuration error; `dc` and `ha` require the role that carries them.
+fn classify_availability(raw: RawAvailability) -> Result<AvailabilityConfig, ConfigError> {
+    match (raw.mode.unwrap_or_default(), raw.replication) {
+        (AvailabilityMode::None, None) => Ok(AvailabilityConfig::None),
+        (AvailabilityMode::None, Some(_)) => Err(ConfigError::Availability {
+            reason: "`none` mode configures no replication; select `dc` or `ha` to add a role",
+        }),
+        (AvailabilityMode::Dc, Some(role)) => Ok(AvailabilityConfig::Dc(classify_replication(role)?)),
+        (AvailabilityMode::Ha, Some(role)) => Ok(AvailabilityConfig::Ha(classify_replication(role)?)),
+        (AvailabilityMode::Dc | AvailabilityMode::Ha, None) => Err(ConfigError::Availability {
+            reason: "`dc` and `ha` modes need a `[availability.replication]` role",
+        }),
+    }
 }
 
 fn classify_replication(raw: RawReplication) -> Result<ReplicationConfig, ConfigError> {

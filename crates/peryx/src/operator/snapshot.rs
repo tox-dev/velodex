@@ -14,9 +14,9 @@ use time::format_description::well_known::Rfc3339;
 use toml::{Table, Value};
 
 use crate::config::{
-    AcmeConfig, AuthConfig, BlobStorageConfig, Config, IndexConfig, IndexKind, JobsConfig, JobsMode, LogConfig,
-    LogFormat, LogSink, PrefetchConfig, PrefetchMode, ReplicationConfig, SecretSource, TlsConfig, TokenConfig,
-    WebhookConfig, WebhookSecret,
+    AcmeConfig, AuthConfig, AvailabilityConfig, BlobStorageConfig, Config, IndexConfig, IndexKind, JobsConfig,
+    JobsMode, LogConfig, LogFormat, LogSink, PrefetchConfig, PrefetchMode, ReplicationConfig, SecretSource, TlsConfig,
+    TokenConfig, WebhookConfig, WebhookSecret,
 };
 
 #[derive(Serialize)]
@@ -44,7 +44,7 @@ struct SnapshotConfig<'a> {
     rate_limit: SnapshotRateLimit<'a>,
     auth: SnapshotAuth<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    replication: Option<SnapshotReplication<'a>>,
+    availability: Option<SnapshotAvailability<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     jobs: Option<SnapshotJobs>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -290,6 +290,13 @@ struct SnapshotTrustedPublisher<'a> {
 }
 
 #[derive(Serialize)]
+struct SnapshotAvailability<'a> {
+    mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replication: Option<SnapshotReplication<'a>>,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 enum SnapshotReplication<'a> {
     Primary {
@@ -328,7 +335,7 @@ pub(super) fn config_snapshot(config: &Config) -> anyhow::Result<String> {
         log,
         rate_limit,
         auth,
-        replication,
+        availability,
         jobs,
         blob,
     } = config;
@@ -387,7 +394,7 @@ pub(super) fn config_snapshot(config: &Config) -> anyhow::Result<String> {
                 })
                 .collect(),
         },
-        replication: snapshot_replication(replication.as_ref()),
+        availability: snapshot_availability(availability),
         jobs: snapshot_jobs(jobs),
         blob: snapshot_blob(blob),
     };
@@ -438,32 +445,46 @@ fn snapshot_blob(blob: &BlobStorageConfig) -> Option<SnapshotBlob<'_>> {
     })
 }
 
-fn snapshot_replication(replication: Option<&ReplicationConfig>) -> Option<SnapshotReplication<'_>> {
+/// A snapshot carries the `[availability]` table only for a `dc` or `ha` node, so a single-node `none`
+/// backup omits it and restores to the same default. The nested `[availability.replication]` role
+/// round-trips the configured topology.
+fn snapshot_availability(availability: &AvailabilityConfig) -> Option<SnapshotAvailability<'_>> {
+    let (mode, replication) = match availability {
+        AvailabilityConfig::None => return None,
+        AvailabilityConfig::Dc(replication) => ("dc", replication),
+        AvailabilityConfig::Ha(replication) => ("ha", replication),
+    };
+    Some(SnapshotAvailability {
+        mode,
+        replication: Some(snapshot_replication(replication)),
+    })
+}
+
+fn snapshot_replication(replication: &ReplicationConfig) -> SnapshotReplication<'_> {
     match replication {
-        Some(ReplicationConfig::Primary { source, token }) => {
+        ReplicationConfig::Primary { source, token } => {
             let (token, token_file, _) = secret_parts(Some(token));
-            Some(SnapshotReplication::Primary {
+            SnapshotReplication::Primary {
                 source,
                 token,
                 token_file,
-            })
+            }
         }
-        Some(ReplicationConfig::Replica {
+        ReplicationConfig::Replica {
             upstream,
             token,
             poll_interval,
             page_size,
-        }) => {
+        } => {
             let (token, token_file, _) = secret_parts(Some(token));
-            Some(SnapshotReplication::Replica {
+            SnapshotReplication::Replica {
                 upstream,
                 token,
                 token_file,
                 poll_interval_secs: poll_interval.as_secs(),
                 page_size: page_size.get(),
-            })
+            }
         }
-        None => None,
     }
 }
 

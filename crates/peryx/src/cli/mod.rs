@@ -201,7 +201,7 @@ impl RuntimeArgs {
             },
             rate_limit: PartialRateLimitConfig::default(),
             auth: PartialAuthConfig::default(),
-            replication: None,
+            availability: None,
             jobs: PartialJobsConfig::default(),
             blob: None,
         }

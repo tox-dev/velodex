@@ -73,7 +73,10 @@ pub fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         .with_context(|| format!("create data directory {}", config.data_dir.display()))?;
     let meta_path = config.data_dir.join("peryx.redb");
     let meta = MetaStore::open(&meta_path).with_context(|| format!("open metadata store {}", meta_path.display()))?;
-    let configured_replica = matches!(config.replication, Some(ReplicationConfig::Replica { .. }));
+    let configured_replica = matches!(
+        config.availability.replication(),
+        Some(ReplicationConfig::Replica { .. })
+    );
     let read_only = config.read_only || configured_replica;
     if read_only {
         let active = meta.writer_identity().context("read metadata store writer identity")?;

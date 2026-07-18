@@ -15,8 +15,8 @@ use rstest::rstest;
 use tower::ServiceExt as _;
 
 use crate::config::{
-    Config, IndexKind, ReplicationConfig, SecretSource, TokenConfig, UpstreamConfig, UpstreamRoutingConfig,
-    WebhookConfig, WebhookSecret,
+    AvailabilityConfig, Config, IndexKind, ReplicationConfig, SecretSource, TokenConfig, UpstreamConfig,
+    UpstreamRoutingConfig, WebhookConfig, WebhookSecret,
 };
 use crate::replication::ReplicationRuntime;
 use crate::server::{build_router, build_state, router_for};
@@ -60,7 +60,7 @@ fn config(dir: &tempfile::TempDir, replication: Option<ReplicationConfig>) -> Co
     Config {
         data_dir: dir.path().to_path_buf(),
         writer_identity: replica.then(|| WRITER_IDENTITY.to_owned()),
-        replication,
+        availability: replication.map_or(AvailabilityConfig::None, AvailabilityConfig::Dc),
         ..Config::default()
     }
 }

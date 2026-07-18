@@ -49,7 +49,7 @@ pub struct Config {
     pub log: LogConfig,
     pub rate_limit: RateLimitConfig,
     pub auth: AuthConfig,
-    pub replication: Option<ReplicationConfig>,
+    pub availability: AvailabilityConfig,
     pub jobs: JobsConfig,
     /// Where blobs are stored: the local filesystem (default) or an S3-compatible object store.
     pub blob: BlobStorageConfig,
@@ -132,6 +132,54 @@ pub enum JobsMode {
 pub const DEFAULT_REPLICA_PAGE_SIZE: usize = 100;
 pub const DEFAULT_REPLICA_POLL_INTERVAL_SECS: u64 = 1;
 
+/// The runtime availability contract a node promises for authoritative mutations.
+///
+/// The `[availability]` table's `mode` chooses one; each fixes what an acknowledgement guarantees is
+/// durable, as the [availability contracts](@/core/availability-contracts.md) page states normatively.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AvailabilityMode {
+    /// Single writer, local durability, operator-driven failover: the zero-config default.
+    #[default]
+    None,
+    /// A configured writer and explicit read replicas within one datacenter.
+    Dc,
+    /// Metadata durability in a remote datacenter.
+    Ha,
+}
+
+/// The resolved `[availability]` table: the selected mode and its topology.
+///
+/// `dc` and `ha` carry the replication role that fulfills them; `none` holds nothing, so a single-node
+/// process allocates no availability state beyond this enum's discriminant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AvailabilityConfig {
+    None,
+    Dc(ReplicationConfig),
+    Ha(ReplicationConfig),
+}
+
+impl AvailabilityConfig {
+    /// The selected mode, independent of any topology a stronger mode carries.
+    #[must_use]
+    pub const fn mode(&self) -> AvailabilityMode {
+        match self {
+            Self::None => AvailabilityMode::None,
+            Self::Dc(_) => AvailabilityMode::Dc,
+            Self::Ha(_) => AvailabilityMode::Ha,
+        }
+    }
+
+    /// The replication role a `dc` or `ha` node drives, or `None` under single-node `none`.
+    #[must_use]
+    pub const fn replication(&self) -> Option<&ReplicationConfig> {
+        match self {
+            Self::None => None,
+            Self::Dc(replication) | Self::Ha(replication) => Some(replication),
+        }
+    }
+}
+
 /// The process role for replication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplicationConfig {
@@ -185,7 +233,9 @@ impl Config {
             Some(identity) if identity.trim().is_empty() => Err(ConfigError::WriterIdentity {
                 reason: "must not be blank",
             }),
-            None if self.read_only || matches!(self.replication, Some(ReplicationConfig::Replica { .. })) => {
+            None if self.read_only
+                || matches!(self.availability.replication(), Some(ReplicationConfig::Replica { .. })) =>
+            {
                 Err(ConfigError::WriterIdentity {
                     reason: "required in read replica mode",
                 })
@@ -525,7 +575,7 @@ impl Default for Config {
             log: LogConfig::default(),
             rate_limit: RateLimitConfig::default(),
             auth: AuthConfig::default(),
-            replication: None,
+            availability: AvailabilityConfig::None,
             jobs: JobsConfig::default(),
             blob: BlobStorageConfig::Filesystem,
         }

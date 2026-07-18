@@ -11,7 +11,7 @@ use toml::Table;
 
 use peryx_driver::jobs::ScheduledJob;
 
-use super::model::{JobsMode, LogFormat, LogSink, PrefetchConfig, PrefetchMode};
+use super::model::{AvailabilityMode, JobsMode, LogFormat, LogSink, PrefetchConfig, PrefetchMode};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -75,7 +75,9 @@ pub struct PartialConfig {
     pub log: PartialLogConfig,
     pub rate_limit: PartialRateLimitConfig,
     pub auth: PartialAuthConfig,
-    pub replication: Option<RawReplication>,
+    /// The `[availability]` table: the runtime availability mode and the replication topology a
+    /// stronger mode carries. Absent, like `mode = "none"`, selects single-node operation.
+    pub availability: Option<RawAvailability>,
     pub jobs: PartialJobsConfig,
     /// A `[blob]` table selecting the blob storage backend.
     pub blob: Option<RawBlobStorage>,
@@ -99,6 +101,17 @@ pub enum RawBlobStorage {
         part_size_bytes: Option<u64>,
         upload_concurrency: Option<usize>,
     },
+}
+
+/// The raw `[availability]` table: the mode selector and its replication role.
+///
+/// A `dc` or `ha` node carries a role; an omitted table, and an explicit `mode = "none"`, both resolve
+/// to single-node operation with no replication.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawAvailability {
+    pub mode: Option<AvailabilityMode>,
+    pub replication: Option<RawReplication>,
 }
 
 /// The `[jobs]` half of [`PartialConfig`].

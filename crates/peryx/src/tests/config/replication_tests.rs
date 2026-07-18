@@ -5,17 +5,18 @@ use std::time::Duration;
 use rstest::rstest;
 
 use super::toml_config;
-use crate::config::{self, Config, ReplicationConfig, SecretSource};
+use crate::config::{self, AvailabilityConfig, Config, ReplicationConfig, SecretSource};
 
 #[test]
-fn test_primary_replication_from_toml() {
+fn test_dc_primary_replication_from_toml() {
     let config = toml_config(
-        "[replication]\nrole = \"primary\"\nsource = \"primary-a\"\ntoken_file = \"/run/secrets/replica\"\n",
+        "[availability]\nmode = \"dc\"\n[availability.replication]\nrole = \"primary\"\nsource = \"primary-a\"\n\
+         token_file = \"/run/secrets/replica\"\n",
     );
 
     assert_eq!(
-        config.replication,
-        Some(ReplicationConfig::Primary {
+        config.availability,
+        AvailabilityConfig::Dc(ReplicationConfig::Primary {
             source: "primary-a".to_owned(),
             token: SecretSource::File(PathBuf::from("/run/secrets/replica")),
         })
@@ -23,13 +24,15 @@ fn test_primary_replication_from_toml() {
 }
 
 #[test]
-fn test_replica_replication_from_toml_uses_defaults() {
-    let config =
-        toml_config("[replication]\nrole = \"replica\"\nupstream = \"https://primary.example/\"\ntoken = \"secret\"\n");
+fn test_ha_replica_replication_from_toml_uses_defaults() {
+    let config = toml_config(
+        "[availability]\nmode = \"ha\"\n[availability.replication]\nrole = \"replica\"\n\
+         upstream = \"https://primary.example/\"\ntoken = \"secret\"\n",
+    );
 
     assert_eq!(
-        config.replication,
-        Some(ReplicationConfig::Replica {
+        config.availability,
+        AvailabilityConfig::Ha(ReplicationConfig::Replica {
             upstream: "https://primary.example/".to_owned(),
             token: SecretSource::Literal("secret".to_owned()),
             poll_interval: Duration::from_secs(1),
@@ -41,17 +44,17 @@ fn test_replica_replication_from_toml_uses_defaults() {
 #[test]
 fn test_replica_replication_from_toml_accepts_runtime_bounds() {
     let config = toml_config(
-        "[replication]\nrole = \"replica\"\nupstream = \"https://primary.example/\"\ntoken = \"secret\"\n\
-         poll_interval_secs = 30\npage_size = 250\n",
+        "[availability]\nmode = \"dc\"\n[availability.replication]\nrole = \"replica\"\n\
+         upstream = \"https://primary.example/\"\ntoken = \"secret\"\npoll_interval_secs = 30\npage_size = 250\n",
     );
 
-    let Some(ReplicationConfig::Replica {
+    let AvailabilityConfig::Dc(ReplicationConfig::Replica {
         poll_interval,
         page_size,
         ..
-    }) = config.replication
+    }) = config.availability
     else {
-        panic!("expected replica configuration");
+        panic!("expected a dc replica configuration");
     };
     assert_eq!(poll_interval, Duration::from_secs(30));
     assert_eq!(page_size, NonZeroUsize::new(250).unwrap());
@@ -81,8 +84,9 @@ fn test_replica_replication_from_toml_accepts_runtime_bounds() {
     "role = \"replica\"\nupstream = \"https://primary.example\"\ntoken = \"secret\"\npage_size = 1001",
     "exceeds the primary limit"
 )]
-fn test_replication_rejects_invalid_configuration(#[case] body: &str, #[case] expected: &str) {
-    let partial = config::from_toml(PathBuf::from("x.toml"), &format!("[replication]\n{body}\n")).unwrap();
+fn test_replication_rejects_invalid_configuration(#[case] role: &str, #[case] expected: &str) {
+    let text = format!("[availability]\nmode = \"dc\"\n[availability.replication]\n{role}\n");
+    let partial = config::from_toml(PathBuf::from("x.toml"), &text).unwrap();
 
     let error = Config::default().apply(partial).unwrap_err();
 

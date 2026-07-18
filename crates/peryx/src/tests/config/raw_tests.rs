@@ -114,9 +114,10 @@ max_file_size_bytes = 1048576\nmax_project_size_bytes = 10485760\n";
 )]
 #[case::unknown_log_key("x.toml", "[log]\nbogus = 1\n", None)]
 #[case::unknown_rate_limit_key("x.toml", "[rate_limit]\nbogus = 1\n", None)]
+#[case::unknown_availability_key("x.toml", "[availability]\nmode = \"none\"\nbogus = 1\n", None)]
 #[case::unknown_replication_key(
     "x.toml",
-    "[replication]\nrole = \"primary\"\nsource = \"a\"\ntoken = \"b\"\nbogus = 1\n",
+    "[availability]\nmode = \"dc\"\n[availability.replication]\nrole = \"primary\"\nsource = \"a\"\ntoken = \"b\"\nbogus = 1\n",
     None
 )]
 #[case::invalid_trusted_proxy("x.toml", "[rate_limit]\ntrusted_proxies = [\"invalid\"]\n", Some("trusted_proxies"))]

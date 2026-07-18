@@ -58,15 +58,15 @@ fn test_backup_create_rejects_tampered_source_blob() {
 }
 
 #[rstest]
-#[case::manual_primary(
+#[case::dc_primary(
     "[tls]\ncert = \"/etc/peryx/tls.crt\"\nkey = \"/etc/peryx/tls.key\"",
-    "[replication]\nrole = \"primary\"\nsource = \"primary-a\"\ntoken = \"replication-token\""
+    "[availability]\nmode = \"dc\"\n[availability.replication]\nrole = \"primary\"\nsource = \"primary-a\"\ntoken = \"replication-token\""
 )]
-#[case::acme_replica(
+#[case::ha_replica(
     "[acme]\ndomains = [\"packages.example.com\"]\ncontact = \"ops@example.com\"\ncache-dir = \"/var/cache/peryx/acme\"\nstaging = true",
-    "[replication]\nrole = \"replica\"\nupstream = \"https://primary.example/\"\ntoken_file = \"/run/secrets/replication-token\"\npoll_interval_secs = 30\npage_size = 250"
+    "[availability]\nmode = \"ha\"\n[availability.replication]\nrole = \"replica\"\nupstream = \"https://primary.example/\"\ntoken_file = \"/run/secrets/replication-token\"\npoll_interval_secs = 30\npage_size = 250"
 )]
-fn test_backup_config_round_trips_effective_settings(#[case] tls: &str, #[case] replication: &str) {
+fn test_backup_config_round_trips_effective_settings(#[case] tls: &str, #[case] availability: &str) {
     let root = tempfile::tempdir().unwrap();
     let data_dir = root.path().join("data");
     std::fs::create_dir(&data_dir).unwrap();
@@ -85,7 +85,7 @@ max_stale_secs = 321
 
 {tls}
 
-{replication}
+{availability}
 
 [log]
 level = "peryx=debug"

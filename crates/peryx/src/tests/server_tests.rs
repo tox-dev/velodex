@@ -19,8 +19,9 @@ use peryx_ecosystem_oci::LibraryPrefix;
 use peryx_storage::blob::S3Credentials;
 
 use crate::config::{
-    AuthConfig, BlobStorageConfig, Config, IndexConfig, IndexKind, ReplicationConfig, S3StorageConfig, SecretSource,
-    TrustedPublisherConfig, UpstreamConfig, UpstreamRoutingConfig, WebhookConfig, WebhookSecret,
+    AuthConfig, AvailabilityConfig, BlobStorageConfig, Config, IndexConfig, IndexKind, ReplicationConfig,
+    S3StorageConfig, SecretSource, TrustedPublisherConfig, UpstreamConfig, UpstreamRoutingConfig, WebhookConfig,
+    WebhookSecret,
 };
 use crate::server::{
     build_blob_storage, build_index_settings, build_indexes, build_router, build_state, upstream_auth,
@@ -163,12 +164,16 @@ fn write_netrc(path: &Path, contents: &str) {
     }
 }
 
-fn replication_replica() -> ReplicationConfig {
-    ReplicationConfig::Replica {
-        upstream: "https://writer.example/".to_owned(),
-        token: SecretSource::Literal("secret".to_owned()),
-        poll_interval: Duration::from_secs(1),
-        page_size: NonZeroUsize::MIN,
+fn availability_replica(configured: bool) -> AvailabilityConfig {
+    if configured {
+        AvailabilityConfig::Dc(ReplicationConfig::Replica {
+            upstream: "https://writer.example/".to_owned(),
+            token: SecretSource::Literal("secret".to_owned()),
+            poll_interval: Duration::from_secs(1),
+            page_size: NonZeroUsize::MIN,
+        })
+    } else {
+        AvailabilityConfig::None
     }
 }
 
@@ -731,7 +736,7 @@ fn test_build_state_rejects_a_replica_without_writer_identity(#[case] configured
     let config = Config {
         data_dir: dir.path().to_path_buf(),
         read_only: !configured_replication,
-        replication: configured_replication.then(replication_replica),
+        availability: availability_replica(configured_replication),
         ..Config::default()
     };
 
@@ -757,7 +762,7 @@ fn test_build_state_replica_does_not_claim_writer_identity(#[case] configured_re
         data_dir: dir.path().to_path_buf(),
         writer_identity: Some("writer-a".to_owned()),
         read_only: !configured_replication,
-        replication: configured_replication.then(replication_replica),
+        availability: availability_replica(configured_replication),
         ..Config::default()
     })
     .unwrap();
@@ -782,7 +787,7 @@ fn test_build_state_rejects_a_replica_with_an_unmatched_writer(
         data_dir: dir.path().to_path_buf(),
         writer_identity: Some("writer-a".to_owned()),
         read_only: !configured_replication,
-        replication: configured_replication.then(replication_replica),
+        availability: availability_replica(configured_replication),
         ..Config::default()
     };
 

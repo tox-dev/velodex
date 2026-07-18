@@ -220,7 +220,7 @@ impl ReplicationRuntime {
     /// Returns an error if a secret cannot be read, the upstream URL is invalid, or the primary
     /// router rejects its identity or token.
     pub fn new(config: &Config, state: &Arc<AppState>) -> anyhow::Result<Self> {
-        let (primary, replica) = match &config.replication {
+        let (primary, replica) = match config.availability.replication() {
             None => (None, None),
             Some(ReplicationConfig::Primary { source, token }) => {
                 let token = token.read().context("read the primary replication token")?;

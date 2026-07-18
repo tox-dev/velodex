@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::config::{self, Config, PartialConfig};
 
 mod auth_tests;
+mod availability_tests;
 mod blob_tests;
 mod integration_tests;
 mod jobs_tests;

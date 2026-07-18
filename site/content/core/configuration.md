@@ -26,11 +26,13 @@ or `PERYX_*` environment variables, which override the file. Precedence is `defa
 | Indexes                   | (file only)         | (n/a)                        | `[[index]]`            | (see below)  |
 | Rate limits               | (file only)         | (n/a)                        | `[rate_limit]`         | (see below)  |
 | Background jobs           | (file only)         | (n/a)                        | `[jobs]`               | (see below)  |
+| Availability mode         | (file only)         | (n/a)                        | `[availability]`       | `none`       |
 
 Environment variables sit between the file and flags: a `PERYX_*` value overrides the TOML file, and a flag overrides
-the variable. Only scalar settings are environment-configurable. The `[[index]]` topology and `[rate_limit]` block stay
-file-only, since neither maps to a flat variable. An empty variable is treated as unset. The `[log]` block also reads
-variables (`PERYX_LOG_LEVEL`, `PERYX_LOG_FORMAT`, `PERYX_LOG_SINK`, `PERYX_LOG_FILE`); see [`[log]`](#log).
+the variable. Only scalar settings are environment-configurable. The `[[index]]` topology, `[rate_limit]` block, and
+`[availability]` table stay file-only, since none maps to a flat variable. An empty variable is treated as unset. The
+`[log]` block also reads variables (`PERYX_LOG_LEVEL`, `PERYX_LOG_FORMAT`, `PERYX_LOG_SINK`, `PERYX_LOG_FILE`); see
+[`[log]`](#log).
 
 `cache_ttl_secs` is both a fallback and a ceiling. When an upstream response carries a usable `Cache-Control` lifetime
 (`s-maxage` or `max-age`) that is **shorter**, that lifetime governs the page; a longer one is clamped to
@@ -682,6 +684,57 @@ Because the object write commits the blob before its metadata row is written, a 
 object — harmless and overwritten byte-for-byte by any later write of the same content. `peryx backup` snapshots the
 `[blob]` selection (never the credentials) so a restore points at the same bucket; the objects themselves are not copied
 into the archive. Bucket-level versioning or replication, if you need it, is configured on the object store, not here.
+
+## `[availability]`
+
+The `[availability]` table picks the runtime availability contract this node promises for authoritative mutations. Its
+`mode` selects one of `none`, `dc`, or `ha`, whose acknowledgement guarantees the
+[availability contracts](@/core/availability-contracts.md) fix. An omitted table, and an explicit `mode = "none"`,
+resolve to the same single-node configuration, so a zero-config deployment carries no availability state at all.
+
+```toml
+[availability]
+mode = "none"
+```
+
+`none` is one writer with local durability and operator-driven [failover](@/core/high-availability.md): peryx opens no
+replication client, route, or task. `dc` and `ha` name the stronger promises later work fulfills; each needs a
+`[availability.replication]` role that carries it, so peryx rejects a `dc` or `ha` mode with no role, and rejects a
+`[availability.replication]` role under `none`, naming the `availability` field. Selecting `dc` or `ha` replaces the
+former top-level `[replication]` table, which no longer parses.
+
+```toml
+[availability]
+mode = "dc"
+
+[availability.replication]
+role = "primary"
+source = "writer-a"
+token_file = "/run/secrets/replication-token"
+```
+
+| Key    | Meaning               | Default |
+| ------ | --------------------- | ------- |
+| `mode` | `none`, `dc`, or `ha` | `none`  |
+
+The nested `[availability.replication]` table declares this node's replication role. `role = "primary"` serves the
+replication journal other nodes copy; `role = "replica"` follows a primary and, like `read_only`, refuses client
+mutations. peryx rejects an unknown key in either table, naming the offending field.
+
+| Key                  | Role    | Meaning                                                         | Default    |
+| -------------------- | ------- | --------------------------------------------------------------- | ---------- |
+| `role`               | both    | `primary` or `replica`                                          | (required) |
+| `source`             | primary | This writer's stable name in the replication journal            | (required) |
+| `upstream`           | replica | URL of the primary this replica follows                         | (required) |
+| `token`              | both    | Shared replication credential, inline                           | (none)     |
+| `token_file`         | both    | Path to read `token` from instead of inlining it                | (none)     |
+| `poll_interval_secs` | replica | Seconds between change-journal polls, must be positive          | `1`        |
+| `page_size`          | replica | Changes fetched per poll, positive and within the primary limit | `100`      |
+
+A role needs exactly one of `token` or `token_file`; setting both, or neither, is rejected. Keep the credential out of
+the config file with `token_file`, the path to a mounted Docker or Kubernetes secret or a systemd credential, which
+peryx reads at startup and never logs. A configuration snapshot (`peryx backup`) preserves a `token_file` as its path
+and never resolves the secret behind it into the manifest.
 
 ## `[auth]`
 
