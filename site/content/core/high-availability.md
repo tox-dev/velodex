@@ -7,6 +7,10 @@ weight = 7
 peryx supports one writer with multiple read replicas. Send mutation traffic to the writer. Replicas serve data copied
 from the writer and reject mutation requests with `503 Service Unavailable`.
 
+This page operates the `none` [availability contract](@/core/availability-contracts.md): peryx provides local durability
+and leaves copying and failover to you. That contract also defines the `dc` and `ha` modes later work adds, and the
+normative meaning of every acknowledgement below.
+
 Give every writer a distinct, stable identity:
 
 ```toml

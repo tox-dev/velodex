@@ -259,6 +259,8 @@ way.
 
 - **Local state, manual failover.** One writer may serve with read replicas, but an external system must copy the data
   and operators perform [promotion](@/core/high-availability.md). peryx does not provide replication or leader election.
+  This is the `none` [availability contract](@/core/availability-contracts.md); `dc` and `ha` name the stronger
+  durability promises later modes will offer.
 - **The first request for anything pays upstream latency.** Streaming removes the buffering penalty, not the network. A
   cold cache behaves like pypi.org plus one hop until it has seen your working set once.
 - **redb has one writer.** Fine for an index server (reads dominate by orders of magnitude), wrong for a write-heavy
