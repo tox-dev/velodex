@@ -1,5 +1,6 @@
 mod acl_tests;
 mod basic_tests;
+mod password_tests;
 mod token_tests;
 mod trusted_publisher_tests;
 mod user_tests;

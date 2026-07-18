@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 
-use peryx_identity::{ServerUser, UserId, UserLifecycleChange, UserName, UserState};
+use peryx_identity::{PasswordCheck, PasswordPolicy, ServerUser, UserId, UserLifecycleChange, UserName, UserState};
 use redb::TableDefinition;
 
 use super::store;
@@ -193,6 +193,55 @@ fn test_user_operations_reject_empty_names_and_unknown_ids() {
         store.set_user_state(&missing, UserState::Disabled),
         Err(UserStoreError::NotFound { id }) if id == missing
     ));
+    let verifier = PasswordPolicy::new(8, 1, 1).unwrap().hash("s3cret").unwrap();
+    assert!(matches!(
+        store.set_user_password(&missing, &verifier),
+        Err(UserStoreError::NotFound { id }) if id == missing
+    ));
+    assert!(matches!(
+        store.clear_user_password(&missing),
+        Err(UserStoreError::NotFound { id }) if id == missing
+    ));
+}
+
+#[test]
+fn test_user_password_round_trips_and_clears() {
+    let (dir, store) = store();
+    let policy = PasswordPolicy::new(8, 1, 1).unwrap();
+    let user = store.create_user("Alice").unwrap();
+    assert_eq!(store.get_user_password(&user.id).unwrap(), None);
+
+    store
+        .set_user_password(&user.id, &policy.hash("first").unwrap())
+        .unwrap();
+    store
+        .set_user_password(&user.id, &policy.hash("second").unwrap())
+        .unwrap();
+    drop(store);
+
+    let reopened = MetaStore::open_existing(dir.path().join("peryx.redb")).unwrap();
+    let stored = reopened.get_user_password(&user.id).unwrap().unwrap();
+    assert_eq!(
+        stored.check("second", &policy),
+        PasswordCheck::Accepted { stale: false }
+    );
+    assert_eq!(stored.check("first", &policy), PasswordCheck::Rejected);
+
+    reopened.clear_user_password(&user.id).unwrap();
+    assert_eq!(reopened.get_user_password(&user.id).unwrap(), None);
+}
+
+#[test]
+fn test_get_user_password_reports_an_incompatible_verifier_table() {
+    let (_dir, store) = raw_store(|txn| {
+        txn.open_table(TableDefinition::<&str, u64>::new("server_user_verifier"))
+            .unwrap();
+    });
+
+    assert!(matches!(
+        store.get_user_password(&UserId::random()),
+        Err(MetaError::Table(_))
+    ));
 }
 
 #[test]
@@ -276,6 +325,7 @@ fn test_user_reads_treat_missing_old_tables_as_empty() {
     assert_eq!(store.get_user(&id).unwrap(), None);
     assert_eq!(store.get_user_by_name("Alice").unwrap(), None);
     assert_eq!(store.user_events(&id).unwrap(), Vec::new());
+    assert_eq!(store.get_user_password(&id).unwrap(), None);
     assert_eq!(store.create_user("Alice").unwrap().state, UserState::Active);
 }
 

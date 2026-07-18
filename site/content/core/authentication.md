@@ -156,8 +156,39 @@ Opening an existing metadata store creates the user tables in one metadata trans
 cached package records, and access policy remain in their current tables. If table initialization fails, the transaction
 does not leave a partial user schema, and the prior metadata remains available to the existing recovery procedure.
 
-Server users do not yet authenticate package requests. Existing `upload_token` and `[[index.access_token]]` credentials
-keep their current subjects and behavior when a server user is renamed or disabled.
+Server users do not yet authorize package requests: mapping an authenticated user to grants waits on the role model.
+Existing `upload_token` and `[[index.access_token]]` credentials keep their current subjects and behavior when a server
+user is renamed or disabled.
+
+## Local password authentication
+
+A server user may hold a local password. Enrollment derives a memory-hard verifier and discards the password, so the
+plaintext is never written; only the verifier is stored, beside the account and keyed by its stable ID.
+
+Verifiers are Argon2id, the algorithm [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106) standardizes, with the
+[OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) baseline
+parameters by default: 19 MiB of memory, two iterations, and a single lane over a random 128-bit salt. Each verifier
+records the salt and parameters it was made with, so raising the policy does not invalidate the verifiers already
+stored.
+
+Authentication takes a display name and a password and returns the stable user ID on success. An unknown name, a
+disabled account, an account with no password, and a wrong password all fail the same way: the same result and the same
+cost. A login without a stored verifier still spends one derivation against a decoy, so a caller cannot tell an absent
+account from a wrong password by watching how long the answer takes. An identity-store read that itself fails denies the
+login rather than falling through to success.
+
+A successful login whose verifier no longer matches the current policy re-enrolls it under the same user ID before
+returning, so tightening the parameters upgrades verifiers as their owners sign in. A re-enrollment that cannot be
+stored does not deny the login that already succeeded.
+
+Derivation is memory-hard on purpose, so every hash and every check runs on the blocking pool rather than a request
+worker, and a semaphore caps how many run at once. A burst of logins therefore bounds its own memory and cannot starve
+the threads that serve packages.
+
+Passwords and verifiers are secrets end to end: neither appears in logs, errors, diagnostics, or any serialized account
+view, and a verifier's debug rendering is redacted. Enrolling again replaces the verifier; clearing it removes password
+authentication entirely. Clearing and then enrolling a new password is the recovery path when a local password is lost —
+this release adds no self-service reset, password-reset email, or browser session.
 
 ## What this does not do
 

@@ -1,11 +1,25 @@
-use peryx_identity::{IndexAcl, Principal, UserLifecycleChange, UserState};
+use peryx_identity::{
+    IndexAcl, PasswordCheck, PasswordError, PasswordPolicy, Principal, UserId, UserLifecycleChange, UserState,
+};
+use peryx_storage::meta::MetaStore;
 
-use crate::users::UserService;
+use crate::users::{EnrollError, UserService};
 
 fn service() -> (tempfile::TempDir, UserService) {
     let dir = tempfile::tempdir().unwrap();
-    let store = peryx_storage::meta::MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+    let store = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
     (dir, UserService::new(store))
+}
+
+fn cheap_policy() -> PasswordPolicy {
+    PasswordPolicy::new(8, 1, 1).unwrap()
+}
+
+fn cheap_service() -> (tempfile::TempDir, MetaStore, UserService) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MetaStore::open(dir.path().join("peryx.redb")).unwrap();
+    let service = UserService::with_password_settings(store.clone(), cheap_policy(), 2);
+    (dir, store, service)
 }
 
 #[test]
@@ -48,4 +62,127 @@ fn test_user_disable_does_not_change_legacy_upload_token_identity() {
         }
     );
     assert_eq!(acl.identify(Some("Basic YWxpY2U6czNjcmV0"), 0).principal, before);
+}
+
+#[tokio::test]
+async fn test_authenticate_accepts_the_password_and_rejects_a_wrong_one() {
+    let (_dir, _store, service) = cheap_service();
+    let user = service.create("Alice").unwrap();
+    service.set_password(&user.id, "correct horse").await.unwrap();
+
+    assert_eq!(
+        service.authenticate("Alice", "correct horse").await.unwrap(),
+        Some(user.id)
+    );
+    assert_eq!(service.authenticate("alice", "battery staple").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn test_authenticate_fails_the_same_way_for_unknown_disabled_and_passwordless() {
+    let (_dir, _store, service) = cheap_service();
+    service.create("Passwordless").unwrap();
+    let disabled = service.create("Disabled").unwrap();
+    service.set_password(&disabled.id, "correct horse").await.unwrap();
+    service.disable(&disabled.id).unwrap();
+
+    assert_eq!(service.authenticate("Unknown", "correct horse").await.unwrap(), None);
+    assert_eq!(
+        service.authenticate("Passwordless", "correct horse").await.unwrap(),
+        None
+    );
+    assert_eq!(service.authenticate("Disabled", "correct horse").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn test_authenticate_rejects_an_empty_display_name() {
+    let (_dir, _store, service) = cheap_service();
+
+    assert_eq!(service.authenticate("   ", "correct horse").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn test_authenticate_upgrades_a_stale_verifier_under_the_same_id() {
+    let (_dir, store, weak) = cheap_service();
+    let user = weak.create("Alice").unwrap();
+    weak.set_password(&user.id, "correct horse").await.unwrap();
+    let tighter = PasswordPolicy::new(16, 2, 1).unwrap();
+    let strong = UserService::with_password_settings(store.clone(), tighter, 2);
+    let stored = store.get_user_password(&user.id).unwrap().unwrap();
+    assert_eq!(
+        stored.check("correct horse", &tighter),
+        PasswordCheck::Accepted { stale: true }
+    );
+
+    assert_eq!(
+        strong.authenticate("Alice", "correct horse").await.unwrap(),
+        Some(user.id.clone())
+    );
+
+    let upgraded = store.get_user_password(&user.id).unwrap().unwrap();
+    assert_eq!(
+        upgraded.check("correct horse", &tighter),
+        PasswordCheck::Accepted { stale: false }
+    );
+}
+
+#[tokio::test]
+async fn test_authenticate_denies_the_login_when_the_identity_lookup_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("peryx.redb");
+    let database = redb::Database::create(&path).unwrap();
+    let txn = database.begin_write().unwrap();
+    txn.open_table(redb::TableDefinition::<&str, u64>::new("server_user_name"))
+        .unwrap();
+    txn.commit().unwrap();
+    drop(database);
+    let service = UserService::with_password_settings(MetaStore::open_existing(path).unwrap(), cheap_policy(), 2);
+
+    assert!(service.authenticate("Alice", "correct horse").await.is_err());
+}
+
+#[tokio::test]
+async fn test_clear_password_stops_password_authentication() {
+    let (_dir, _store, service) = cheap_service();
+    let user = service.create("Alice").unwrap();
+    service.set_password(&user.id, "correct horse").await.unwrap();
+
+    service.clear_password(&user.id).unwrap();
+
+    assert_eq!(service.authenticate("Alice", "correct horse").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn test_set_password_reports_an_unknown_user() {
+    let (_dir, _store, service) = cheap_service();
+    let missing = UserId::random();
+
+    let error = service.set_password(&missing, "correct horse").await.unwrap_err();
+
+    assert!(matches!(error, EnrollError::Store(_)));
+    assert!(matches!(EnrollError::from(PasswordError::Params), EnrollError::Hash(_)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_password_checks_do_not_exhaust_request_workers() {
+    let (_dir, _store, service) = cheap_service();
+    let user = service.create("Alice").unwrap();
+    service.set_password(&user.id, "correct horse").await.unwrap();
+
+    let logins = (0..16).map(|_| {
+        let service = service.clone();
+        let id = user.id.clone();
+        async move { assert_eq!(service.authenticate("Alice", "correct horse").await.unwrap(), Some(id)) }
+    });
+    let requests = (0..16).map(|seq| async move {
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        seq
+    });
+    let (_, served) = tokio::join!(
+        futures_util::future::join_all(logins),
+        futures_util::future::join_all(requests),
+    );
+
+    assert_eq!(served.into_iter().sum::<usize>(), (0..16).sum::<usize>());
 }

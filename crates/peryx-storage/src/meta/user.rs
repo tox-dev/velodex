@@ -1,7 +1,9 @@
-use peryx_identity::{ServerUser, UserId, UserLifecycleChange, UserLifecycleEvent, UserName, UserNameError, UserState};
+use peryx_identity::{
+    PasswordVerifier, ServerUser, UserId, UserLifecycleChange, UserLifecycleEvent, UserName, UserNameError, UserState,
+};
 use redb::{ReadableDatabase as _, ReadableTable as _, WriteTransaction};
 
-use super::{MetaError, MetaStore, USER, USER_EVENT, USER_NAME};
+use super::{MetaError, MetaStore, USER, USER_EVENT, USER_NAME, USER_VERIFIER};
 
 /// A rejected server-user operation.
 #[derive(Debug, thiserror::Error)]
@@ -189,6 +191,60 @@ impl MetaStore {
         )?;
         txn.commit().map_err(MetaError::from)?;
         Ok(user)
+    }
+
+    /// Store or replace a user's password verifier, discarding any prior one.
+    ///
+    /// # Errors
+    /// Returns [`UserStoreError::NotFound`] for an unknown ID or a store error when the transaction
+    /// cannot commit.
+    pub fn set_user_password(&self, id: &UserId, verifier: &PasswordVerifier) -> Result<(), UserStoreError> {
+        let txn = self.db.begin_write().map_err(MetaError::from)?;
+        if read_user(&txn, id)?.is_none() {
+            return Err(UserStoreError::NotFound { id: id.clone() });
+        }
+        let bytes = serde_json::to_vec(verifier).map_err(MetaError::from)?;
+        txn.open_table(USER_VERIFIER)
+            .map_err(MetaError::from)?
+            .insert(id.as_str(), bytes.as_slice())
+            .map_err(MetaError::from)?;
+        txn.commit().map_err(MetaError::from)?;
+        Ok(())
+    }
+
+    /// Fetch a user's password verifier, or `None` when the user has none enrolled.
+    ///
+    /// # Errors
+    /// Returns a store error when the record cannot be read or decoded.
+    pub fn get_user_password(&self, id: &UserId) -> Result<Option<PasswordVerifier>, MetaError> {
+        let txn = self.db.begin_read()?;
+        let table = match txn.open_table(USER_VERIFIER) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(table
+            .get(id.as_str())?
+            .map(|value| serde_json::from_slice(value.value()))
+            .transpose()?)
+    }
+
+    /// Remove a user's password verifier, leaving the account unable to authenticate by password.
+    ///
+    /// # Errors
+    /// Returns [`UserStoreError::NotFound`] for an unknown ID or a store error when the transaction
+    /// cannot commit.
+    pub fn clear_user_password(&self, id: &UserId) -> Result<(), UserStoreError> {
+        let txn = self.db.begin_write().map_err(MetaError::from)?;
+        if read_user(&txn, id)?.is_none() {
+            return Err(UserStoreError::NotFound { id: id.clone() });
+        }
+        txn.open_table(USER_VERIFIER)
+            .map_err(MetaError::from)?
+            .remove(id.as_str())
+            .map_err(MetaError::from)?;
+        txn.commit().map_err(MetaError::from)?;
+        Ok(())
     }
 
     /// Return one user's lifecycle events in commit order.
