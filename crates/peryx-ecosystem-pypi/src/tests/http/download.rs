@@ -131,7 +131,25 @@ async fn test_artifact_mirror_honors_repository_fallback(
     let wheel = b"wheelcontent";
     let digest = Digest::of(wheel);
     let file_url = format!("{}/files/flask.whl?origin=1", origin.uri());
-    mount_detail(&origin, digest.as_str(), &file_url, None).await;
+    // Advertise the wheel's PEP 658 metadata sibling so serving the page spawns no metadata backfill.
+    // Without it, a wheel advertising no metadata is fetched from upstream to read its `METADATA`
+    // member, and that detached fetch races the mirror and origin verify-on-drop under load, tripping
+    // the exact request counts this test asserts.
+    let metadata_digest = Digest::of(b"flask metadata");
+    let detail = format!(
+        "{{\"meta\":{{\"api-version\":\"1.1\"}},\"name\":\"flask\",\"versions\":[\"1.0\"],\
+         \"files\":[{{\"filename\":\"flask-1.0-py3-none-any.whl\",\"url\":\"{file_url}\",\
+         \"hashes\":{{\"sha256\":\"{}\"}},\"core-metadata\":{{\"sha256\":\"{}\"}}}}]}}",
+        digest.as_str(),
+        metadata_digest.as_str()
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/flask/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(detail.into_bytes(), "application/vnd.pypi.simple.v1+json"),
+        )
+        .mount(&origin)
+        .await;
     Mock::given(method("GET"))
         .and(path("/packages/files/flask.whl"))
         .respond_with(ResponseTemplate::new(404))
