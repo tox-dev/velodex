@@ -6,9 +6,12 @@ weight = 9
 
 Repository quotas account for content before a writer publishes package metadata. The storage API reserves capacity,
 then the caller commits the reservation with its metadata transaction or releases it after an error. The PyPI and OCI
-drivers expose identity constructors for this API. This release ships the accounting substrate: it reserves, commits,
-and releases capacity but does not yet read limits from configuration or enforce them in either protocol handler. The
-upload paths adopt these APIs in later work.
+drivers expose identity constructors for this API.
+
+The OCI registry enforces these limits on every hosted push: a blob upload, a cross-repository mount, and a manifest
+publication each reserve capacity before the content becomes discoverable, commit that reservation in the same
+transaction that records the metadata, and release it when the write fails. An index that configures no quota keeps its
+original write path unchanged. PyPI enforcement adopts the same APIs in later work.
 
 ## Limits
 
@@ -70,6 +73,25 @@ driver transaction leaves its reservation pending, and a quota finalization fail
 `audit = true` records the limits that would reject a request and admits its reservation. The durable allocation record
 stores those violations for inspection. Audit mode still updates reserved and committed counters, which lets operators
 observe projected enforcement against real write traffic.
+
+## OCI push enforcement
+
+An OCI index reads its limits from the neutral `[index.policy]` table. `max_accounted_bytes`, `max_projects`, and
+`max_versions_per_project` map to the counters above, `max_file_size_bytes` bounds a single blob or manifest, and
+`quota_audit = true` records violations instead of denying the push. Setting none of the repository, project, or version
+limits leaves accounting off, so an unmetered registry pays nothing for the machinery.
+
+The registry accounts a push under the hosted class, keying the repository by the index name, the project by the
+repository path, and the version by the tag. A blob and a digest-referenced manifest carry no version. A blob upload and
+a cross-repository mount reserve the layer's bytes; a manifest publication reserves the manifest document's bytes and,
+for a tagged push, one version. A digest a repository already serves is not reserved again, so a re-push, a mount of a
+present blob, and racing uploads of one digest each charge its bytes once.
+
+A denied push returns the distribution-spec `DENIED` code with `403 Forbidden` and a message naming the crossed
+counters, and it publishes nothing: the blob gains no repository membership and the manifest stays absent from tag and
+digest discovery. A failed commit — a digest mismatch, a storage fault — releases the reservation the push took. The
+registry counts each decision under the `quota_admitted` and `quota_rejected` metric families, scoped to the hosted role
+and free of repository or project labels.
 
 ## Restart repair
 

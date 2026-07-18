@@ -352,29 +352,37 @@ allow_wheel_pythons = ["py3", "cp313"]
 block_wheel_platforms = ["win_amd64"]
 max_file_size_bytes = 104857600
 max_project_size_bytes = 1073741824
+max_accounted_bytes = 10737418240
+max_projects = 500
+max_versions_per_project = 100
+quota_audit = false
 min_release_age_secs = 604800
 required_attestations = ["https://docs.pypi.org/attestations/publish/v1"]
 attestation_mode = "enforce"
 ```
 
-| Key                      | Meaning                                                                       |
-| ------------------------ | ----------------------------------------------------------------------------- |
-| `fallback_mode`          | PyPI virtual source policy: `fallback`, `private-first`, or `no-fallback`     |
-| `allow_projects`         | Only these normalized projects may be served, mirrored, or uploaded           |
-| `block_projects`         | These normalized projects are denied                                          |
-| `protected_names`        | Reserved names that never fall back upstream; exact or `prefix-*` namespace   |
-| `allow_versions`         | PEP 440 specifier set accepted for parsed distribution filenames              |
-| `allow_package_types`    | Accepted parsed file types: `wheel`, `sdist`                                  |
-| `block_package_types`    | Denied parsed file types: `wheel`, `sdist`                                    |
-| `allow_wheel_pythons`    | Accepted wheel Python tags, matched against each dot-compressed tag segment   |
-| `block_wheel_pythons`    | Denied wheel Python tags                                                      |
-| `allow_wheel_platforms`  | Accepted wheel platform tags, matched against each dot-compressed tag segment |
-| `block_wheel_platforms`  | Denied wheel platform tags                                                    |
-| `max_file_size_bytes`    | Maximum file size from the Simple API `size` field or from an uploaded file   |
-| `max_project_size_bytes` | Maximum sum of retained file sizes for one project detail page                |
-| `min_release_age_secs`   | Hide an upstream file until this many seconds past its `upload-time`          |
-| `required_attestations`  | In-toto predicate types an upload must carry a PEP 740 attestation for        |
-| `attestation_mode`       | `enforce` rejects a missing attestation; `audit` records it but publishes     |
+| Key                        | Meaning                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `fallback_mode`            | PyPI virtual source policy: `fallback`, `private-first`, or `no-fallback`     |
+| `allow_projects`           | Only these normalized projects may be served, mirrored, or uploaded           |
+| `block_projects`           | These normalized projects are denied                                          |
+| `protected_names`          | Reserved names that never fall back upstream; exact or `prefix-*` namespace   |
+| `allow_versions`           | PEP 440 specifier set accepted for parsed distribution filenames              |
+| `allow_package_types`      | Accepted parsed file types: `wheel`, `sdist`                                  |
+| `block_package_types`      | Denied parsed file types: `wheel`, `sdist`                                    |
+| `allow_wheel_pythons`      | Accepted wheel Python tags, matched against each dot-compressed tag segment   |
+| `block_wheel_pythons`      | Denied wheel Python tags                                                      |
+| `allow_wheel_platforms`    | Accepted wheel platform tags, matched against each dot-compressed tag segment |
+| `block_wheel_platforms`    | Denied wheel platform tags                                                    |
+| `max_file_size_bytes`      | Maximum file size from the Simple API `size` field or from an uploaded file   |
+| `max_project_size_bytes`   | Maximum sum of retained file sizes for one project detail page                |
+| `max_accounted_bytes`      | Repository quota: deduplicated bytes one repository may hold                  |
+| `max_projects`             | Repository quota: distinct project identities one repository may hold         |
+| `max_versions_per_project` | Repository quota: versions one project may hold                               |
+| `quota_audit`              | Record a would-reject quota decision instead of denying the write             |
+| `min_release_age_secs`     | Hide an upstream file until this many seconds past its `upload-time`          |
+| `required_attestations`    | In-toto predicate types an upload must carry a PEP 740 attestation for        |
+| `attestation_mode`         | `enforce` rejects a missing attestation; `audit` records it but publishes     |
 
 `min_release_age_secs` quarantines fresh upstream releases: a file whose Simple API
 [`upload-time`](https://packaging.python.org/en/latest/specifications/simple-repository-api/#project-detail) is younger
@@ -400,6 +408,13 @@ File and project size rules require declared sizes. A file without `size` is den
 page with any retained file lacking `size` is denied by `max_project_size_bytes`. Active policies use the buffered
 Simple-page path so file lists and [PEP 691](https://peps.python.org/pep-0691/) `versions` are filtered together before
 peryx serves bytes.
+
+`max_accounted_bytes`, `max_projects`, and `max_versions_per_project` are the repository quota. An OCI index enforces
+them on hosted pushes: a blob, mount, or manifest reserves capacity before it becomes discoverable and is refused with a
+`403 DENIED` naming the crossed counter when it would exceed a limit, charging a deduplicated digest once per
+repository. `quota_audit = true` records a would-reject decision and admits the push, so an operator can observe
+projected enforcement before turning it on. Setting none of the three limits leaves accounting off. See
+[Repository quotas](@/core/quotas.md) for the accounting model. PyPI enforcement of these keys is forthcoming.
 
 `protected_names` reserves private names against dependency confusion. peryx refuses a reserved name on the upstream
 mirror path only: a hosted member still serves it and accepts uploads for it, but a request the local members cannot
@@ -428,13 +443,15 @@ startup error. The setting governs candidates returned by this server, not index
 pip's `--extra-index-url`, uv source overrides, and nested virtual indexes with their own mode remain separate trust
 boundaries. Use `protected_names` for private names that must stay blocked even while absent or renamed.
 
-`allow_projects`, `block_projects`, `protected_names`, `max_file_size_bytes`, and `max_project_size_bytes` are
-ecosystem-neutral and apply to an OCI index too, matching on image name and blob size: a blocked image is hidden on
-reads and refused on push, and a layer or manifest over the size limit is refused. The rest of the keys above cover
-fallback selection, version specifiers, package types, and wheel tags. These are Python-specific
-([PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/) versions, wheel/sdist types, wheel
-tags) and have no OCI counterpart, so they are implemented in the PyPI ecosystem crate and apply only to a PyPI index.
-Each ecosystem contributes its own matchers to the same neutral `[index.policy]` engine through a rule trait.
+`allow_projects`, `block_projects`, `protected_names`, `max_file_size_bytes`, `max_project_size_bytes`,
+`max_accounted_bytes`, `max_projects`, `max_versions_per_project`, and `quota_audit` are ecosystem-neutral and apply to
+an OCI index too, matching on image name, blob size, and repository quota: a blocked image is hidden on reads and
+refused on push, a layer or manifest over the size limit is refused, and a push over a repository quota is refused. The
+rest of the keys above cover fallback selection, version specifiers, package types, and wheel tags. These are
+Python-specific ([PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/) versions,
+wheel/sdist types, wheel tags) and have no OCI counterpart, so they are implemented in the PyPI ecosystem crate and
+apply only to a PyPI index. Each ecosystem contributes its own matchers to the same neutral `[index.policy]` engine
+through a rule trait.
 
 ### `[index.settings]`
 
